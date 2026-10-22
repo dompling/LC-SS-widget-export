@@ -1,0 +1,16 @@
+//
+//  Global.xcconfig
+//  LiveContainer
+//
+//  Created by Duy Tran on 2025/5/24.
+//
+
+DEVELOPMENT_TEAM[config=Debug] = AAAAA11111
+DEVELOPMENT_TEAM[config=Release] = AAAAA11111
+
+DEVELOPMENT_TEAM_SUFFIX[config=Debug] = .$(DEVELOPMENT_TEAM)
+DEVELOPMENT_TEAM_SUFFIX[config=Release] =
+
+APP_GROUP_SIDESTORE = group.com.SideStore.SideStore$(DEVELOPMENT_TEAM_SUFFIX)
+APP_GROUP_ALTSTORE = group.com.rileytestut.AltStore$(DEVELOPMENT_TEAM_SUFFIX)
+LIVECONTAINER_BUNDLE_IDENTIFIER = com.kdt.livecontainer$(DEVELOPMENT_TEAM_SUFFIX)

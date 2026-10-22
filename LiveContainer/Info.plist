@@ -1,0 +1,326 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDisplayName</key>
+	<string>LiveContainer</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>All Files</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleExecutable</key>
+	<string>LiveContainer</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+	<key>CFBundleIconUsesAutomaticDarkModeVariant</key>
+	<true/>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>LiveContainer</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>3.8.11</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.kdt.livecontainer.urlscheme</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>livecontainer</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>3.8.11</string>
+	<key>GCSupportedGameControllers</key>
+	<array>
+		<dict>
+			<key>ProfileName</key>
+			<string>DirectionalGamepad</string>
+		</dict>
+		<dict>
+			<key>ProfileName</key>
+			<string>ExtendedGamepad</string>
+		</dict>
+		<dict>
+			<key>ProfileName</key>
+			<string>MicroGamepad</string>
+		</dict>
+	</array>
+	<key>GCSupportsControllerUserInteraction</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.education</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>sidestore</string>
+		<string>livecontainer</string>
+		<string>livecontainer2</string>
+		<string>livecontainer3</string>
+	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NFCReaderUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_FC9F5ED42C8A._tcp</string>
+		<string>_airplay._tcp</string>
+		<string>_raop._tcp</string>
+		<string>_companion-link._tcp</string>
+		<string>_homekit._tcp</string>
+		<string>_airdrop._tcp</string>
+		<string>_apple-mobdev2._tcp</string>
+		<string>_remotepairing._tcp</string>
+		<string>_googlecast._tcp</string>
+		<string>_spotify-connect._tcp</string>
+		<string>_sonos._tcp</string>
+		<string>_roku-rcp._tcp</string>
+		<string>_daap._tcp</string>
+		<string>_dpap._tcp</string>
+		<string>_printer._tcp</string>
+		<string>_ipp._tcp</string>
+		<string>_ipps._tcp</string>
+		<string>_pdl-datastream._tcp</string>
+		<string>_scanner._tcp</string>
+		<string>_uscan._tcp</string>
+		<string>_http._tcp</string>
+		<string>_https._tcp</string>
+		<string>_smb._tcp</string>
+		<string>_afpovertcp._tcp</string>
+		<string>_nfs._tcp</string>
+		<string>_ftp._tcp</string>
+		<string>_sftp-ssh._tcp</string>
+		<string>_webdav._tcp</string>
+		<string>_webdavs._tcp</string>
+		<string>_ssh._tcp</string>
+		<string>_rfb._tcp</string>
+		<string>_rdp._tcp</string>
+		<string>_net-assistant._udp</string>
+		<string>_hap._tcp</string>
+		<string>_matter._tcp</string>
+		<string>_hue._tcp</string>
+		<string>_mqtt._tcp</string>
+		<string>_coap._udp</string>
+		<string>_wemo._tcp</string>
+		<string>_presence._tcp</string>
+		<string>_sip._tcp</string>
+		<string>_h323._tcp</string>
+		<string>_device-info._tcp</string>
+		<string>_sleep-proxy._udp</string>
+		<string>_dns-sd._udp</string>
+		<string>_remotepairing-pairable-host._tcp</string>
+		<string>_stikpairprobe._tcp</string>
+		<string>_flux._udp</string>
+		<string>_dicom._tcp</string>
+	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSFallDetectionUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSGKFriendListUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSHomeKitUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSIdentityUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSLocationDefaultAccuracyReduced</key>
+	<true/>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSNearbyInteractionAllowOnceUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSNearbyInteractionUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSSensorKitUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSSiriUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
+	<key>SBAppUsesLocalNotifications</key>
+	<integer>1</integer>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>bluetooth-central</string>
+		<string>external-accessory</string>
+		<string>fetch</string>
+		<string>location</string>
+		<string>nearby-interaction</string>
+		<string>remote-notification</string>
+		<string>voip</string>
+	</array>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+		<integer>2</integer>
+	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>UILaunchImageFile</key>
+	<string>LaunchImage</string>
+	<key>UILaunchImages</key>
+	<array>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>7.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Portrait</string>
+			<key>UILaunchImageSize</key>
+			<string>{320, 480}</string>
+		</dict>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>7.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage-700-568h</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Portrait</string>
+			<key>UILaunchImageSize</key>
+			<string>{320, 568}</string>
+		</dict>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>7.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage-Portrait</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Portrait</string>
+			<key>UILaunchImageSize</key>
+			<string>{768, 1024}</string>
+		</dict>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>7.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage-Landscape</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Landscape</string>
+			<key>UILaunchImageSize</key>
+			<string>{768, 1024}</string>
+		</dict>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>8.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage-800-667h</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Portrait</string>
+			<key>UILaunchImageSize</key>
+			<string>{375, 667}</string>
+		</dict>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>8.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage-800-Portrait-736h</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Portrait</string>
+			<key>UILaunchImageSize</key>
+			<string>{414, 736}</string>
+		</dict>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>8.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage-800-Landscape-736h</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Landscape</string>
+			<key>UILaunchImageSize</key>
+			<string>{414, 736}</string>
+		</dict>
+	</array>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportsDocumentBrowser</key>
+	<true/>
+</dict>
+</plist>

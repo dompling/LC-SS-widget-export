@@ -1,0 +1,93 @@
+{
+  "name": "LiveContainer (nightly)",
+  "identifier": "com.livecontainer.source.nightly",
+  "website": "https://github.com/LiveContainer/LiveContainer",
+  "subtitle": "LiveContainer (nightly) official AltStore Source.",
+  "description": "This is the official AltStore Source for LiveContainer (nightly).\n\n Run iOS apps without actually installing them!",
+  "tintColor": "#0784FC",
+  "iconURL": "https://raw.githubusercontent.com/LiveContainer/LiveContainer/main/screenshots/AppIcon1024.png",
+  "headerURL": "https://raw.githubusercontent.com/LiveContainer/LiveContainer/main/screenshots/header.png",
+  "apps": [
+    {
+      "beta": false,
+      "name": "LiveContainer (nightly)",
+      "bundleIdentifier": "com.kdt.livecontainer",
+      "developerName": "LiveContainer Team",
+      "subtitle": "Run iOS apps without actually installing them!",
+      "version": "3.4.50",
+      "versionDate": "2025-04-26",
+      "versionDescription": "This is a nightly release [created automatically with GitHub Actions workflow](https://github.com/LiveContainer/LiveContainer/actions/runs/14679205373/attempts/1).",
+      "downloadURL": "https://github.com/LiveContainer/LiveContainer/releases/download/nightly/LiveContainer.ipa",
+      "localizedDescription": "Run iOS apps without actually installing them!",
+      "iconURL": "https://raw.githubusercontent.com/LiveContainer/LiveContainer/main/screenshots/AppIcon1024.png",
+      "tintColor": "#0784FC",
+      "category": "utilities",
+      "size": 2785962,
+      "screenshotURLs": [
+        "https://raw.githubusercontent.com/LiveContainer/LiveContainer/main/screenshots/1.png"
+      ],
+      "appPermissions": {
+        "entitlements": [
+          "application-identifier",
+          "com.apple.security.application-groups",
+          "get-task-allow",
+          "keychain-access-groups",
+          "com.apple.developer.kernel.extended-virtual-addressing",
+          "com.apple.developer.kernel.increased-memory-limit",
+          "com.apple.developer.healthkit.background-delivery",
+          "com.apple.developer.healthkit",
+          "com.apple.developer.healthkit.access"
+        ],
+        "privacy": {
+          "LSRequiresIPhoneOS": "The guest app is requesting for this permission.",
+          "NFCReaderUsageDescription": "The guest app is requesting for this permission.",
+          "NSAppleMusicUsageDescription": "The guest app is requesting for this permission.",
+          "NSBluetoothAlwaysUsageDescription": "The guest app is requesting for this permission.",
+          "NSBluetoothPeripheralUsageDescription": "The guest app is requesting for this permission.",
+          "NSCalendarsFullAccessUsageDescription": "The guest app is requesting for this permission.",
+          "NSCalendarsWriteOnlyAccessUsageDescription": "The guest app is requesting for this permission.",
+          "NSCameraUsageDescription": "The guest app is requesting for this permission.",
+          "NSContactsUsageDescription": "The guest app is requesting for this permission.",
+          "NSFaceIDUsageDescription": "The guest app is requesting for this permission.",
+          "NSFallDetectionUsageDescription": "The guest app is requesting for this permission.",
+          "NSGKFriendListUsageDescription": "The guest app is requesting for this permission.",
+          "NSHealthClinicalHealthRecordsShareUsageDescription": "The guest app is requesting for this permission.",
+          "NSHealthRequiredReadAuthorizationTypeIdentifiers": "The guest app is requesting for this permission.",
+          "NSHomeKitUsageDescription": "The guest app is requesting for this permission.",
+          "NSIdentityUsageDescription": "The guest app is requesting for this permission.",
+          "NSLocalNetworkUsageDescription": "The guest app is requesting for this permission.",
+          "NSLocationDefaultAccuracyReduced": "The guest app is requesting for this permission.",
+          "NSLocationTemporaryUsageDescriptionDictionary": "The guest app is requesting for this permission.",
+          "NSLocationUsageDescription": "The guest app is requesting for this permission.",
+          "NSLocationWhenInUseUsageDescription": "The guest app is requesting for this permission.",
+          "NSMicrophoneUsageDescription": "The guest app is requesting for this permission.",
+          "NSMotionUsageDescription": "The guest app is requesting for this permission.",
+          "NSNearbyInteractionAllowOnceUsageDescription": "The guest app is requesting for this permission.",
+          "NSNearbyInteractionUsageDescription": "The guest app is requesting for this permission.",
+          "NSPhotoLibraryAddUsageDescription": "The guest app is requesting for this permission.",
+          "NSPhotoLibraryUsageDescription": "The guest app is requesting for this permission.",
+          "NSRemindersFullAccessUsageDescription": "The guest app is requesting for this permission.",
+          "NSSensorKitUsageDescription": "The guest app is requesting for this permission.",
+          "NSSiriUsageDescription": "The guest app is requesting for this permission.",
+          "NSSpeechRecognitionUsageDescription": "The guest app is requesting for this permission.",
+          "NSUserTrackingUsageDescription": "The guest app is requesting for this permission.",
+          "SBAppUsesLocalNotifications": "The guest app is requesting for this permission.",
+          "UIApplicationSceneManifest": "The guest app is requesting for this permission.",
+          "NSHealthUpdateUsageDescription": "The guest app is requesting for this permission.",
+          "NSHealthShareUsageDescription": "The guest app is requesting for this permission.",
+          "NSLocationAlwaysAndWhenInUseUsageDescription": "The guest app is requesting for this permission."
+        }
+      },
+      "versions": [
+        {
+          "version": "3.4.50",
+          "date": "2025-04-26T07:00:00Z",
+          "localizedDescription": "This is a nightly release [created automatically with GitHub Actions workflow](https://github.com/LiveContainer/LiveContainer/actions/runs/14679205373/attempts/1).",
+          "downloadURL": "https://github.com/LiveContainer/LiveContainer/releases/download/nightly/LiveContainer.ipa",
+          "size": 2785962
+        }
+      ]
+    }
+  ],
+  "news": []
+}
