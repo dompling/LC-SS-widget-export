@@ -1,5 +1,9 @@
 name: Xcode - Build
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   push:
     branches: [lc-ss-integration]
