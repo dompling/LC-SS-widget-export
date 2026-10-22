@@ -22,6 +22,25 @@
 
 @end
 
+void LCSSExportWidgetSnapshot(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSURL *groupURL = [LCSharedUtils appGroupPath];
+    if (!groupURL) return;
+    NSURL *source = [groupURL URLByAppendingPathComponent:@"widget_data.json"];
+    NSData *data = [NSData dataWithContentsOfURL:source];
+    if (!data || ![NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingFragmentsAllowed error:NULL]) return;
+    const char *home = getenv("LC_HOME_PATH");
+    NSString *homePath = (home && home[0]) ? [NSString stringWithUTF8String:home] : NSHomeDirectory();
+    NSURL *folder = [[NSURL fileURLWithPath:homePath isDirectory:YES] URLByAppendingPathComponent:@"Documents/LCSS" isDirectory:YES];
+    NSError *error = nil;
+    if (![fm createDirectoryAtURL:folder withIntermediateDirectories:YES attributes:nil error:&error]) {
+        NSLog(@"[LCSS] Create folder failed: %@", error);
+        return;
+    }
+    NSURL *destination = [folder URLByAppendingPathComponent:@"widget_data.json"];
+    if (![data writeToURL:destination options:NSDataWritingAtomic error:&error])
+        NSLog(@"[LCSS] Snapshot export failed: %@", error);
+}
 static NSMutableDictionary<NSString *, UIWindow *> *SSVersionWindows;
 static id SSSceneObserver;
 
@@ -222,6 +241,7 @@ void installSideStoreHooks(void) {
             
             if ([scene isKindOfClass:UIWindowScene.class]) {
                 SSInstallVersionWindow((UIWindowScene *)scene);
+                LCSSExportWidgetSnapshot();
             }
         }];
         
