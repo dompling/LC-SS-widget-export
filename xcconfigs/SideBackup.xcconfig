@@ -1,0 +1,7 @@
+#include "../Build.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = $(MAIN_BUNDLE_IDENTIFIER).SideBackup
+CODE_SIGN_ENTITLEMENTS = SideBackup/SideBackup.entitlements
+
+#include? "../local.xcconfig"
+

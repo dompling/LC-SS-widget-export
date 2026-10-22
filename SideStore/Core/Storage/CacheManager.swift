@@ -1,0 +1,151 @@
+//
+//  CacheManager.swift
+//  SideStore
+//
+//  Created by Magesh K on 28/06/26.
+//  Copyright © 2026 SideStore. All rights reserved.
+//
+
+import Foundation
+
+public final class CacheManager {
+    public static let shared = CacheManager()
+    
+    private init() {}
+    
+    // MARK: - Directory Locations
+    
+    public var internalAppsDirectory: URL {
+        return InstalledApp.appsDirectoryURL.appendingPathComponent("Payloads")
+    }
+    
+    public var resignedAppsDirectory: URL {
+        let documentsURL = FileManager.default.documentsDirectory
+        return documentsURL.appendingPathComponent("ResignedApps")
+    }
+    
+    // MARK: - App Fetching
+    
+    public func fetchInternalApps() -> [URL] {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: internalAppsDirectory.path) else {
+            return []
+        }
+        guard let shaDirectories = try? fileManager.contentsOfDirectory(
+            at: internalAppsDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        
+        return shaDirectories.filter { url in
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+                return false
+            }
+            let appURL = url.appendingPathComponent("App.app")
+            return fileManager.fileExists(atPath: appURL.path)
+        }
+    }
+    
+    public func fetchResignedApps() -> [URL] {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: resignedAppsDirectory.path) else {
+            return []
+        }
+        guard let urls = try? fileManager.contentsOfDirectory(at: resignedAppsDirectory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        return urls
+    }
+    
+    // MARK: - Size Calculations & Formatting
+    
+    public func calculateSize(of url: URL) -> Int64 {
+        guard let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]) else { return 0 }
+        
+        if resourceValues.isDirectory == true {
+            return getDirectorySize(at: url)
+        }
+        
+        return Int64(resourceValues.fileSize ?? 0)
+    }
+    
+    public func calculateCacheSize() -> Int64 {
+        var totalSize: Int64 = 0
+        let fileManager = FileManager.default
+        
+        // 1. Nuke cache size
+        if let cachesDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let nukeCacheURL = cachesDirectory.appendingPathComponent("io.sidestore.Nuke")
+            totalSize += getDirectorySize(at: nukeCacheURL)
+        }
+        
+        // 2. Temporary directory size
+        totalSize += getDirectorySize(at: fileManager.temporaryDirectory)
+        
+        // 3. Uninstalled app backup directories size
+        if let backupsDirectory = fileManager.appBackupsDirectory,
+           let fileURLs = try? fileManager.contentsOfDirectory(at: backupsDirectory, includingPropertiesForKeys: [.isDirectoryKey, .nameKey], options: [.skipsSubdirectoryDescendants, .skipsHiddenFiles]) {
+            
+            // Get installed app bundle IDs
+            let context = DatabaseManager.shared.viewContext
+            let installedAppBundleIDs = Set(InstalledApp.all(in: context).map { $0.bundleIdentifier })
+            
+            for backupDirectory in fileURLs {
+                if let resourceValues = try? backupDirectory.resourceValues(forKeys: [.isDirectoryKey, .nameKey]),
+                   let isDirectory = resourceValues.isDirectory,
+                   let bundleID = resourceValues.name {
+                    if isDirectory && !installedAppBundleIDs.contains(bundleID) && !AppManager.shared.isActivelyManagingApp(withBundleID: bundleID) {
+                        totalSize += getDirectorySize(at: backupDirectory)
+                    }
+                }
+            }
+        }
+        
+        return totalSize
+    }
+    
+    public func formattedCacheSize() -> String {
+        let size = calculateCacheSize()
+        guard size > 0 else { return "0 KB" }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useAll]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: size)
+    }
+    
+    public func formattedCacheSize(completion: @escaping (String) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let size = self.calculateCacheSize()
+            let result: String
+            if size <= 0 {
+                result = "0 KB"
+            } else {
+                let formatter = ByteCountFormatter()
+                formatter.allowedUnits = [.useAll]
+                formatter.countStyle = .file
+                result = formatter.string(fromByteCount: size)
+            }
+            completion(result)
+        }
+    }
+    
+    public func delete(at url: URL) throws {
+        try FileManager.default.removeItem(at: url)
+    }
+    
+    private func getDirectorySize(at url: URL) -> Int64 {
+        var size: Int64 = 0
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(at: url,
+                                                     includingPropertiesForKeys: [.fileSizeKey],
+                                                     options: []) else { return 0 }
+        for case let fileURL as URL in enumerator {
+            if let fileSize = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                size += Int64(fileSize)
+            }
+        }
+        return size
+    }
+}
