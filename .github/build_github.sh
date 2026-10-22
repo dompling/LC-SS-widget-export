@@ -41,8 +41,7 @@ mv ./tmp/SideStoreSupport.framework Payload/LiveContainer.app/Frameworks
 
 # download SideStore
 cd tmp
-test -s "$GITHUB_WORKSPACE/SideStore.ipa" || exit 1
-cp "$GITHUB_WORKSPACE/SideStore.ipa" SideStore.ipa
+wget https://github.com/LiveContainer/SideStore/releases/download/nightly/SideStore.ipa
 unzip SideStore.ipa
 cd ..
 
@@ -68,8 +67,8 @@ mv ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/PlugIns/AltWidg
 mv ./Payload/LiveContainer.app/PlugIns/LiveWidgetExtension.appex/AltWidgetExtension ./Payload/LiveContainer.app/PlugIns/LiveWidgetExtension.appex/LiveWidgetExtension
 
 # Sign
-rm -rf .zsign_cache
-find Payload -type d -name "_CodeSignature" -exec rm -r {} +
+rm -r .zsign_cache
+find payloadlc/Payload -type d -name "_CodeSignature" -exec rm -r {} +
 
 ldid -S.github/sidelc/LiveWidgetExtension_adhoc.xml ./Payload/LiveContainer.app/PlugIns/LiveWidgetExtension.appex/LiveWidgetExtension
 
