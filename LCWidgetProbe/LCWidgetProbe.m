@@ -20,8 +20,8 @@ static NSDictionary *Inspect(NSString *path) {
             return [lower containsString:@"widget"] || [lower containsString:@"appinfo"] ||
                    [lower containsString:@"expiration"] || [lower containsString:@"certificate"];
         }];
-        item[@"matchingNames"] = [[names filteredArrayUsingPredicate:filter] subarrayWithRange:
-                                   NSMakeRange(0, MIN(20, [[names filteredArrayUsingPredicate:filter] copy] count))];
+        NSArray<NSString *> *matches = [names filteredArrayUsingPredicate:filter];
+        item[@"matchingNames"] = [matches subarrayWithRange:NSMakeRange(0, MIN((NSUInteger)20, matches.count))];
         if (error) item[@"error"] = error.localizedDescription;
     }
     return item;
