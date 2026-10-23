@@ -1,64 +1,76 @@
-// LCWidgetProbe: metadata-only probe for stock LiveContainer + SideStore Nightly.
-// Loaded as a Guest App tweak. Does NOT hook authentication or read credential contents.
+// LCWidgetProbe v2: minimal path-visibility test for the official LC+SS Nightly.
+// Runs only as an enabled LiveContainer Guest App tweak.
+// Does not read SideStore files, sign-in data, certificates, or file contents.
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <stdlib.h>
 
-static NSDictionary *Inspect(NSString *path) {
+static NSDictionary *ProbeDirectory(NSString *base, NSString *relative, NSString *label) {
+    NSString *path = [base stringByAppendingPathComponent:relative];
     NSFileManager *fm = NSFileManager.defaultManager;
-    BOOL isDir = NO;
-    BOOL exists = [fm fileExistsAtPath:path isDirectory:&isDir];
-    NSMutableDictionary *item = [@{@"relativePath": path ?: @"", @"exists": @(exists), @"isDirectory": @(isDir)} mutableCopy];
-    if (exists && isDir) {
+    BOOL isDirectory = NO;
+    BOOL exists = [fm fileExistsAtPath:path isDirectory:&isDirectory];
+
+    NSMutableDictionary *result = [@{
+        @"base": label,
+        @"relativePath": relative,
+        @"exists": @(exists),
+        @"isDirectory": @(isDirectory)
+    } mutableCopy];
+
+    if (exists && isDirectory) {
         NSError *error = nil;
-        NSArray<NSString *> *names = [fm contentsOfDirectoryAtPath:path error:&error];
-        item[@"readable"] = @(names != nil);
-        item[@"entryCount"] = @(names.count);
-        // Only a small allowlisted set of metadata filenames; no file contents or secrets.
-        NSPredicate *filter = [NSPredicate predicateWithBlock:^BOOL(NSString *name, NSDictionary *bindings) {
-            NSString *lower = name.lowercaseString;
-            return [lower containsString:@"widget"] || [lower containsString:@"appinfo"] ||
-                   [lower containsString:@"expiration"] || [lower containsString:@"certificate"];
-        }];
-        NSArray<NSString *> *matches = [names filteredArrayUsingPredicate:filter];
-        item[@"matchingNames"] = [matches subarrayWithRange:NSMakeRange(0, MIN((NSUInteger)20, matches.count))];
-        if (error) item[@"error"] = error.localizedDescription;
+        // Check directory readability only. No names or file contents are exported.
+        NSArray *entries = [fm contentsOfDirectoryAtPath:path error:&error];
+        result[@"readable"] = @(entries != nil);
+        if (error) result[@"readErrorCode"] = @(error.code);
     }
-    return item;
+    return result;
 }
 
 __attribute__((constructor)) static void LCWidgetProbeInit(void) {
-    // Constructor may execute very early; perform file work later on utility queue.
+    NSLog(@"[LCWidgetProbe] v2 loaded");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
-            NSFileManager *fm = NSFileManager.defaultManager;
-            NSString *home = NSHomeDirectory();
-            // These are candidate paths only; existence varies by LC version and guest routing.
-            NSArray *candidate = @[
-                @"Documents/SideStore", @"Documents/SideStore/Library",
-                @"Library/Preferences", @"Library/Application Support",
-                @"Documents", @"Library/Caches"
-            ];
+            NSString *guestHome = NSHomeDirectory();
+            const char *rawLCHome = getenv("LC_HOME_PATH");
+            NSString *lcHome = (rawLCHome && rawLCHome[0])
+                ? [NSString stringWithUTF8String:rawLCHome] : nil;
+
             NSMutableArray *checks = [NSMutableArray array];
-            for (NSString *relative in candidate) {
-                NSMutableDictionary *result = [Inspect([home stringByAppendingPathComponent:relative]) mutableCopy];
-                result[@"relativePath"] = relative;
-                [checks addObject:result];
+            [checks addObject:ProbeDirectory(guestHome, @"Documents", @"guestHome")];
+            [checks addObject:ProbeDirectory(guestHome, @"Documents/SideStore", @"guestHome")];
+            if (lcHome.length) {
+                // SideStoreSupport/SideStore.swift in upstream LC uses
+                // LC_HOME_PATH + "/Documents/SideStore" for the built-in SideStore.
+                [checks addObject:ProbeDirectory(lcHome, @"Documents", @"lcHome")];
+                [checks addObject:ProbeDirectory(lcHome, @"Documents/SideStore", @"lcHome")];
+                [checks addObject:ProbeDirectory(lcHome, @"Documents/SideStore/Library", @"lcHome")];
             }
-            NSString *outDir = [home stringByAppendingPathComponent:@"Documents/LCWidgetProbe"];
-            NSError *error = nil;
-            [fm createDirectoryAtPath:outDir withIntermediateDirectories:YES attributes:nil error:&error];
+
             NSDictionary *report = @{
-                @"version": @1,
+                @"version": @2,
                 @"status": @"probe-only",
                 @"timestamp": @([[NSDate date] timeIntervalSince1970]),
                 @"hostBundleIdentifier": NSBundle.mainBundle.bundleIdentifier ?: @"",
+                @"lcHomePathAvailable": @(lcHome.length > 0),
+                @"lcHomeIsDifferentFromGuestHome": @(lcHome.length > 0 && ![lcHome isEqualToString:guestHome]),
                 @"candidateDirectories": checks,
-                @"warning": @"This probe does not provide app expiration dates and cannot grant Scripting access to private LC files."
+                @"warning": @"Directory visibility only; no SideStore data or signing expiration dates are read."
             };
-            NSData *data = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:&error];
-            BOOL saved = data && [data writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"] options:NSDataWritingAtomic error:&error];
-            NSLog(@"[LCWidgetProbe] metadata probe %@: %@", saved ? @"saved" : @"failed", saved ? outDir : error.localizedDescription);
+
+            NSString *outDir = [guestHome stringByAppendingPathComponent:@"Documents/LCWidgetProbe"];
+            NSError *error = nil;
+            BOOL created = [NSFileManager.defaultManager createDirectoryAtPath:outDir
+                                      withIntermediateDirectories:YES attributes:nil error:&error];
+            NSData *data = [NSJSONSerialization dataWithJSONObject:report
+                                                            options:NSJSONWritingPrettyPrinted error:&error];
+            BOOL saved = created && data &&
+                [data writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"]
+                          options:NSDataWritingAtomic error:&error];
+            NSLog(@"[LCWidgetProbe] v2 report %@; LC_HOME_PATH present=%@",
+                  saved ? @"saved" : @"failed", lcHome.length ? @"YES" : @"NO");
+            if (!saved && error) NSLog(@"[LCWidgetProbe] v2 error code=%ld", (long)error.code);
         }
     });
 }
