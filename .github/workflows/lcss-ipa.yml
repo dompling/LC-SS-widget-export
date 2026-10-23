@@ -65,4 +65,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "LC-SS Widget Export Build ${GITHUB_RUN_NUMBER}" \
             --notes "Unsigned LC-SS IPA built from feat/export-widget-data at ${GITHUB_SHA}. Install/sign using your existing signing workflow." \
-            --latest
+            --latest=false
