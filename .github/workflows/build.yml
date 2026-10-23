@@ -12,6 +12,8 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write
     name: Build using xcodebuild command
     runs-on: macos-latest
     env:
@@ -81,6 +83,20 @@ jobs:
         with:
           name: ${{ env.scheme }}+SideStore.ipa
           path: ${{ env.scheme }}+SideStore.ipa
+
+      - name: Publish LC+SS standalone IPA to Releases
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -s LiveContainer+SideStore.ipa
+          TAG="lc-ss-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" LiveContainer+SideStore.ipa \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "LC+SS Build ${GITHUB_RUN_NUMBER}" \
+            --notes "LiveContainer + SideStore combined IPA from lcss-original (${GITHUB_SHA})." \
+            --latest
 
   release__nightly:
     name: Nightly Release
