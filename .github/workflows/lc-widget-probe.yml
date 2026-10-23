@@ -1,0 +1,36 @@
+name: Build independent LC Widget Probe dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [lcss-original]
+    paths:
+      - 'LCWidgetProbe/**'
+      - '.github/workflows/lc-widget-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-probe:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build arm64 iOS dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          mkdir -p dist
+          xcrun clang -arch arm64 -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 -fobjc-arc \
+            -dynamiclib -framework Foundation \
+            -install_name "@rpath/LCWidgetProbe.dylib" \
+            LCWidgetProbe/LCWidgetProbe.m -o dist/LCWidgetProbe.dylib
+          file dist/LCWidgetProbe.dylib
+      - name: Publish standalone artifact for manual LC import
+        uses: actions/upload-artifact@v4
+        with:
+          name: LCWidgetProbe-dylib
+          path: dist/LCWidgetProbe.dylib
+          if-no-files-found: error
