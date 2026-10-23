@@ -1,98 +1,131 @@
-// LCWidgetProbe v3 - reads only SideStore's existing widget_data.json.
-// Runs as an optional Guest App tweak in the OFFICIAL LC+SS Nightly.
-// Never reads the SideStore account database, keychain, cookies, or certificates.
+// LCWidgetProbe v4 - copy the official SideStore widget snapshot unchanged.
+// Optional Guest App tweak; compatible with the stock LiveContainer+SideStore Nightly.
+// Never accesses Apple ID sessions, account databases, private keys, or certificate files.
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <objc/message.h>
+#import <stdlib.h>
 
-static NSString *ISODate(id value) {
-    if ([value isKindOfClass:NSNumber.class]) {
-        // Apple's default JSONEncoder encodes Date relative to 2001-01-01.
-        NSDate *date = [NSDate dateWithTimeIntervalSinceReferenceDate:[value doubleValue]];
-        NSISO8601DateFormatter *formatter = [NSISO8601DateFormatter new];
-        formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime;
-        return [formatter stringFromDate:date];
+static BOOL LCWidgetIsKnownSnapshot(NSDictionary *snapshot) {
+    NSSet *allowedRoot = [NSSet setWithArray:@[@"activeApps", @"allApps", @"lastUpdated"]];
+    NSSet *allowedApp = [NSSet setWithArray:@[
+        @"name", @"bundleIdentifier", @"expirationDate", @"refreshedDate", @"tintColorHex"
+    ]];
+    for (id key in snapshot) {
+        if (![key isKindOfClass:NSString.class] || ![allowedRoot containsObject:key]) return NO;
     }
-    return [value isKindOfClass:NSString.class] ? value : nil;
-}
+    if (![snapshot[@"activeApps"] isKindOfClass:NSArray.class] ||
+        ![snapshot[@"allApps"] isKindOfClass:NSArray.class] ||
+        !([snapshot[@"lastUpdated"] isKindOfClass:NSNumber.class] ||
+          [snapshot[@"lastUpdated"] isKindOfClass:NSString.class])) return NO;
 
-static NSArray *SafeApps(id raw) {
-    if (![raw isKindOfClass:NSArray.class]) return @[];
-    NSMutableArray *items = [NSMutableArray array];
-    for (id entry in raw) {
-        if (![entry isKindOfClass:NSDictionary.class]) continue;
-        NSDictionary *src = entry;
-        NSMutableDictionary *app = [NSMutableDictionary dictionary];
-        for (NSString *field in @[@"name", @"bundleIdentifier"]) {
-            if ([src[field] isKindOfClass:NSString.class]) app[field] = src[field];
+    for (NSArray *apps in @[snapshot[@"activeApps"], snapshot[@"allApps"]]) {
+        for (id entry in apps) {
+            if (![entry isKindOfClass:NSDictionary.class]) return NO;
+            NSDictionary *app = entry;
+            for (id key in app) {
+                if (![key isKindOfClass:NSString.class] || ![allowedApp containsObject:key]) return NO;
+                id value = app[key];
+                if ([key isEqualToString:@"name"] || [key isEqualToString:@"bundleIdentifier"]) {
+                    if (![value isKindOfClass:NSString.class]) return NO;
+                } else if ([key isEqualToString:@"expirationDate"] || [key isEqualToString:@"refreshedDate"]) {
+                    if (![value isKindOfClass:NSNumber.class] && ![value isKindOfClass:NSString.class]) return NO;
+                } else if (![value isKindOfClass:NSString.class] && value != NSNull.null) {
+                    return NO;
+                }
+            }
         }
-        for (NSString *field in @[@"expirationDate", @"refreshedDate"]) {
-            NSString *value = ISODate(src[field]);
-            if (value) app[field] = value;
-        }
-        if ([app[@"name"] isKindOfClass:NSString.class]) [items addObject:app];
-        if (items.count >= 200) break;
     }
-    return items;
+    return YES;
 }
 
 __attribute__((constructor)) static void LCWidgetProbeInit(void) {
-    NSLog(@"[LCWidgetProbe] v3 started");
+    NSLog(@"[LCWidgetProbe] v4 started");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
             NSFileManager *fm = NSFileManager.defaultManager;
-            NSString *outDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/LCWidgetProbe"];
-            [fm createDirectoryAtPath:outDir withIntermediateDirectories:YES attributes:nil error:nil];
+            const char *rawHome = getenv("LC_HOME_PATH");
+            NSString *lcHome = (rawHome && rawHome[0]) ? [NSString stringWithUTF8String:rawHome] : nil;
+            if (!lcHome.length) {
+                NSLog(@"[LCWidgetProbe] v4 unavailable: LC_HOME_PATH not set; no export");
+                return;
+            }
+
+            // Stable destination: independent of which Guest App launched the tweak.
+            NSString *outDir = [lcHome stringByAppendingPathComponent:@"Documents/LCWidgetExport"];
+            NSString *outPath = [outDir stringByAppendingPathComponent:@"widget_data.json"];
+            NSError *error = nil;
+            BOOL directoryReady = [fm createDirectoryAtPath:outDir
+                                  withIntermediateDirectories:YES attributes:nil error:&error];
 
             Class utils = NSClassFromString(@"LCSharedUtils");
             NSURL *group = nil;
             if (utils && [utils respondsToSelector:@selector(appGroupPath)]) {
                 group = ((NSURL *(*)(id, SEL))objc_msgSend)(utils, @selector(appGroupPath));
             }
-            NSURL *widget = [group URLByAppendingPathComponent:@"widget_data.json"];
-            BOOL found = widget && [fm fileExistsAtPath:widget.path];
-            BOOL exported = NO;
-            NSString *reason = @"not-found";
-            if (found) {
-                NSError *error = nil;
-                NSData *raw = [NSData dataWithContentsOfURL:widget options:0 error:&error];
-                id object = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:&error] : nil;
-                if ([object isKindOfClass:NSDictionary.class]) {
-                    NSDictionary *snapshot = object;
-                    NSArray *active = SafeApps(snapshot[@"activeApps"]);
-                    NSArray *all = SafeApps(snapshot[@"allApps"]);
-                    NSMutableDictionary *output = [@{
-                        @"source": @"SideStore official widget_data.json",
-                        @"activeApps": active,
-                        @"allApps": all
-                    } mutableCopy];
-                    NSString *lastUpdated = ISODate(snapshot[@"lastUpdated"]);
-                    if (lastUpdated) output[@"lastUpdated"] = lastUpdated;
-                    NSData *safeJSON = [NSJSONSerialization dataWithJSONObject:output options:NSJSONWritingPrettyPrinted error:&error];
-                    exported = safeJSON && [safeJSON writeToFile:[outDir stringByAppendingPathComponent:@"widget_data.json"]
-                                                       options:NSDataWritingAtomic error:&error];
-                    reason = exported ? @"ok" : @"write-failed";
+            NSURL *source = [group URLByAppendingPathComponent:@"widget_data.json"];
+            BOOL sourceExists = source && [fm fileExistsAtPath:source.path];
+            NSString *status = @"source-not-found";
+            BOOL copied = NO;
+            BOOL identical = NO;
+            NSUInteger activeCount = 0;
+            NSUInteger allCount = 0;
+
+            if (!directoryReady) {
+                status = @"destination-unavailable";
+            } else if (sourceExists) {
+                NSData *raw = [NSData dataWithContentsOfURL:source options:0 error:&error];
+                if (!raw) {
+                    status = @"source-unreadable";
+                } else if (raw.length > 2 * 1024 * 1024) {
+                    status = @"source-too-large";
                 } else {
-                    reason = @"invalid-json";
+                    id parsed = [NSJSONSerialization JSONObjectWithData:raw options:0 error:&error];
+                    if (![parsed isKindOfClass:NSDictionary.class] || !LCWidgetIsKnownSnapshot(parsed)) {
+                        // If upstream adds fields, do not blindly export unknown potentially sensitive data.
+                        status = @"unexpected-widget-schema";
+                    } else {
+                        NSDictionary *snapshot = parsed;
+                        activeCount = [snapshot[@"activeApps"] count];
+                        allCount = [snapshot[@"allApps"] count];
+                        NSData *existing = [NSData dataWithContentsOfFile:outPath];
+                        if ([existing isEqualToData:raw]) {
+                            copied = YES;
+                            identical = YES;
+                            status = @"unchanged";
+                        } else {
+                            copied = [raw writeToFile:outPath options:NSDataWritingAtomic error:&error];
+                            identical = copied && [[NSData dataWithContentsOfFile:outPath] isEqualToData:raw];
+                            status = copied && identical ? @"ok" : @"write-failed";
+                        }
+                    }
                 }
             }
+
+            // Diagnostics are kept separate; never modify the copied official JSON.
             NSDictionary *report = @{
-                @"version": @3,
-                @"status": @"probe-only",
+                @"version": @4,
+                @"status": status,
                 @"timestamp": @([[NSDate date] timeIntervalSince1970]),
                 @"hostBundleIdentifier": NSBundle.mainBundle.bundleIdentifier ?: @"",
-                @"lcHomePathAvailable": @(getenv("LC_HOME_PATH") != NULL),
-                @"lcSharedUtilsAvailable": @(utils != Nil),
-                @"appGroupAvailable": @(group != nil),
-                @"officialWidgetDataExists": @(found),
-                @"widgetExported": @(exported),
-                @"widgetExportStatus": reason,
-                @"note": @"Only app name, bundle ID, refresh and expiration dates are exported. This does not trigger a refresh."
+                @"officialWidgetDataExists": @(sourceExists),
+                @"widgetExported": @(copied),
+                @"byteIdenticalToOfficial": @(identical),
+                @"activeAppCount": @(activeCount),
+                @"allAppCount": @(allCount),
+                @"outputLocation": @"LC_HOME_PATH/Documents/LCWidgetExport",
+                @"note": @"Original SideStore widget JSON copied without format or date conversion. Guest App launch required to run this tweak."
             };
-            NSData *probeData = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];
-            [probeData writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"] atomically:YES];
-            NSLog(@"[LCWidgetProbe] v3 appgroup=%@ widget=%@ export=%@ (%@)",
-                  group ? @"YES" : @"NO", found ? @"YES" : @"NO", exported ? @"YES" : @"NO", reason);
+            if (directoryReady) {
+                NSData *diagnostics = [NSJSONSerialization dataWithJSONObject:report
+                                         options:NSJSONWritingPrettyPrinted error:nil];
+                [diagnostics writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"]
+                                 options:NSDataWritingAtomic error:nil];
+            }
+            NSLog(@"[LCWidgetProbe] v4 result=%@ export=%@ bytesMatch=%@ active=%lu all=%lu",
+                  status, copied ? @"YES" : @"NO", identical ? @"YES" : @"NO",
+                  (unsigned long)activeCount, (unsigned long)allCount);
+            if (error) NSLog(@"[LCWidgetProbe] v4 error code=%ld", (long)error.code);
         }
     });
 }
