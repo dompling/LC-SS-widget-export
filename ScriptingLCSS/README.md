@@ -51,3 +51,6 @@ The Scripting script and Apple Shortcuts calls **have not been tested on your ph
 - https://livecontainer.github.io/docs/installation/lc_sidestore
 - https://github.com/SideStore/SideStore/blob/develop/SideStore/Widget/WidgetData/WidgetDataManager.swift
 - https://github.com/LiveContainer/LiveContainer/blob/main/SideStoreSupport/SideStore.swift
+
+## Implementation status
+These scripts are source-level prototypes, not yet compiled or tested inside Scripting on the device. The first-run import uses the official documented `DocumentPicker.pickDirectory()`. Persisted bookmarks must be independently configured in the Scripting UI if supported. `shortcutIndex` requires a compatible TestFlight build. The component names/props and widget code still require device-side testing.
