@@ -18,7 +18,7 @@ on:
       - '.github/workflows/lcss-ipa.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -52,3 +52,17 @@ jobs:
           name: LC-SS-build-logs
           path: build/logs/
           if-no-files-found: ignore
+
+      - name: Publish standalone IPA to Releases
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test -s SideStore.ipa
+          TAG="widget-export-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" SideStore.ipa \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "LC-SS Widget Export Build ${GITHUB_RUN_NUMBER}" \
+            --notes "Unsigned LC-SS IPA built from feat/export-widget-data at ${GITHUB_SHA}. Install/sign using your existing signing workflow." \
+            --latest
