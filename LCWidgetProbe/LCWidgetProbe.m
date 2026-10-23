@@ -1,76 +1,98 @@
-// LCWidgetProbe v2: minimal path-visibility test for the official LC+SS Nightly.
-// Runs only as an enabled LiveContainer Guest App tweak.
-// Does not read SideStore files, sign-in data, certificates, or file contents.
+// LCWidgetProbe v3 - reads only SideStore's existing widget_data.json.
+// Runs as an optional Guest App tweak in the OFFICIAL LC+SS Nightly.
+// Never reads the SideStore account database, keychain, cookies, or certificates.
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
-#import <stdlib.h>
+#import <objc/message.h>
 
-static NSDictionary *ProbeDirectory(NSString *base, NSString *relative, NSString *label) {
-    NSString *path = [base stringByAppendingPathComponent:relative];
-    NSFileManager *fm = NSFileManager.defaultManager;
-    BOOL isDirectory = NO;
-    BOOL exists = [fm fileExistsAtPath:path isDirectory:&isDirectory];
-
-    NSMutableDictionary *result = [@{
-        @"base": label,
-        @"relativePath": relative,
-        @"exists": @(exists),
-        @"isDirectory": @(isDirectory)
-    } mutableCopy];
-
-    if (exists && isDirectory) {
-        NSError *error = nil;
-        // Check directory readability only. No names or file contents are exported.
-        NSArray *entries = [fm contentsOfDirectoryAtPath:path error:&error];
-        result[@"readable"] = @(entries != nil);
-        if (error) result[@"readErrorCode"] = @(error.code);
+static NSString *ISODate(id value) {
+    if ([value isKindOfClass:NSNumber.class]) {
+        // Apple's default JSONEncoder encodes Date relative to 2001-01-01.
+        NSDate *date = [NSDate dateWithTimeIntervalSinceReferenceDate:[value doubleValue]];
+        NSISO8601DateFormatter *formatter = [NSISO8601DateFormatter new];
+        formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime;
+        return [formatter stringFromDate:date];
     }
-    return result;
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+static NSArray *SafeApps(id raw) {
+    if (![raw isKindOfClass:NSArray.class]) return @[];
+    NSMutableArray *items = [NSMutableArray array];
+    for (id entry in raw) {
+        if (![entry isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *src = entry;
+        NSMutableDictionary *app = [NSMutableDictionary dictionary];
+        for (NSString *field in @[@"name", @"bundleIdentifier"]) {
+            if ([src[field] isKindOfClass:NSString.class]) app[field] = src[field];
+        }
+        for (NSString *field in @[@"expirationDate", @"refreshedDate"]) {
+            NSString *value = ISODate(src[field]);
+            if (value) app[field] = value;
+        }
+        if ([app[@"name"] isKindOfClass:NSString.class]) [items addObject:app];
+        if (items.count >= 200) break;
+    }
+    return items;
 }
 
 __attribute__((constructor)) static void LCWidgetProbeInit(void) {
-    NSLog(@"[LCWidgetProbe] v2 loaded");
+    NSLog(@"[LCWidgetProbe] v3 started");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
-            NSString *guestHome = NSHomeDirectory();
-            const char *rawLCHome = getenv("LC_HOME_PATH");
-            NSString *lcHome = (rawLCHome && rawLCHome[0])
-                ? [NSString stringWithUTF8String:rawLCHome] : nil;
+            NSFileManager *fm = NSFileManager.defaultManager;
+            NSString *outDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/LCWidgetProbe"];
+            [fm createDirectoryAtPath:outDir withIntermediateDirectories:YES attributes:nil error:nil];
 
-            NSMutableArray *checks = [NSMutableArray array];
-            [checks addObject:ProbeDirectory(guestHome, @"Documents", @"guestHome")];
-            [checks addObject:ProbeDirectory(guestHome, @"Documents/SideStore", @"guestHome")];
-            if (lcHome.length) {
-                // SideStoreSupport/SideStore.swift in upstream LC uses
-                // LC_HOME_PATH + "/Documents/SideStore" for the built-in SideStore.
-                [checks addObject:ProbeDirectory(lcHome, @"Documents", @"lcHome")];
-                [checks addObject:ProbeDirectory(lcHome, @"Documents/SideStore", @"lcHome")];
-                [checks addObject:ProbeDirectory(lcHome, @"Documents/SideStore/Library", @"lcHome")];
+            Class utils = NSClassFromString(@"LCSharedUtils");
+            NSURL *group = nil;
+            if (utils && [utils respondsToSelector:@selector(appGroupPath)]) {
+                group = ((NSURL *(*)(id, SEL))objc_msgSend)(utils, @selector(appGroupPath));
             }
-
+            NSURL *widget = [group URLByAppendingPathComponent:@"widget_data.json"];
+            BOOL found = widget && [fm fileExistsAtPath:widget.path];
+            BOOL exported = NO;
+            NSString *reason = @"not-found";
+            if (found) {
+                NSError *error = nil;
+                NSData *raw = [NSData dataWithContentsOfURL:widget options:0 error:&error];
+                id object = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:&error] : nil;
+                if ([object isKindOfClass:NSDictionary.class]) {
+                    NSDictionary *snapshot = object;
+                    NSArray *active = SafeApps(snapshot[@"activeApps"]);
+                    NSArray *all = SafeApps(snapshot[@"allApps"]);
+                    NSMutableDictionary *output = [@{
+                        @"source": @"SideStore official widget_data.json",
+                        @"activeApps": active,
+                        @"allApps": all
+                    } mutableCopy];
+                    NSString *lastUpdated = ISODate(snapshot[@"lastUpdated"]);
+                    if (lastUpdated) output[@"lastUpdated"] = lastUpdated;
+                    NSData *safeJSON = [NSJSONSerialization dataWithJSONObject:output options:NSJSONWritingPrettyPrinted error:&error];
+                    exported = safeJSON && [safeJSON writeToFile:[outDir stringByAppendingPathComponent:@"widget_data.json"]
+                                                       options:NSDataWritingAtomic error:&error];
+                    reason = exported ? @"ok" : @"write-failed";
+                } else {
+                    reason = @"invalid-json";
+                }
+            }
             NSDictionary *report = @{
-                @"version": @2,
+                @"version": @3,
                 @"status": @"probe-only",
                 @"timestamp": @([[NSDate date] timeIntervalSince1970]),
                 @"hostBundleIdentifier": NSBundle.mainBundle.bundleIdentifier ?: @"",
-                @"lcHomePathAvailable": @(lcHome.length > 0),
-                @"lcHomeIsDifferentFromGuestHome": @(lcHome.length > 0 && ![lcHome isEqualToString:guestHome]),
-                @"candidateDirectories": checks,
-                @"warning": @"Directory visibility only; no SideStore data or signing expiration dates are read."
+                @"lcHomePathAvailable": @(getenv("LC_HOME_PATH") != NULL),
+                @"lcSharedUtilsAvailable": @(utils != Nil),
+                @"appGroupAvailable": @(group != nil),
+                @"officialWidgetDataExists": @(found),
+                @"widgetExported": @(exported),
+                @"widgetExportStatus": reason,
+                @"note": @"Only app name, bundle ID, refresh and expiration dates are exported. This does not trigger a refresh."
             };
-
-            NSString *outDir = [guestHome stringByAppendingPathComponent:@"Documents/LCWidgetProbe"];
-            NSError *error = nil;
-            BOOL created = [NSFileManager.defaultManager createDirectoryAtPath:outDir
-                                      withIntermediateDirectories:YES attributes:nil error:&error];
-            NSData *data = [NSJSONSerialization dataWithJSONObject:report
-                                                            options:NSJSONWritingPrettyPrinted error:&error];
-            BOOL saved = created && data &&
-                [data writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"]
-                          options:NSDataWritingAtomic error:&error];
-            NSLog(@"[LCWidgetProbe] v2 report %@; LC_HOME_PATH present=%@",
-                  saved ? @"saved" : @"failed", lcHome.length ? @"YES" : @"NO");
-            if (!saved && error) NSLog(@"[LCWidgetProbe] v2 error code=%ld", (long)error.code);
+            NSData *probeData = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];
+            [probeData writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"] atomically:YES];
+            NSLog(@"[LCWidgetProbe] v3 appgroup=%@ widget=%@ export=%@ (%@)",
+                  group ? @"YES" : @"NO", found ? @"YES" : @"NO", exported ? @"YES" : @"NO", reason);
         }
     });
 }
