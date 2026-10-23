@@ -24,7 +24,7 @@ jobs:
           mkdir -p dist
           xcrun clang -arch arm64 -isysroot "$SDK" \
             -miphoneos-version-min=15.0 -fobjc-arc \
-            -dynamiclib -framework Foundation \
+            -dynamiclib -framework Foundation -lsqlite3 \
             -install_name "@rpath/LCWidgetProbe.dylib" \
             LCWidgetProbe/LCWidgetProbe.m -o dist/LCWidgetProbe.dylib
           file dist/LCWidgetProbe.dylib
