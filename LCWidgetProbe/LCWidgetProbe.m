@@ -1,131 +1,216 @@
-// LCWidgetProbe v4 - copy the official SideStore widget snapshot unchanged.
-// Optional Guest App tweak; compatible with the stock LiveContainer+SideStore Nightly.
-// Never accesses Apple ID sessions, account databases, private keys, or certificate files.
+// LCWidgetProbe v5 - SideStore Core Data snapshot (read-only).
+// Independent Guest App tweak for OFFICIAL LiveContainer+SideStore Nightly.
+// Does not use or require the official widget_data.json or a home-screen widget.
+// Reads ONLY the InstalledApp row for com.kdt.livecontainer; never reads user account
+// tables, authentication records, signing keys, certificate blobs, or provisioning profiles.
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <objc/message.h>
+#import <sqlite3.h>
+#import <math.h>
 #import <stdlib.h>
 
-static BOOL LCWidgetIsKnownSnapshot(NSDictionary *snapshot) {
-    NSSet *allowedRoot = [NSSet setWithArray:@[@"activeApps", @"allApps", @"lastUpdated"]];
-    NSSet *allowedApp = [NSSet setWithArray:@[
-        @"name", @"bundleIdentifier", @"expirationDate", @"refreshedDate", @"tintColorHex"
-    ]];
-    for (id key in snapshot) {
-        if (![key isKindOfClass:NSString.class] || ![allowedRoot containsObject:key]) return NO;
-    }
-    if (![snapshot[@"activeApps"] isKindOfClass:NSArray.class] ||
-        ![snapshot[@"allApps"] isKindOfClass:NSArray.class] ||
-        !([snapshot[@"lastUpdated"] isKindOfClass:NSNumber.class] ||
-          [snapshot[@"lastUpdated"] isKindOfClass:NSString.class])) return NO;
+static NSString *const kLCBundleID = @"com.kdt.livecontainer";
 
-    for (NSArray *apps in @[snapshot[@"activeApps"], snapshot[@"allApps"]]) {
-        for (id entry in apps) {
-            if (![entry isKindOfClass:NSDictionary.class]) return NO;
-            NSDictionary *app = entry;
-            for (id key in app) {
-                if (![key isKindOfClass:NSString.class] || ![allowedApp containsObject:key]) return NO;
-                id value = app[key];
-                if ([key isEqualToString:@"name"] || [key isEqualToString:@"bundleIdentifier"]) {
-                    if (![value isKindOfClass:NSString.class]) return NO;
-                } else if ([key isEqualToString:@"expirationDate"] || [key isEqualToString:@"refreshedDate"]) {
-                    if (![value isKindOfClass:NSNumber.class] && ![value isKindOfClass:NSString.class]) return NO;
-                } else if (![value isKindOfClass:NSString.class] && value != NSNull.null) {
-                    return NO;
-                }
-            }
+static BOOL HasInstalledAppColumns(sqlite3 *db) {
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "PRAGMA table_info('ZINSTALLEDAPP')";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return NO;
+    NSMutableSet<NSString *> *names = [NSMutableSet set];
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char *rawName = sqlite3_column_text(stmt, 1);
+        if (rawName) {
+            [names addObject:[NSString stringWithUTF8String:(const char *)rawName]];
         }
+    }
+    sqlite3_finalize(stmt);
+    for (NSString *required in @[
+        @"ZNAME", @"ZBUNDLEIDENTIFIER", @"ZRESIGNEDBUNDLEIDENTIFIER",
+        @"ZREFRESHEDDATE", @"ZEXPIRATIONDATE", @"ZISACTIVE"
+    ]) {
+        if (![names containsObject:required]) return NO;
     }
     return YES;
 }
 
+static NSString *ColumnString(sqlite3_stmt *stmt, int column) {
+    const unsigned char *raw = sqlite3_column_text(stmt, column);
+    if (!raw) return nil;
+    return [NSString stringWithUTF8String:(const char *)raw];
+}
+
+static NSDictionary *ReadLiveContainerFromDatabase(sqlite3 *db, NSUInteger *matchCount,
+                                                    NSString **status) {
+    // Query only the required InstalledApp properties and only the LC bundle id.
+    const char *sql =
+        "SELECT ZNAME, ZBUNDLEIDENTIFIER, ZRESIGNEDBUNDLEIDENTIFIER,"
+        " ZREFRESHEDDATE, ZEXPIRATIONDATE, ZISACTIVE"
+        " FROM ZINSTALLEDAPP"
+        " WHERE ZBUNDLEIDENTIFIER = ?1 OR ZRESIGNEDBUNDLEIDENTIFIER = ?2"
+        " ORDER BY ZISACTIVE DESC, ZREFRESHEDDATE DESC LIMIT 16";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        *status = @"query-prepare-failed";
+        return nil;
+    }
+    sqlite3_bind_text(stmt, 1, kLCBundleID.UTF8String, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, kLCBundleID.UTF8String, -1, SQLITE_TRANSIENT);
+
+    NSDictionary *selected = nil;
+    NSUInteger count = 0;
+    int stepResult = SQLITE_DONE;
+    while ((stepResult = sqlite3_step(stmt)) == SQLITE_ROW) {
+        count++;
+        if (selected) continue; // Prefer active, then most recently refreshed.
+        if (sqlite3_column_type(stmt, 3) != SQLITE_FLOAT &&
+            sqlite3_column_type(stmt, 3) != SQLITE_INTEGER) continue;
+        if (sqlite3_column_type(stmt, 4) != SQLITE_FLOAT &&
+            sqlite3_column_type(stmt, 4) != SQLITE_INTEGER) continue;
+        double refreshed = sqlite3_column_double(stmt, 3);
+        double expiration = sqlite3_column_double(stmt, 4);
+        // Core Data Date is seconds since 2001-01-01; reject corrupt/out-of-range dates.
+        if (!isfinite(refreshed) || !isfinite(expiration) ||
+            refreshed < 0 || expiration < refreshed || expiration > 3500000000.0) continue;
+        NSString *name = ColumnString(stmt, 0);
+        NSString *bundle = ColumnString(stmt, 1);
+        NSString *resigned = ColumnString(stmt, 2);
+        if (!bundle.length) bundle = resigned;
+        if (!bundle.length) continue;
+        selected = @{
+            @"name": name.length ? name : @"LiveContainer",
+            @"bundleIdentifier": bundle,
+            @"refreshedDate": @(refreshed),
+            @"expirationDate": @(expiration),
+            @"tintColorHex": NSNull.null,
+            @"isActive": @(sqlite3_column_int(stmt, 5) != 0)
+        };
+    }
+    sqlite3_finalize(stmt);
+    *matchCount = count;
+    if (stepResult != SQLITE_DONE) {
+        *status = @"query-step-failed";
+        return nil;
+    }
+    *status = selected ? @"ok" : (count ? @"invalid-app-dates" : @"no-matching-livecontainer");
+    return selected;
+}
+
 __attribute__((constructor)) static void LCWidgetProbeInit(void) {
-    NSLog(@"[LCWidgetProbe] v4 started");
+    NSLog(@"[LCWidgetProbe] v5 Core Data reader starting");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
             NSFileManager *fm = NSFileManager.defaultManager;
-            const char *rawHome = getenv("LC_HOME_PATH");
-            NSString *lcHome = (rawHome && rawHome[0]) ? [NSString stringWithUTF8String:rawHome] : nil;
+            const char *lcHomeRaw = getenv("LC_HOME_PATH");
+            NSString *lcHome = lcHomeRaw && lcHomeRaw[0]
+                ? [NSString stringWithUTF8String:lcHomeRaw] : nil;
             if (!lcHome.length) {
-                NSLog(@"[LCWidgetProbe] v4 unavailable: LC_HOME_PATH not set; no export");
+                NSLog(@"[LCWidgetProbe] v5 missing LC_HOME_PATH");
                 return;
             }
-
-            // Stable destination: independent of which Guest App launched the tweak.
             NSString *outDir = [lcHome stringByAppendingPathComponent:@"Documents/LCWidgetExport"];
-            NSString *outPath = [outDir stringByAppendingPathComponent:@"widget_data.json"];
-            NSError *error = nil;
-            BOOL directoryReady = [fm createDirectoryAtPath:outDir
-                                  withIntermediateDirectories:YES attributes:nil error:&error];
+            NSError *outputError = nil;
+            BOOL folderReady = [fm createDirectoryAtPath:outDir
+                             withIntermediateDirectories:YES attributes:nil error:&outputError];
 
             Class utils = NSClassFromString(@"LCSharedUtils");
             NSURL *group = nil;
             if (utils && [utils respondsToSelector:@selector(appGroupPath)]) {
                 group = ((NSURL *(*)(id, SEL))objc_msgSend)(utils, @selector(appGroupPath));
             }
-            NSURL *source = [group URLByAppendingPathComponent:@"widget_data.json"];
-            BOOL sourceExists = source && [fm fileExistsAtPath:source.path];
-            NSString *status = @"source-not-found";
-            BOOL copied = NO;
-            BOOL identical = NO;
-            NSUInteger activeCount = 0;
-            NSUInteger allCount = 0;
 
-            if (!directoryReady) {
-                status = @"destination-unavailable";
-            } else if (sourceExists) {
-                NSData *raw = [NSData dataWithContentsOfURL:source options:0 error:&error];
-                if (!raw) {
-                    status = @"source-unreadable";
-                } else if (raw.length > 2 * 1024 * 1024) {
-                    status = @"source-too-large";
-                } else {
-                    id parsed = [NSJSONSerialization JSONObjectWithData:raw options:0 error:&error];
-                    if (![parsed isKindOfClass:NSDictionary.class] || !LCWidgetIsKnownSnapshot(parsed)) {
-                        // If upstream adds fields, do not blindly export unknown potentially sensitive data.
-                        status = @"unexpected-widget-schema";
-                    } else {
-                        NSDictionary *snapshot = parsed;
-                        activeCount = [snapshot[@"activeApps"] count];
-                        allCount = [snapshot[@"allApps"] count];
-                        NSData *existing = [NSData dataWithContentsOfFile:outPath];
-                        if ([existing isEqualToData:raw]) {
-                            copied = YES;
-                            identical = YES;
-                            status = @"unchanged";
-                        } else {
-                            copied = [raw writeToFile:outPath options:NSDataWritingAtomic error:&error];
-                            identical = copied && [[NSData dataWithContentsOfFile:outPath] isEqualToData:raw];
-                            status = copied && identical ? @"ok" : @"write-failed";
-                        }
-                    }
+            NSString *databaseName = @"SideStore.sqlite";
+            NSString *dbPath = [[group URLByAppendingPathComponent:@"Database"]
+                                  URLByAppendingPathComponent:databaseName].path;
+            BOOL databaseExists = dbPath.length && [fm fileExistsAtPath:dbPath];
+            // Older database file name is supported for diagnostics, never merged with current DB.
+            if (!databaseExists && group) {
+                NSString *legacy = [[group URLByAppendingPathComponent:@"Database"]
+                                       URLByAppendingPathComponent:@"AltStore.sqlite"].path;
+                if ([fm fileExistsAtPath:legacy]) {
+                    dbPath = legacy;
+                    databaseName = @"AltStore.sqlite";
+                    databaseExists = YES;
                 }
             }
 
-            // Diagnostics are kept separate; never modify the copied official JSON.
+            NSString *status = folderReady ? @"database-not-found" : @"output-folder-failed";
+            NSUInteger matchingRecords = 0;
+            BOOL success = NO;
+            BOOL outputVerified = NO;
+            BOOL schemaRecognized = NO;
+            BOOL rowActive = NO;
+            BOOL sourceHasWAL = databaseExists &&
+                [fm fileExistsAtPath:[dbPath stringByAppendingString:@"-wal"]];
+
+            if (folderReady && databaseExists) {
+                sqlite3 *db = NULL;
+                // SQLITE_OPEN_READONLY means this tweak cannot modify the SideStore database.
+                int rc = sqlite3_open_v2(dbPath.UTF8String, &db,
+                                        SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, NULL);
+                if (rc != SQLITE_OK) {
+                    status = @"database-open-failed";
+                } else {
+                    sqlite3_busy_timeout(db, 800);
+                    schemaRecognized = HasInstalledAppColumns(db);
+                    if (!schemaRecognized) {
+                        status = @"installedapp-schema-mismatch";
+                    } else {
+                        NSDictionary *row = ReadLiveContainerFromDatabase(db, &matchingRecords, &status);
+                        if (row) {
+                            rowActive = [row[@"isActive"] boolValue];
+                            NSMutableDictionary *safeApp = [row mutableCopy];
+                            [safeApp removeObjectForKey:@"isActive"];
+                            NSDictionary *output = @{
+                                @"activeApps": rowActive ? @[safeApp] : @[],
+                                @"allApps": @[safeApp],
+                                // Date encoded just like SideStore's default Swift JSONEncoder:
+                                // seconds since 2001-01-01 00:00:00 UTC.
+                                // Represents snapshot generation time, NOT the last DB write.
+                                @"lastUpdated": @([[NSDate date] timeIntervalSinceReferenceDate])
+                            };
+                            NSError *error = nil;
+                            NSData *json = [NSJSONSerialization dataWithJSONObject:output
+                                                options:NSJSONWritingPrettyPrinted error:&error];
+                            NSString *outputPath = [outDir stringByAppendingPathComponent:@"widget_data.json"];
+                            success = json && [json writeToFile:outputPath
+                                               options:NSDataWritingAtomic error:&error];
+                            outputVerified = success && [[NSData dataWithContentsOfFile:outputPath] isEqualToData:json];
+                            status = outputVerified ? @"ok" : @"export-write-failed";
+                        }
+                    }
+                }
+                if (db) sqlite3_close(db);
+            }
+
+            // All diagnostic metadata is nonsensitive; the database itself is never copied.
             NSDictionary *report = @{
-                @"version": @4,
+                @"version": @5,
                 @"status": status,
                 @"timestamp": @([[NSDate date] timeIntervalSince1970]),
-                @"hostBundleIdentifier": NSBundle.mainBundle.bundleIdentifier ?: @"",
-                @"officialWidgetDataExists": @(sourceExists),
-                @"widgetExported": @(copied),
-                @"byteIdenticalToOfficial": @(identical),
-                @"activeAppCount": @(activeCount),
-                @"allAppCount": @(allCount),
+                @"source": @"SideStore InstalledApp Core Data (read-only SQLite)",
+                @"sourceDatabaseName": databaseName,
+                @"sourceDatabaseExists": @(databaseExists),
+                @"sourceHasWAL": @(sourceHasWAL),
+                @"schemaRecognized": @(schemaRecognized),
+                @"matchingRecordCount": @(matchingRecords),
+                @"selectedRecordIsActive": @(rowActive),
+                @"widgetExported": @(outputVerified),
+                @"officialWidgetRequired": @NO,
                 @"outputLocation": @"LC_HOME_PATH/Documents/LCWidgetExport",
-                @"note": @"Original SideStore widget JSON copied without format or date conversion. Guest App launch required to run this tweak."
+                @"hostBundleIdentifier": NSBundle.mainBundle.bundleIdentifier ?: @"",
+                @"note": @"widget_data.json here is a derived SideStore Core Data snapshot, not an official widget cache; lastUpdated is export time."
             };
-            if (directoryReady) {
-                NSData *diagnostics = [NSJSONSerialization dataWithJSONObject:report
-                                         options:NSJSONWritingPrettyPrinted error:nil];
-                [diagnostics writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"]
-                                 options:NSDataWritingAtomic error:nil];
+            if (folderReady) {
+                NSData *meta = [NSJSONSerialization dataWithJSONObject:report
+                                  options:NSJSONWritingPrettyPrinted error:nil];
+                [meta writeToFile:[outDir stringByAppendingPathComponent:@"probe.json"]
+                         options:NSDataWritingAtomic error:nil];
             }
-            NSLog(@"[LCWidgetProbe] v4 result=%@ export=%@ bytesMatch=%@ active=%lu all=%lu",
-                  status, copied ? @"YES" : @"NO", identical ? @"YES" : @"NO",
-                  (unsigned long)activeCount, (unsigned long)allCount);
-            if (error) NSLog(@"[LCWidgetProbe] v4 error code=%ld", (long)error.code);
+            NSLog(@"[LCWidgetProbe] v5 %@ DB=%@ present=%@ wal=%@ schema=%@ records=%lu",
+                  status, databaseName, databaseExists ? @"YES" : @"NO",
+                  sourceHasWAL ? @"YES" : @"NO", schemaRecognized ? @"YES" : @"NO",
+                  (unsigned long)matchingRecords);
+            if (!folderReady && outputError) NSLog(@"[LCWidgetProbe] v5 output dir error code=%ld", (long)outputError.code);
         }
     });
 }
