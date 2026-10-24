@@ -595,7 +595,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSUInteger appCount=[self visibleApps].count;
     NSUInteger compactActions=3+(BoolPref(@"compactRestart",NO)?1:0);
     CGFloat footerHeight=compact?(16+compactActions*63+12):74;
-    CGFloat target=small?(compact?MIN(566,20+MIN(appCount,5)*65+footerHeight+12):
+    CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12):
         MIN(475,147+65*MIN(appCount,5)+footerHeight)):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
