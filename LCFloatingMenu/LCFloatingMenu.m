@@ -205,6 +205,7 @@ static UIColor *TintFor(NSString *s) {
     self.left=BoolPref(@"onLeft",NO);
     self.page=@"apps";
     self.apps=InstalledApps();
+    FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu",(unsigned long)self.apps.count]);
     [self draw];
 }
 - (CGFloat)orbWidth {return Clamp(FloatPref(@"orbWidth",27),20,55);}
@@ -305,6 +306,7 @@ static UIColor *TintFor(NSString *s) {
 - (void)toggle {
     self.isOpen=!self.isOpen; self.page=@"apps";
     if(self.isOpen) self.apps=InstalledApps();
+    FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
     if(BoolPref(@"haptic",YES)) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     }
@@ -502,13 +504,14 @@ static UIColor *TintFor(NSString *s) {
     [self draw];
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
-    if(!path.length) return;
+    if(!path.length) {FMLog(@"switch-rejected",@"empty-target");return;}
+    FMLog(@"switch-request",[path isEqualToString:@"ui"]?@"return-home":@"new-guest");
     if(![path isEqualToString:@"ui"]) {
         BOOL exists=NO;
         for(NSDictionary *item in InstalledApps()) {
             if([item[@"path"] isEqualToString:path] && [item[@"uuid"] isEqualToString:uuid]) {exists=YES;break;}
         }
-        if(!exists) { [self showMessage:@"不可安全切换" details:@"目标 App 不存在、已锁定、需要 JIT，或补丁需要在 LC 中重新签名。请先返回 LC 启动。"]; return; }
+        if(!exists) { FMLog(@"switch-rejected",@"guest-ineligible"); [self showMessage:@"不可安全切换" details:@"目标 App 不存在、已锁定、需要 JIT，或补丁需要在 LC 中重新签名。请先返回 LC 启动。"]; return; }
     }
     Class utils=NSClassFromString(@"LCSharedUtils");
     SEL sel=NSSelectorFromString(@"launchToGuestAppWithURL:");
@@ -545,6 +548,7 @@ static UIColor *TintFor(NSString *s) {
         return;
     }
     BOOL accepted=((BOOL(*)(id,SEL,NSURL*))objc_msgSend)(utils,sel,url.URL);
+    FMLog(accepted?@"switch-accepted":@"switch-rejected",@"LCSharedUtils");
     if(!accepted) {
         [host removeObjectForKey:@"selected"];
         [host removeObjectForKey:@"selectedContainer"];
@@ -552,6 +556,7 @@ static UIColor *TintFor(NSString *s) {
     }
 }
 - (void)showMessage:(NSString *)title details:(NSString *)detail {
+    FMLog(@"ui-warning",title);
     if(!self.window.rootViewController.presentedViewController) {
         UIAlertController *alert=[UIAlertController alertControllerWithTitle:title message:detail preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
@@ -595,6 +600,7 @@ static UIColor *TintFor(NSString *s) {
 __attribute__((constructor)) static void LCFloatingMenuEntry(void) {
     // UIWindow/UIApplication are not necessarily ready when a dylib constructor executes.
     dispatch_async(dispatch_get_main_queue(), ^{
+        FMLog(@"dylib-loaded",@"constructor");
         NSNotificationCenter *nc=NSNotificationCenter.defaultCenter;
         for(NSString *name in @[UIApplicationDidBecomeActiveNotification,UIWindowDidBecomeVisibleNotification,UIApplicationDidChangeStatusBarOrientationNotification]) {
             [nc addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
