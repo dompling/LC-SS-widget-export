@@ -619,8 +619,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(0,0,pw,ph)];
     shadow.center=CGPointMake(centerX,centerY);
     BOOL night=FMSystemDark();
-    shadow.layer.shadowColor=small?(night?RGBA(.15,.55,1,1):RGBA(.24,.51,.85,1)):
-                                      UIColor.blackColor.CGColor;
+    UIColor *shadowTint=small?(night?RGBA(.15,.55,1,1):RGBA(.24,.51,.85,1)):
+                              UIColor.blackColor;
+    shadow.layer.shadowColor=shadowTint.CGColor;
     shadow.layer.shadowOpacity=small?(night?.52:.24):.18;
     shadow.layer.shadowRadius=small?18:22;
     shadow.layer.shadowOffset=CGSizeMake(0,3);
