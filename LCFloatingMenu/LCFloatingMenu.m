@@ -514,7 +514,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat available=bounds.size.height-safeTop-safeBottom;
     BOOL small=[self.page isEqualToString:@"apps"];
     CGFloat pw=MIN(small?304:346,bounds.size.width-28);
-    CGFloat target=small?MIN(440,236+65*MIN(self.apps.count,5)):610;
+    CGFloat target=small?MIN(405,199+65*MIN(self.apps.count,5)):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available,target);
@@ -542,7 +542,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         [self buildAppHeader:glass];
-        CGFloat top=117, bottom=76;
+        CGFloat top=80, bottom=76;
         scroll.frame=CGRectMake(14,top,pw-28,MAX(20,ph-top-bottom));
         [self buildAppFooter:glass];
     }
@@ -621,12 +621,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)buildAppHeader:(UIView *)glass {
     CGFloat w=glass.bounds.size.width, inner=w-28;
-    UILabel *heading=[self label:@"应用" size:17 weight:UIFontWeightSemibold];
-    heading.frame=CGRectMake(14,10,inner-44,27);[glass addSubview:heading];
+    // The expanded panel is intentionally icon-and-app-only: no title,
+    // description, item count, or duplicate explanatory text.
     NSArray *apps=[self visibleApps];
-    UILabel *count=[self label:[NSString stringWithFormat:@"%lu",(unsigned long)apps.count] size:12 weight:UIFontWeightMedium];
-    count.textAlignment=NSTextAlignmentRight;count.textColor=UIColor.secondaryLabelColor;
-    count.frame=CGRectMake(w-60,10,44,27);[glass addSubview:count];
     NSMutableArray *pinned=[NSMutableArray array];
     for(NSString *path in [self favorites]) for(NSDictionary *item in apps)
         if([path isEqualToString:item[@"path"]] && pinned.count<4) { [pinned addObject:item]; break; }
@@ -637,7 +634,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat gap=6,cell=(inner-gap*3)/4;
     for(NSUInteger i=0;i<pinned.count;i++) {
         NSDictionary *app=pinned[i];
-        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(14+i*(cell+gap),41,cell,65)];
+        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(14+i*(cell+gap),8,cell,65)];
         tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.18];
         tile.layer.cornerRadius=14;
         UIView *icon=[self iconViewForApp:app size:36];
