@@ -570,9 +570,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL compact=BoolPref(@"compactMode",NO);
     // 146 pt keeps one vertical icon column while 75% scale preserves
     // at least 44pt hit targets in the compact 2x2 footer.
-    CGFloat pw=MIN(small?(compact?146:304):346,bounds.size.width-28);
-    CGFloat target=small?(compact?MAX(232,MIN(480,172+70*MIN(5,[self visibleApps].count))):
-        MIN(405,199+65*MIN(self.apps.count,5))):610;
+    CGFloat pw=MIN(small?(compact?108:310):346,bounds.size.width-24);
+    // A real side drawer: apps and actions share one continuous vertical
+    // capsule. Heights depend on the number of visible guests and footer keys.
+    NSUInteger appCount=[self visibleApps].count;
+    NSUInteger compactActions=3+(BoolPref(@"compactRestart",NO)?1:0);
+    CGFloat footerHeight=compact?(16+compactActions*63+12):74;
+    CGFloat target=small?(compact?MIN(566,20+MIN(appCount,5)*65+footerHeight+12):
+        MIN(475,147+65*MIN(appCount,5)+footerHeight)):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available,target);
@@ -594,11 +599,53 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.dismissLayer=under;
     UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(0,0,pw,ph)];
     shadow.center=CGPointMake(centerX,centerY);
-    shadow.layer.shadowColor=UIColor.blackColor.CGColor;
-    shadow.layer.shadowOpacity=.15;shadow.layer.shadowRadius=24;
-    shadow.layer.shadowOffset=CGSizeMake(0,9);
-    UIView *glass=[self glass:shadow.bounds radius:small?28:32 strong:YES];
+    BOOL night=FMSystemDark();
+    shadow.layer.shadowColor=small?(night?RGBA(.15,.55,1,1):RGBA(.24,.51,.85,1)):
+                                      UIColor.blackColor.CGColor;
+    shadow.layer.shadowOpacity=small?(night?.52:.24):.18;
+    shadow.layer.shadowRadius=small?18:22;
+    shadow.layer.shadowOffset=CGSizeMake(0,3);
+    CGFloat radius=small?(compact?31:29):32;
+    UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
     [shadow addSubview:glass];
+    // The same optical treatment is used by both switcher modes.
+    // Tone is selected from the system, never from the running Guest.
+    UIView *tint=[[UIView alloc] initWithFrame:glass.bounds];
+    tint.userInteractionEnabled=NO;
+    tint.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    CAGradientLayer *depth=[CAGradientLayer layer];
+    depth.frame=glass.bounds;
+    depth.colors=night?@[
+        (__bridge id)RGBA(.16,.22,.30,.83).CGColor,
+        (__bridge id)RGBA(.07,.10,.17,.91).CGColor,
+        (__bridge id)RGBA(.12,.19,.30,.87).CGColor]:
+        @[(__bridge id)RGBA(.96,.98,1,.75).CGColor,
+          (__bridge id)RGBA(.82,.89,.99,.79).CGColor,
+          (__bridge id)RGBA(.93,.97,1,.81).CGColor];
+    depth.locations=@[@0,@.48,@1];
+    [tint.layer addSublayer:depth];
+    [glass addSubview:tint];
+    // Highlighted metallic perimeter and blue cold-edge shine, like the
+    // reference drawer, without any animation or expensive custom shaders.
+    CAGradientLayer *rim=[CAGradientLayer layer];
+    rim.frame=glass.bounds;
+    rim.colors=night?@[
+       (__bridge id)RGBA(1,1,1,.97).CGColor,
+       (__bridge id)RGBA(.30,.68,1,.76).CGColor,
+       (__bridge id)RGBA(.91,.96,1,.74).CGColor]:
+       @[(__bridge id)RGBA(1,1,1,.94).CGColor,
+         (__bridge id)RGBA(.30,.58,.91,.65).CGColor,
+         (__bridge id)RGBA(1,1,1,.82).CGColor];
+    rim.startPoint=CGPointMake(0,0);rim.endPoint=CGPointMake(1,1);
+    CAShapeLayer *outline=[CAShapeLayer layer];
+    outline.frame=glass.bounds;
+    outline.path=[UIBezierPath bezierPathWithRoundedRect:CGRectInset(glass.bounds,1,1)
+                                          cornerRadius:radius-1].CGPath;
+    outline.fillColor=UIColor.clearColor.CGColor;
+    outline.strokeColor=UIColor.whiteColor.CGColor;
+    outline.lineWidth=1.7;
+    rim.mask=outline;
+    [glass.layer addSublayer:rim];
     UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectInset(glass.bounds,14,14)];
     scroll.showsVerticalScrollIndicator=NO;
     scroll.alwaysBounceVertical=NO;
@@ -608,12 +655,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         if(!compact) [self buildAppHeader:glass];
-        CGFloat top=compact?12:80, bottom=compact?145:76;
-        scroll.frame=CGRectMake(14,top,pw-28,MAX(20,ph-top-bottom));
+        CGFloat top=compact?12:86, bottom=footerHeight+9;
+        scroll.frame=CGRectMake(compact?10:13,top,pw-(compact?20:26),
+                                MAX(22,ph-top-bottom));
+        scroll.clipsToBounds=YES;
         [self buildAppFooter:glass];
     }
     UIStackView *stack=[self stack];
-    stack.spacing=small?7:10;
+    stack.spacing=small?(compact?3:7):10;
     [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
@@ -636,6 +685,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     [self.window.rootViewController.view addSubview:shadow];
     self.panel=shadow;
+    // Integrate the original edge bead as the drawer's outside pull handle.
+    // Preserve its existing drag, tap and accessibility gestures.
+    if(small && compact && self.orb) {
+        CGPoint grip=[shadow convertPoint:CGPointMake(self.left?0:pw,ph*.54)
+                                   toView:self.window.rootViewController.view];
+        self.orb.center=CGPointMake(self.left?MAX(6,grip.x-4):
+                                  MIN(bounds.size.width-6,grip.x+4),grip.y);
+    }
     shadow.alpha=0;
     shadow.transform=CGAffineTransformMakeScale(actualScale*.965,actualScale*.96);
     NSTimeInterval duration=UIAccessibilityIsReduceMotionEnabled()?.10:.29;
