@@ -76,6 +76,17 @@ static void FMLog(NSString *event, NSString *detail) {
     }
 }
 
+// SideStore is built into the LC+SS host, not a regular Guest bundle.
+// Check the host framework rather than guessing an external app URL scheme.
+static NSString *FMSideStoreFramework(void) {
+    NSBundle *host=LCClassCall(NSUserDefaults.class,@"lcMainBundle");
+    if(![host isKindOfClass:NSBundle.class]) return nil;
+    NSString *path=[host.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStoreApp.framework"];
+    BOOL directory=NO;
+    if(![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&directory] || !directory) return nil;
+    if(![NSFileManager.defaultManager fileExistsAtPath:[path stringByAppendingPathComponent:@"LCAppInfo.plist"]]) return nil;
+    return path;
+}
 static NSArray<NSDictionary*> *InstalledApps(void) {
     NSMutableArray<NSDictionary*> *list=[NSMutableArray array];
     NSMutableSet<NSString*> *seen=[NSMutableSet set];
@@ -114,6 +125,12 @@ static NSArray<NSDictionary*> *InstalledApps(void) {
                               @"bundle":info[@"CFBundleIdentifier"] ?: @"",
                               @"folder":folder}];
         }
+    }
+    NSString *sideStoreFolder=FMSideStoreFramework();
+    if(sideStoreFolder.length) {
+        [list addObject:@{@"path":@"builtinSideStore",@"title":@"SideStore",
+                          @"uuid":@"builtin",@"bundle":@"builtinSideStore",
+                          @"folder":sideStoreFolder,@"builtin":@YES}];
     }
     [list sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){
         return [a[@"title"] localizedStandardCompare:b[@"title"]];
@@ -1067,6 +1084,32 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!self.window.rootViewController.presentedViewController)
         [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
 }
+- (void)openBuiltinSideStore {
+    if(!FMSideStoreFramework().length) {
+        FMLog(@"sidestore-unavailable",@"framework absent");
+        [self showMessage:@"SideStore 不可用" details:@"当前 LC+SS 没有可用的内置 SideStore。"];
+        return;
+    }
+    Class utils=NSClassFromString(@"LCSharedUtils");
+    SEL launch=NSSelectorFromString(@"launchToGuestAppWithClassicMode:");
+    if(!utils || ![utils respondsToSelector:launch]) {
+        FMLog(@"sidestore-unavailable",@"LC launch API missing");
+        [self showMessage:@"切换失败" details:@"当前 LC 缺少内置应用启动接口。"];
+        return;
+    }
+    NSUserDefaults *host=HostDefaults();
+    [host setBool:YES forKey:@"LCOpenSideStore"];
+    [host removeObjectForKey:@"selected"];
+    [host removeObjectForKey:@"selectedContainer"];
+    [host removeObjectForKey:@"launchAppUrlScheme"];
+    FMLog(@"sidestore-launch",@"built-in framework");
+    BOOL accepted=((BOOL(*)(id,SEL,NSUInteger))objc_msgSend)(utils,launch,0);
+    if(!accepted) {
+        [host setBool:NO forKey:@"LCOpenSideStore"];
+        FMLog(@"sidestore-failed",@"launcher rejected");
+        [self showMessage:@"切换失败" details:@"LC 没有接受 SideStore 启动请求。"];
+    }
+}
 - (void)goHome {
     [self confirmTitle:@"返回 LiveContainer？" action:^{[self launchPath:@"ui" uuid:nil];}];
 }
@@ -1085,6 +1128,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)switchFromRow:(UIControl *)sender {
     NSDictionary *app=objc_getAssociatedObject(sender,@selector(switchFromRow:));
     if(!app) return;
+    if([app[@"builtin"] boolValue]) {
+        [self confirmTitle:@"切换到 SideStore？" action:^{ [self openBuiltinSideStore]; }];
+        return;
+    }
     [self confirmTitle:[NSString stringWithFormat:@"切换到 %@？",app[@"title"]] action:^{
         [self launchPath:app[@"path"] uuid:app[@"uuid"]];
     }];
