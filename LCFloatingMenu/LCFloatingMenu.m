@@ -246,6 +246,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) NSMutableArray<UIView*> *manageRows;
 @property(nonatomic,weak) UIScrollView *settingsScroll;
 @property(nonatomic,strong) UIView *settingsScreen;
+@property(nonatomic,strong) UIWindow *settingsWindow;
+@property(nonatomic,strong) UINavigationController *settingsNavigation;
+@property(nonatomic,weak) UIWindow *previousKeyWindow;
 @property(nonatomic,assign) UIUserInterfaceStyle lastSystemStyle;
 @property(nonatomic,assign) CGFloat settingsScrollOffset;
 @property(nonatomic,assign) CGFloat orbY;
@@ -261,6 +264,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)scheduleAppearanceCheck;
 - (void)refreshUI;
 - (void)closeSettings;
+- (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
+- (void)updateSettingsContent;
 @end
 @implementation FMManager
 + (instancetype)shared {
@@ -288,16 +293,22 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,sideSel) ||
        ((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,procSel)) return;
     if(self.window && self.window.windowScene != scene) {
-        [self.settingsScreen removeFromSuperview]; self.settingsScreen=nil;
+        self.settingsWindow.hidden=YES;
+        self.settingsWindow=nil;
+        self.settingsNavigation=nil;
+        self.settingsScreen=nil;
         self.settingsScroll=nil;
+        self.previousKeyWindow=nil;
         self.window.hidden=YES; self.window=nil; self.orb=nil; self.panel=nil;
     }
     if(self.window) {
         CGRect nextFrame=scene.coordinateSpace.bounds;
         if(!CGRectEqualToRect(self.window.frame,nextFrame)) {
             self.window.frame=nextFrame;
-            if(self.settingsScreen) [self renderSettingsScreen];
-            else [self draw];
+            if(self.settingsWindow) {
+                self.settingsWindow.frame=nextFrame;
+                [self updateSettingsContent];
+            } else [self draw];
         }
         [self refreshSystemAppearance];
         return;
@@ -435,7 +446,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)draw {
     if(!self.window) return;
-    if(self.settingsScreen) { [self renderSettingsScreen]; return; }
+    if(self.settingsWindow) { [self updateSettingsContent]; return; }
     [self removePanel];
     [self drawOrb];
     if(self.isOpen) {
@@ -550,8 +561,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat available=bounds.size.height-safeTop-safeBottom;
     BOOL small=[self.page isEqualToString:@"apps"];
     BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat pw=MIN(small?(compact?156:304):346,bounds.size.width-28);
-    CGFloat target=small?(compact?MIN(455,150+69*MIN(5,self.apps.count)):
+    CGFloat pw=MIN(small?(compact?116:304):346,bounds.size.width-28);
+    CGFloat target=small?(compact?MIN(455,136+69*MIN(5,self.apps.count)):
         MIN(405,199+65*MIN(self.apps.count,5))):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
