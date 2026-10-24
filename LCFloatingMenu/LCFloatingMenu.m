@@ -535,6 +535,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     scroll.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     scroll.contentInset=UIEdgeInsetsMake(0,0,4,0);
     [glass addSubview:scroll];
+    if(small) {
+        // Only the central application list scrolls; header and footer never move.
+        [self buildAppHeader:glass];
+        CGFloat top=117, bottom=76;
+        scroll.frame=CGRectMake(14,top,pw-28,MAX(20,ph-top-bottom));
+        [self buildAppFooter:glass];
+    }
     UIStackView *stack=[self stack];
     stack.spacing=small?7:10;
     [scroll addSubview:stack];
