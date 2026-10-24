@@ -1067,11 +1067,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self draw];
 }
 - (void)sortDrag:(UILongPressGestureRecognizer *)gesture {
-    if(!self.panel || !self.manageRows.count) return;
+    if(!self.manageRows.count) return;
+    UIView *surface=self.settingsNavigation.topViewController.view ?: self.panel;
+    if(!surface) return;
     UIView *handle=gesture.view;
     NSDictionary *app=objc_getAssociatedObject(handle,@selector(sortDrag:));
     if(!app) return;
-    CGPoint finger=[gesture locationInView:self.panel];
+    CGPoint finger=[gesture locationInView:surface];
     static const CGFloat kMaxMotion=240;
     if(gesture.state==UIGestureRecognizerStateBegan) {
         objc_setAssociatedObject(gesture,@selector(sortDrag:),@(finger.y),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1089,7 +1091,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         CGFloat closest=CGFLOAT_MAX;
         for(NSUInteger i=0;i<self.manageRows.count;i++) {
             UIView *row=self.manageRows[i];
-            CGRect rect=[row convertRect:row.bounds toView:self.panel];
+            CGRect rect=[row convertRect:row.bounds toView:surface];
             CGFloat distance=fabs(CGRectGetMidY(rect)-finger.y);
             if(distance<closest){closest=distance;to=i;}
         }
@@ -1105,7 +1107,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         handle.superview.transform=CGAffineTransformIdentity;
         handle.superview.alpha=1;
         handle.superview.layer.zPosition=0;
-        [self draw];
+        [self refreshUI];
     } else if(gesture.state==UIGestureRecognizerStateCancelled || gesture.state==UIGestureRecognizerStateFailed) {
         handle.superview.transform=CGAffineTransformIdentity;
         handle.superview.alpha=1;
@@ -1219,15 +1221,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self showMessage:@"导出失败" details:@"无法准备诊断文件"];
         return;
     }
-    if(self.window.rootViewController.presentedViewController) return;
+    UIViewController *presenter=self.settingsNavigation.topViewController ?: self.window.rootViewController;
+    if(presenter.presentedViewController) return;
     UIActivityViewController *share=[[UIActivityViewController alloc]
         initWithActivityItems:@[[NSURL fileURLWithPath:out]] applicationActivities:nil];
     UIPopoverPresentationController *popover=share.popoverPresentationController;
     if(popover) {
-        popover.sourceView=self.panel ?: self.orb;
-        popover.sourceRect=CGRectMake(10,10,25,25);
+        popover.sourceView=presenter.view;
+        popover.sourceRect=CGRectMake(CGRectGetMidX(presenter.view.bounds), 80, 1, 1);
     }
-    [self.window.rootViewController presentViewController:share animated:YES completion:nil];
+    [presenter presentViewController:share animated:YES completion:nil];
 }
 - (void)clearLogs {
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"清空诊断日志？"
@@ -1241,8 +1244,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [NSFileManager.defaultManager removeItemAtPath:[f stringByAppendingString:@".old"] error:nil];
         FMLog(@"diagnostics-reset",@"user-requested");
     }]];
-    if(!self.window.rootViewController.presentedViewController)
-        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+    UIViewController *presenter=self.settingsNavigation.topViewController ?: self.window.rootViewController;
+    if(!presenter.presentedViewController)
+        [presenter presentViewController:alert animated:YES completion:nil];
 }
 - (void)resetStyle {
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbWidth",@(12));
