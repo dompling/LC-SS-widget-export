@@ -1181,84 +1181,152 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIView *surface=self.settingsNavigation.topViewController.view ?: self.panel;
     if(!surface) return;
     UIView *handle=gesture.view;
+    UIView *sourceRow=handle.superview;
     NSDictionary *app=objc_getAssociatedObject(handle,@selector(sortDrag:));
     if(!app) return;
     CGPoint finger=[gesture locationInView:surface];
-    static const CGFloat kMaxMotion=240;
+    static const CGFloat kMaxMotion=260;
     if(gesture.state==UIGestureRecognizerStateBegan) {
         objc_setAssociatedObject(gesture,@selector(sortDrag:),@(finger.y),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if(BoolPref(@"haptic",YES))
             [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-        handle.superview.layer.zPosition=10;
-        handle.superview.alpha=.82;
+        sourceRow.layer.zPosition=10;
+        sourceRow.alpha=.82;
     } else if(gesture.state==UIGestureRecognizerStateChanged) {
         CGFloat initial=[objc_getAssociatedObject(gesture,@selector(sortDrag:)) doubleValue];
-        handle.superview.transform=CGAffineTransformMakeTranslation(0,Clamp(finger.y-initial,-kMaxMotion,kMaxMotion));
+        sourceRow.transform=CGAffineTransformMakeTranslation(0,Clamp(finger.y-initial,-kMaxMotion,kMaxMotion));
     } else if(gesture.state==UIGestureRecognizerStateEnded) {
         NSArray *items=[self visibleApps];
         NSUInteger from=[items indexOfObject:app];
-        NSUInteger to=NSNotFound;
-        CGFloat closest=CGFLOAT_MAX;
-        for(NSUInteger i=0;i<self.manageRows.count;i++) {
-            UIView *row=self.manageRows[i];
-            CGRect rect=[row convertRect:row.bounds toView:surface];
-            CGFloat distance=fabs(CGRectGetMidY(rect)-finger.y);
-            if(distance<closest){closest=distance;to=i;}
+        if(from!=NSNotFound && from<items.count) {
+            // Use other rows' original centers as insertion boundaries.
+            // Including the transformed source row made drop targets unstable.
+            NSUInteger insertion=0;
+            for(NSUInteger i=0;i<self.manageRows.count;i++) {
+                if(i==from) continue;
+                UIView *row=self.manageRows[i];
+                CGRect rect=[row convertRect:row.bounds toView:surface];
+                if(finger.y>CGRectGetMidY(rect)) insertion=i+1;
+            }
+            NSUInteger to=insertion>from?insertion-1:insertion;
+            to=MIN(to,items.count-1);
+            if(to!=from) {
+                NSMutableArray *order=[NSMutableArray arrayWithCapacity:items.count];
+                for(NSDictionary *item in items) [order addObject:item[@"path"]];
+                NSString *moving=order[from];
+                [order removeObjectAtIndex:from];
+                [order insertObject:moving atIndex:to];
+                SetPref(@"menuOrder",order);
+                FMLog(@"menu-reordered",@"drag");
+            }
         }
-        if(from!=NSNotFound && to!=NSNotFound && to<items.count && from!=to) {
-            NSMutableArray *paths=[NSMutableArray arrayWithCapacity:items.count];
-            for(NSDictionary *item in items) [paths addObject:item[@"path"]];
-            NSString *picked=paths[from];
-            [paths removeObjectAtIndex:from];
-            [paths insertObject:picked atIndex:MIN(to,paths.count)];
-            SetPref(@"menuOrder",paths);
-            FMLog(@"menu-reordered",@"user drag");
-        }
-        handle.superview.transform=CGAffineTransformIdentity;
-        handle.superview.alpha=1;
-        handle.superview.layer.zPosition=0;
+        sourceRow.transform=CGAffineTransformIdentity;
+        sourceRow.layer.zPosition=0;
+        sourceRow.alpha=1;
         [self refreshUI];
-    } else if(gesture.state==UIGestureRecognizerStateCancelled || gesture.state==UIGestureRecognizerStateFailed) {
-        handle.superview.transform=CGAffineTransformIdentity;
-        handle.superview.alpha=1;
-        handle.superview.layer.zPosition=0;
+    } else if(gesture.state==UIGestureRecognizerStateCancelled ||
+              gesture.state==UIGestureRecognizerStateFailed) {
+        sourceRow.transform=CGAffineTransformIdentity;
+        sourceRow.layer.zPosition=0;
+        sourceRow.alpha=1;
     }
 }
-- (void)managePage:(UIStackView*)s {
-    [self section:@"常用应用与排序" sub:nil in:s];
-    self.manageRows=[NSMutableArray array];
-    for(NSDictionary *app in [self visibleApps]) {
-        UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,300,58)];
-        row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.25];
-        row.layer.cornerRadius=17;
-        UIView *icon=[self iconViewForApp:app size:37];
-        icon.frame=CGRectMake(8,10,37,37);icon.userInteractionEnabled=NO;
+- (void)managePage:(UIStackView*)stack {
+    [self section:@"收藏与排序" sub:nil in:stack];
+    NSArray<NSDictionary*> *apps=[self visibleApps];
+    self.manageRows=[NSMutableArray arrayWithCapacity:apps.count];
+    UIStackView *group=[UIStackView new];
+    group.axis=UILayoutConstraintAxisVertical;
+    group.alignment=UIStackViewAlignmentFill;
+    group.distribution=UIStackViewDistributionFill;
+    group.spacing=0;
+    group.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    group.layer.cornerRadius=18;
+    group.clipsToBounds=YES;
+    [stack addArrangedSubview:group];
+    for(NSUInteger i=0;i<apps.count;i++) {
+        NSDictionary *app=apps[i];
+        UIView *row=[[UIView alloc] init];
+        row.backgroundColor=UIColor.clearColor;
+        [row.heightAnchor constraintEqualToConstant:65].active=YES;
+        [group addArrangedSubview:row];
+        UIView *icon=[self iconViewForApp:app size:43];
+        icon.translatesAutoresizingMaskIntoConstraints=NO;
+        icon.userInteractionEnabled=NO;
         [row addSubview:icon];
-        UILabel *name=[self label:app[@"title"] size:13 weight:UIFontWeightSemibold];
-        name.frame=CGRectMake(53,7,146,42);name.lineBreakMode=NSLineBreakByTruncatingTail;
+        UILabel *name=[self label:app[@"title"] size:15 weight:UIFontWeightMedium];
+        name.translatesAutoresizingMaskIntoConstraints=NO;
+        name.numberOfLines=1;
+        name.lineBreakMode=NSLineBreakByTruncatingTail;
         [row addSubview:name];
         UIButton *pin=[UIButton buttonWithType:UIButtonTypeSystem];
-        [pin setImage:[UIImage systemImageNamed:
-            [[self favorites] containsObject:app[@"path"]]?@"star.fill":@"star"]
-                 forState:UIControlStateNormal];
-        pin.tintColor=FMAccent();
-        pin.frame=CGRectMake(209,8,35,42);
+        pin.translatesAutoresizingMaskIntoConstraints=NO;
+        BOOL favored=[[self favorites] containsObject:app[@"path"]];
+        UIImageSymbolConfiguration *starConfig=[UIImageSymbolConfiguration
+            configurationWithPointSize:18 weight:UIFontWeightMedium];
+        [pin setImage:[UIImage systemImageNamed:favored?@"star.fill":@"star"
+                              withConfiguration:starConfig] forState:UIControlStateNormal];
+        pin.tintColor=favored?UIColor.systemYellowColor:UIColor.secondaryLabelColor;
+        pin.accessibilityLabel=favored?@"取消收藏":@"添加到收藏";
         objc_setAssociatedObject(pin,@selector(pinApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [pin addTarget:self action:@selector(pinApp:) forControlEvents:UIControlEventTouchUpInside];
         [row addSubview:pin];
-        UIView *handle=[[UIView alloc] initWithFrame:CGRectMake(245,5,44,48)];
+        UIView *handle=[UIView new];
+        handle.translatesAutoresizingMaskIntoConstraints=NO;
+        handle.isAccessibilityElement=YES;
+        handle.accessibilityLabel=[NSString stringWithFormat:@"拖动排序 %@",app[@"title"]];
+        handle.accessibilityTraits=UIAccessibilityTraitButton;
         UIImageView *lines=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal"]];
-        lines.tintColor=UIColor.secondaryLabelColor;
-        lines.frame=CGRectMake(13,16,19,17);
+        lines.translatesAutoresizingMaskIntoConstraints=NO;
+        lines.contentMode=UIViewContentModeScaleAspectFit;
+        lines.tintColor=UIColor.tertiaryLabelColor;
         [handle addSubview:lines];
         UILongPressGestureRecognizer *drag=[[UILongPressGestureRecognizer alloc]
             initWithTarget:self action:@selector(sortDrag:)];
-        drag.minimumPressDuration=.35;
+        drag.minimumPressDuration=.30;
         [handle addGestureRecognizer:drag];
         objc_setAssociatedObject(handle,@selector(sortDrag:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [row addSubview:handle];
+        [NSLayoutConstraint activateConstraints:@[
+            [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:12],
+            [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [icon.widthAnchor constraintEqualToConstant:43],
+            [icon.heightAnchor constraintEqualToConstant:43],
+            [name.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:11],
+            [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [name.trailingAnchor constraintLessThanOrEqualToAnchor:pin.leadingAnchor constant:-6],
+            [pin.widthAnchor constraintEqualToConstant:46],
+            [pin.heightAnchor constraintEqualToConstant:50],
+            [pin.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [pin.trailingAnchor constraintEqualToAnchor:handle.leadingAnchor],
+            [handle.widthAnchor constraintEqualToConstant:48],
+            [handle.heightAnchor constraintEqualToConstant:60],
+            [handle.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [handle.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-5],
+            [lines.widthAnchor constraintEqualToConstant:19],
+            [lines.heightAnchor constraintEqualToConstant:17],
+            [lines.centerXAnchor constraintEqualToAnchor:handle.centerXAnchor],
+            [lines.centerYAnchor constraintEqualToAnchor:handle.centerYAnchor]
+        ]];
+        if(i+1<apps.count) {
+            UIView *divider=[UIView new];
+            divider.translatesAutoresizingMaskIntoConstraints=NO;
+            divider.backgroundColor=UIColor.separatorColor;
+            [row addSubview:divider];
+            [NSLayoutConstraint activateConstraints:@[
+                [divider.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
+                [divider.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+                [divider.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+                [divider.heightAnchor constraintEqualToConstant:.5]
+            ]];
+        }
         [self.manageRows addObject:row];
-        [self addRow:row height:58 to:s];
+    }
+    if(!apps.count) {
+        UILabel *empty=[self label:@"暂无可管理的应用" size:14 weight:UIFontWeightRegular];
+        empty.textColor=UIColor.secondaryLabelColor;
+        empty.textAlignment=NSTextAlignmentCenter;
+        [self addRow:empty height:64 to:group];
     }
 }
 - (void)perAppPage:(UIStackView*)s {
