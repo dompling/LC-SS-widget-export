@@ -161,10 +161,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     for(id name in @[info[@"CFBundleIconFile"]?:@"", @"AppIcon60x60",@"AppIcon",@"Icon"])
         if([name isKindOfClass:NSString.class] && [name length]) [names addObject:name];
-    UIImage *result=nil;
+    // LC already exports the real rendered icon to these cache files.
+    // This is the exact same source LCAppInfo.iconIsDarkIcon: displays in LC.
+    NSString *cached=[folder stringByAppendingPathComponent:
+        BoolPref(@"preferDarkIcons",NO)?@"LCAppIconDark.png":@"LCAppIconLight.png"];
+    UIImage *result=[UIImage imageWithContentsOfFile:cached];
+    if(!result) result=[UIImage imageWithContentsOfFile:
+        [folder stringByAppendingPathComponent:@"LCAppIconLight.png"]];
     NSBundle *bundle=[NSBundle bundleWithPath:folder];
     NSFileManager *fm=NSFileManager.defaultManager;
-    for(NSString *name in names) {
+    for(NSString *name in result?@[]:names) {
         if(![name isKindOfClass:NSString.class] || !name.length) continue;
         @try {
             result=[UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
@@ -285,9 +291,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // same signed tweak safely runs on older iOS with regular blur.
     if(@available(iOS 26.0,*)) {
         Class cls=NSClassFromString(@"UIGlassEffect");
-        SEL make=NSSelectorFromString(@"effectWithStyle:");
-        if([cls respondsToSelector:make]) {
-            effect=((id(*)(id,SEL,NSInteger))objc_msgSend)(cls,make,0);
+        if(cls && [cls isSubclassOfClass:UIVisualEffect.class]) {
+            effect=[[cls alloc] init];
         }
     }
     if(!effect) {
@@ -304,7 +309,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     wash.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [v addSubview:wash];
     v.layer.borderWidth=.65;
-    v.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.58].CGColor;
+    v.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.48].CGColor;
     return v;
 }
 - (UIButton *)symbolButton:(NSString *)symbol title:(NSString *)title {
