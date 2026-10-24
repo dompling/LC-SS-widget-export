@@ -267,7 +267,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 + (instancetype)shared;
 - (void)installIfPossible;
 - (void)draw;
-- (void)renderSettingsScreen;
 - (void)refreshSystemAppearance;
 - (void)scheduleAppearanceCheck;
 - (void)refreshUI;
@@ -792,7 +791,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.isOpen=NO;
     [self removePanel];
     [self.orb removeFromSuperview];self.orb=nil;
-    self.previousKeyWindow=UIApplication.sharedApplication.keyWindow;
+    self.previousKeyWindow=nil;
+    for(UIWindow *candidate in self.window.windowScene.windows) {
+        if(candidate.isKeyWindow && candidate!=self.window) {
+            self.previousKeyWindow=candidate;
+            break;
+        }
+    }
     self.window.hidden=YES;
     UIWindow *settings=[[UIWindow alloc] initWithWindowScene:self.window.windowScene];
     settings.frame=self.window.windowScene.coordinateSpace.bounds;
