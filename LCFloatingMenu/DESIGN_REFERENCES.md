@@ -50,3 +50,20 @@ P3: optional advanced presets or animated interaction variants after device perf
 ## Copyright / reuse
 
 Use shots as inspiration and hyperlink to the original authors. Do not bundle, hotlink, redistribute or trace proprietary Dribbble shot assets, icons, illustrations, or Figma kits into the dylib without permission. Recreate a distinct, original UIKit design.
+
+## Approved final visual reference — right-edge vertical glass drawer
+
+The latest user-approved screenshot (iCTRL dark-mode background, five guest app icons, three control icons) is the **visual target** for compact mode. It supersedes earlier compact 2x2 footers and wide pale capsules.
+
+- **Compact:** one slender continuous capsule (~108pt logical width before the 75%-120% scale), rounded polished metal/glass perimeter with soft blue cool-edge highlight and dark navy translucent interior. App icons are ~50pt, centered in one **vertical** column; no text. One subtle horizontal hairline divides apps from tools.
+- **Tool area:** **Home / Settings / Collapse** appear in the **same 50pt rounded frosted glass icon-tile style as app icons**, one tile per row. An optional Restart action can be added in Interaction Settings. Do not show three tools in a 2x2 grid and never leave bright blue bare symbols on a large charcoal block.
+- **Normal:** same glass shading, same highlights and rounded icon-tile rhythm, but ~310pt wide. Real App icon + readable App name in compact-height rows; Favorites header and icon-only bottom toolbar fixed. Only middle list scrolls.
+- **Edge handle:** one tiny glass grip attached to the outside right or left edge at the **visually scaled** panel perimeter. Avoid a disconnected AssistiveTouch-like bubble.
+- **Appearances:** system light mode renders a bright but legible frosted drawer; system dark mode uses navy/black with a quiet blue rim. Guest-enforced theme must not override the system setting.
+- **Safety:** avoid changing classic single-task switching or reintroducing persistent `LCOpenSideStore` state; do not allow settings clicks through to the Guest. Keep diagnostics export available.
+
+### Review dimensions
+
+1. Build/link/ABI and side-effect safety: confirm both iOS arm64 compile and current Actions output.
+2. Compatibility: Guest app/SideStore switching, UIKit scene changes, safe-area bounds, gesture hit tests at 75% scale and device rotate.
+3. Visual behavior: compare installed UI in system light and dark mode, compact and normal, long icon list, fixed footer and real app icons. CI alone cannot certify on-device appearance.
