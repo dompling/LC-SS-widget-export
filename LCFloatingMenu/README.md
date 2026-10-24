@@ -27,7 +27,19 @@ Standalone iOS 16+ arm64 tweak for classic, single-task fullscreen Guest Apps on
 - Locked, hidden, JIT-required or 32-bit apps, or those with old patches, disabled signing or disabled TweakLoader, are excluded from quick switching; use LC's normal app list for those.
 - **Warning:** Fast switching does not rerun the full LC signApp() path. When signing changes or an app is incompatible, return to LC and launch through the normal app list. Signing/launching cannot be guaranteed by the tweak.
 - Diagnostics include bundle identifiers and predefined event categories, but do not intentionally log credentials, app content, certificates or signing keys.
-- Icons are colored monograms rather than private system-generated app icons.
+- Icon display uses real LC-provided icon cache first, with CFBundleIcons and an unbranded placeholder as fallbacks.
 - The look is an iOS Liquid Glass-inspired UIKit approximation, not the proprietary system material API.
 - The settings screen is embedded in the guest overlay, not the LiveContainer host settings navigation.
 - GitHub Actions validates arm64 compilation, not runtime behavior. Import and sign with LC, then test on real hardware; a successful CI build does **not** guarantee that every guest is compatible.
+
+## Gemini-design UI overhaul
+
+- Edge microbead: default 12 x 38 pt, snap-to-edge, enlarged touch target, 3-second ultra-thin idle fade and long-press shortcuts.
+- Compact app panel: approximately 304 x 440 pt, Favorites grid (up to four), scrollable Guest list and small circular toolbar.
+- Genuine LC app icons: first LCAppIconLight.png / LCAppIconDark.png in Guest bundle; fallback to CFBundleIcons assets or neutral icon (never fake initials).
+- Settings center: preview, auto fade, haptics, DIY workshop, manager, per-App controls and diagnostics export.
+- DIY workshop: Liquid / Minimal / Deep Crystal / Aurora themes, visual preview, opacity, bead size, color tint and icon theme controls.
+- Menu management: favorite toggles and long-press drag handles to reorder app entries.
+- Per-App override: explicit inheritance switch, collapsed opacity, double-tap-to-open and safe extra-thin edge display.
+- Compatibility: UIKit dynamically creates UIGlassEffect when supported (iOS 26+); older versions use UIBlurEffect, and the launch path stays classic single-task.
+- Notes: source artwork is a visual reference, not a guarantee of pixel-identical rendering on all iOS releases.
