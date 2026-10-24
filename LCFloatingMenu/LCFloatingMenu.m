@@ -479,11 +479,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     icon.frame=CGRectMake(7,7.5,37,37);
     icon.userInteractionEnabled=NO;[row addSubview:icon];
     UILabel *name=[self label:app[@"title"] size:14 weight:UIFontWeightSemibold];
-    name.frame=CGRectMake(54,5,190,25);name.lineBreakMode=NSLineBreakByTruncatingTail;
+    name.frame=CGRectMake(54,4,190,44);name.lineBreakMode=NSLineBreakByTruncatingTail;
     [row addSubview:name];
-    UILabel *subtitle=[self label:@"轻触切换 · 单任务" size:10 weight:UIFontWeightRegular];
-    subtitle.textColor=UIColor.secondaryLabelColor;subtitle.frame=CGRectMake(54,29,190,15);
-    [row addSubview:subtitle];
+
     UIImageView *chevron=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
     chevron.tintColor=UIColor.tertiaryLabelColor;
     chevron.frame=CGRectMake(251,21,8,11);[row addSubview:chevron];
@@ -592,83 +590,77 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSArray *v=[HostDefaults() arrayForKey:Pref(@"favoritePaths")];
     return [v isKindOfClass:NSArray.class]?v:@[];
 }
-- (void)appPage:(UIStackView *)s {
-    NSArray<NSDictionary*> *items=[self visibleApps];
-    UILabel *heading=[self label:@"LC · 快速切换" size:16 weight:UIFontWeightSemibold];
-    [s addArrangedSubview:heading];
-    UILabel *subtitle=[self label:@"单任务 · 只保留一个 App 运行" size:11 weight:UIFontWeightRegular];
-    subtitle.textColor=UIColor.secondaryLabelColor;[s addArrangedSubview:subtitle];
-    [self spacer:s size:7];
-    UILabel *pinned=[self label:@"常用应用" size:11 weight:UIFontWeightSemibold];
-    pinned.textColor=UIColor.secondaryLabelColor;[s addArrangedSubview:pinned];
-    NSArray *favs=[self favorites];
-    NSMutableArray *selected=[NSMutableArray array];
-    for(NSString *path in favs) for(NSDictionary *item in items) {
-        if([item[@"path"] isEqualToString:path] && selected.count<4) {
-            [selected addObject:item];break;
-        }
+- (void)appPage:(UIStackView *)stack {
+    NSArray *apps=[self visibleApps];
+    for(NSDictionary *app in apps)
+        [self addRow:[self appRow:app] height:52 to:stack];
+    if(!apps.count) {
+        UILabel *empty=[self label:@"暂无可切换应用" size:13 weight:UIFontWeightMedium];
+        empty.textAlignment=NSTextAlignmentCenter;
+        empty.textColor=UIColor.secondaryLabelColor;
+        [self addRow:empty height:68 to:stack];
     }
-    if(selected.count==0) {
-        for(NSDictionary *item in items) {
-            if(selected.count>=4) break;
-            [selected addObject:item];
-        }
+}
+- (void)buildAppHeader:(UIView *)glass {
+    CGFloat w=glass.bounds.size.width, inner=w-28;
+    UILabel *heading=[self label:@"应用" size:17 weight:UIFontWeightSemibold];
+    heading.frame=CGRectMake(14,10,inner-44,27);[glass addSubview:heading];
+    NSArray *apps=[self visibleApps];
+    UILabel *count=[self label:[NSString stringWithFormat:@"%lu",(unsigned long)apps.count] size:12 weight:UIFontWeightMedium];
+    count.textAlignment=NSTextAlignmentRight;count.textColor=UIColor.secondaryLabelColor;
+    count.frame=CGRectMake(w-60,10,44,27);[glass addSubview:count];
+    NSMutableArray *pinned=[NSMutableArray array];
+    for(NSString *path in [self favorites]) for(NSDictionary *item in apps)
+        if([path isEqualToString:item[@"path"]] && pinned.count<4) { [pinned addObject:item]; break; }
+    if(!pinned.count) for(NSDictionary *item in apps) {
+        if(pinned.count==4) break;
+        [pinned addObject:item];
     }
-    UIStackView *quick=[UIStackView new];quick.axis=UILayoutConstraintAxisHorizontal;
-    quick.alignment=UIStackViewAlignmentFill;
-    quick.distribution=UIStackViewDistributionFillEqually;quick.spacing=5;
-    for(NSDictionary *app in selected) {
-        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,62,70)];
-        tile.layer.cornerRadius=15;
-        tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.30];
-        UIView *icon=[self iconViewForApp:app size:38];icon.center=CGPointMake(31,27);
-        icon.userInteractionEnabled=NO;[tile addSubview:icon];
+    CGFloat gap=6,cell=(inner-gap*3)/4;
+    for(NSUInteger i=0;i<pinned.count;i++) {
+        NSDictionary *app=pinned[i];
+        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(14+i*(cell+gap),41,cell,65)];
+        tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.18];
+        tile.layer.cornerRadius=14;
+        UIView *icon=[self iconViewForApp:app size:36];
+        icon.frame=CGRectMake((cell-36)*.5,4,36,36);icon.userInteractionEnabled=NO;
+        [tile addSubview:icon];
         UILabel *name=[self label:app[@"title"] size:10 weight:UIFontWeightMedium];
-        name.frame=CGRectMake(2,51,58,15);
-        name.textAlignment=NSTextAlignmentCenter;name.lineBreakMode=NSLineBreakByTruncatingTail;
+        name.frame=CGRectMake(1,44,cell-2,16);name.textAlignment=NSTextAlignmentCenter;
+        name.lineBreakMode=NSLineBreakByTruncatingTail;
         [tile addSubview:name];
         objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
-        [quick addArrangedSubview:tile];
+        tile.accessibilityLabel=app[@"title"];[glass addSubview:tile];
     }
-    while(quick.arrangedSubviews.count<4) {
-        UIView *placeholder=[UIView new];[quick addArrangedSubview:placeholder];
-    }
-    [self addRow:quick height:71 to:s];
-    [self spacer:s size:7];
-    UILabel *all=[self label:[NSString stringWithFormat:@"容器应用 · %lu",(unsigned long)items.count]
-                       size:11 weight:UIFontWeightSemibold];
-    all.textColor=UIColor.secondaryLabelColor;[s addArrangedSubview:all];
-    for(NSDictionary *item in items) [self addRow:[self appRow:item] height:52 to:s];
-    if(!items.count) {
-        UILabel *empty=[self label:@"没有符合快捷切换条件的 App，请通过 LC 主界面启动。" size:12 weight:UIFontWeightRegular];
-        empty.textColor=UIColor.secondaryLabelColor;
-        [s addArrangedSubview:empty];
-    }
-    [self spacer:s size:9];
-    [self addRow:[self rowForTitle:@"菜单管理与排序" icon:@"line.3.horizontal.decrease" height:40 action:@selector(openManage)] height:40 to:s];
-    UIStackView *toolbar=[UIStackView new];toolbar.axis=UILayoutConstraintAxisHorizontal;
-    toolbar.distribution=UIStackViewDistributionFillEqually;toolbar.spacing=2;
-    NSMutableArray *itemsToolbar=[NSMutableArray array];
-    if(BoolPref(@"showRestart",YES)) [itemsToolbar addObject:@[@"arrow.clockwise",@"重启",NSStringFromSelector(@selector(restart))]];
-    [itemsToolbar addObjectsFromArray:@[
-        @[@"house.fill",@"返回",NSStringFromSelector(@selector(goHome))],
-        @[@"gearshape.fill",@"设置",NSStringFromSelector(@selector(openSettings))],
-        @[@"chevron.up",@"收起",NSStringFromSelector(@selector(toggle))]
+}
+- (void)buildAppFooter:(UIView *)glass {
+    CGFloat w=glass.bounds.size.width;
+    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(9,glass.bounds.size.height-67,w-18,59)];
+    footer.layer.cornerRadius=20;
+    footer.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.22];
+    [glass addSubview:footer];
+    NSMutableArray *items=[NSMutableArray array];
+    if(BoolPref(@"showRestart",YES))
+        [items addObject:@[@"arrow.clockwise",NSStringFromSelector(@selector(restart)),@"重启"]];
+    [items addObjectsFromArray:@[
+        @[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LC"],
+        @[@"gearshape.fill",NSStringFromSelector(@selector(openSettings)),@"设置"],
+        @[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起"]
     ]];
-    for(NSArray *spec in itemsToolbar) {
-        UIControl *b=[[UIControl alloc] initWithFrame:CGRectMake(0,0,65,59)];
-        b.layer.cornerRadius=15;
-        UIImageView *symbol=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:spec[0]]];
-        symbol.tintColor=FMAccent();symbol.contentMode=UIViewContentModeScaleAspectFit;
-        symbol.frame=CGRectMake(21,5,23,23);[b addSubview:symbol];
-        UILabel *label=[self label:spec[1] size:10 weight:UIFontWeightMedium];
-        label.frame=CGRectMake(0,35,65,18);label.textAlignment=NSTextAlignmentCenter;
-        [b addSubview:label];
-        [b addTarget:self action:NSSelectorFromString(spec[2]) forControlEvents:UIControlEventTouchUpInside];
-        [toolbar addArrangedSubview:b];
+    CGFloat cell=footer.bounds.size.width/items.count;
+    for(NSUInteger i=0;i<items.count;i++) {
+        NSArray *spec=items[i];
+        UIControl *button=[[UIControl alloc] initWithFrame:CGRectMake(i*cell,0,cell,59)];
+        button.accessibilityLabel=spec[2];
+        UIImage *image=[UIImage systemImageNamed:spec[0] withConfiguration:
+            [UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium]];
+        UIImageView *iv=[[UIImageView alloc] initWithImage:image];
+        iv.contentMode=UIViewContentModeScaleAspectFit;iv.tintColor=FMAccent();
+        iv.frame=CGRectMake((cell-25)*.5,16,25,25);[button addSubview:iv];
+        [button addTarget:self action:NSSelectorFromString(spec[1]) forControlEvents:UIControlEventTouchUpInside];
+        [footer addSubview:button];
     }
-    [self addRow:toolbar height:59 to:s];
 }
 - (void)openSettings {self.page=@"settings";[self draw];}
 - (void)openDIY {self.page=@"diy";[self draw];}
