@@ -499,6 +499,46 @@ static UIColor *TintFor(NSString *s) {
     else if(slider.tag==13) [self draw];
     else { [self drawOrb]; if(self.isOpen) [self.window.rootViewController.view bringSubviewToFront:self.orb]; }
 }
+- (void)exportLogs {
+    FMLog(@"diagnostics-export",@"user-requested");
+    NSString *file=FMLogFile();
+    if(!file) { [self showMessage:@"无法导出" details:@"诊断目录不可用"];return; }
+    NSMutableData *content=[NSMutableData data];
+    for(NSString *p in @[[file stringByAppendingString:@".old"],file]) {
+        NSData *part=[NSData dataWithContentsOfFile:p];
+        if(part) [content appendData:part];
+    }
+    if(!content.length) { [self showMessage:@"暂无日志" details:@"尚未产生诊断记录"];return; }
+    NSString *out=[NSTemporaryDirectory() stringByAppendingPathComponent:@"LCFloatingMenu-Diagnostics.log"];
+    if(![content writeToFile:out atomically:YES]) {
+        [self showMessage:@"导出失败" details:@"无法准备诊断文件"];
+        return;
+    }
+    if(self.window.rootViewController.presentedViewController) return;
+    UIActivityViewController *share=[[UIActivityViewController alloc]
+        initWithActivityItems:@[[NSURL fileURLWithPath:out]] applicationActivities:nil];
+    UIPopoverPresentationController *popover=share.popoverPresentationController;
+    if(popover) {
+        popover.sourceView=self.panel ?: self.orb;
+        popover.sourceRect=CGRectMake(10,10,25,25);
+    }
+    [self.window.rootViewController presentViewController:share animated:YES completion:nil];
+}
+- (void)clearLogs {
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"清空诊断日志？"
+        message:@"只会清除悬浮菜单日志，不影响 App 或设置。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"清空" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+        NSString *f=FMLogFile();
+        if(!f) return;
+        [NSFileManager.defaultManager removeItemAtPath:f error:nil];
+        [NSFileManager.defaultManager removeItemAtPath:[f stringByAppendingString:@".old"] error:nil];
+        FMLog(@"diagnostics-reset",@"user-requested");
+    }]];
+    if(!self.window.rootViewController.presentedViewController)
+        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+}
 - (void)resetStyle {
     SetPref(@"idleAlpha",@(.68));SetPref(@"orbWidth",@(27));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
