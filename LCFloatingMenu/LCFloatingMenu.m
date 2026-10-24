@@ -238,7 +238,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 @end
 
-@interface FMSettingsRootController : UITableViewController @end
+@interface FMSettingsRootController : UIViewController
+@property(nonatomic,strong) UIScrollView *contentScroll;
+- (void)rebuild;
+@end
 @interface FMSettingsSectionController : UIViewController
 @property(nonatomic,copy) NSString *sectionKey;
 @property(nonatomic,strong) UIScrollView *contentScroll;
@@ -908,7 +911,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     settings.windowLevel=UIWindowLevelNormal+90;
     settings.backgroundColor=UIColor.systemGroupedBackgroundColor;
     settings.overrideUserInterfaceStyle=FMSystemAppearance();
-    FMSettingsRootController *home=[[FMSettingsRootController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    FMSettingsRootController *home=[FMSettingsRootController new];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:home];
     nav.navigationBar.prefersLargeTitles=YES;
     UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
@@ -955,6 +958,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIViewController *top=self.settingsNavigation.topViewController;
     if([top isKindOfClass:FMSettingsSectionController.class])
         [(FMSettingsSectionController*)top rebuild];
+    else if([top isKindOfClass:FMSettingsRootController.class])
+        [(FMSettingsRootController*)top rebuild];
 }
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)s {
     if([category isEqualToString:@"appearance"]) {
@@ -1140,7 +1145,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
     [self settingSlider:s title:@"玻璃着色" key:@"glassTint" min:0 max:.30 def:.08 tag:13];
-    [self settingSwitch:s title:@"显示重启入口" key:@"showRestart" defaultValue:YES tag:3];
     [self settingSwitch:s title:@"优先深色应用图标" key:@"preferDarkIcons" defaultValue:NO tag:9];
     [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:40 action:@selector(resetStyle)] height:40 to:s];
 }
@@ -1499,41 +1503,126 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title=@"悬浮菜单";
-    self.tableView.backgroundColor=UIColor.systemGroupedBackgroundColor;
-    self.tableView.rowHeight=72;
+    self.view.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    UIScrollView *scroll=[UIScrollView new];
+    scroll.translatesAutoresizingMaskIntoConstraints=NO;
+    scroll.backgroundColor=UIColor.clearColor;
+    scroll.alwaysBounceVertical=YES;
+    scroll.showsVerticalScrollIndicator=YES;
+    [self.view addSubview:scroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
+    ]];
+    self.contentScroll=scroll;
+    [self rebuild];
 }
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section==0?3:1;
+- (UIControl *)navigationRow:(NSString *)name subtitle:(NSString *)subtitle
+                     symbol:(NSString *)symbol action:(SEL)action {
+    UIControl *row=[UIControl new];
+    row.layer.cornerRadius=16;
+    row.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    UIImageView *icon=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol]];
+    icon.translatesAutoresizingMaskIntoConstraints=NO;
+    icon.tintColor=FMAccent();
+    icon.contentMode=UIViewContentModeScaleAspectFit;
+    [row addSubview:icon];
+    UILabel *title=[UILabel new];
+    title.translatesAutoresizingMaskIntoConstraints=NO;
+    title.text=name;
+    title.textColor=UIColor.labelColor;
+    title.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    [row addSubview:title];
+    UILabel *detail=[UILabel new];
+    detail.translatesAutoresizingMaskIntoConstraints=NO;
+    detail.text=subtitle;
+    detail.textColor=UIColor.secondaryLabelColor;
+    detail.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
+    detail.numberOfLines=1;
+    [row addSubview:detail];
+    UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+    arrow.tintColor=UIColor.tertiaryLabelColor;
+    arrow.translatesAutoresizingMaskIntoConstraints=NO;
+    [row addSubview:arrow];
+    [NSLayoutConstraint activateConstraints:@[
+        [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
+        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:25],
+        [icon.heightAnchor constraintEqualToConstant:25],
+        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:14],
+        [title.topAnchor constraintEqualToAnchor:row.topAnchor constant:12],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
+        [detail.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+        [detail.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2],
+        [detail.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
+        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-17],
+        [arrow.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [arrow.heightAnchor constraintEqualToConstant:15],
+        [arrow.widthAnchor constraintEqualToConstant:10]
+    ]];
+    [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    row.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",name,subtitle];
+    row.accessibilityTraits=UIAccessibilityTraitButton;
+    return row;
 }
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return section==0?@"偏好设置":@"支持";
-}
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)index {
-    UITableViewCell *cell=[tableView dequeueReusableCellWithIdentifier:@"section"];
-    if(!cell) cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
-                                        reuseIdentifier:@"section"];
-    NSArray *names=@[@"显示与外观",@"交互与切换",@"应用管理",@"诊断与日志"];
-    NSArray *subtitles=@[@"模式、尺寸、Liquid Glass、主题",@"悬浮操作、触觉与确认",@"每 App 设置、收藏与排序",@"导出和清理运行日志"];
-    NSArray *symbols=@[@"paintpalette",@"hand.tap",@"square.stack.3d.up",@"waveform.path.ecg"];
-    NSInteger item=index.section==0?index.row:3;
-    cell.textLabel.text=names[item];
-    cell.textLabel.font=[UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-    cell.detailTextLabel.text=subtitles[item];
-    cell.detailTextLabel.font=[UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
-    cell.detailTextLabel.textColor=UIColor.secondaryLabelColor;
-    cell.imageView.image=[UIImage systemImageNamed:symbols[item]];
-    cell.imageView.tintColor=FMAccent();
-    cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
-    cell.selectionStyle=UITableViewCellSelectionStyleDefault;
-    return cell;
-}
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)index {
-    [tableView deselectRowAtIndexPath:index animated:YES];
-    NSInteger item=index.section==0?index.row:3;
-    NSArray *keys=@[@"appearance",@"behavior",@"apps",@"diagnostics"];
-    FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:keys[item]];
+- (void)openApps {
+    FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:@"apps"];
     [self.navigationController pushViewController:detail animated:YES];
+}
+- (void)openDiagnostics {
+    FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:@"diagnostics"];
+    [self.navigationController pushViewController:detail animated:YES];
+}
+- (void)rebuild {
+    if(!self.isViewLoaded || !self.contentScroll) return;
+    UIScrollView *scroll=self.contentScroll;
+    CGFloat oldOffset=scroll.contentOffset.y;
+    for(UIView *view in [scroll.subviews copy])
+        if([view isKindOfClass:UIStackView.class]) [view removeFromSuperview];
+    UIStackView *stack=[UIStackView new];
+    stack.axis=UILayoutConstraintAxisVertical;
+    stack.alignment=UIStackViewAlignmentFill;
+    stack.spacing=12;
+    stack.translatesAutoresizingMaskIntoConstraints=NO;
+    [scroll addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:18],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-18],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:18],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-36],
+        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-36]
+    ]];
+    FMManager *manager=[FMManager shared];
+    // Display/Appearance and Interaction are inline on the root settings
+    // page. Only the two less frequently used management sections navigate.
+    [manager populateSettingsCategory:@"appearance" stack:stack];
+    UIView *gap=[UIView new];[gap.heightAnchor constraintEqualToConstant:12].active=YES;
+    [stack addArrangedSubview:gap];
+    [manager populateSettingsCategory:@"behavior" stack:stack];
+    UIView *secondGap=[UIView new];
+    [secondGap.heightAnchor constraintEqualToConstant:12].active=YES;
+    [stack addArrangedSubview:secondGap];
+    UILabel *section=[UILabel new];
+    section.text=@"管理与支持";
+    section.textColor=UIColor.secondaryLabelColor;
+    section.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    [stack addArrangedSubview:section];
+    UIControl *apps=[self navigationRow:@"应用管理" subtitle:@"每 App 设置、收藏与排序"
+                               symbol:@"square.stack.3d.up" action:@selector(openApps)];
+    [apps.heightAnchor constraintEqualToConstant:65].active=YES;
+    [stack addArrangedSubview:apps];
+    UIControl *logs=[self navigationRow:@"诊断与日志" subtitle:@"查看、导出和清除日志"
+                               symbol:@"waveform.path.ecg" action:@selector(openDiagnostics)];
+    [logs.heightAnchor constraintEqualToConstant:65].active=YES;
+    [stack addArrangedSubview:logs];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(self.contentScroll!=scroll || !scroll.window) return;
+        [scroll layoutIfNeeded];
+        CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height);
+        [scroll setContentOffset:CGPointMake(0,MIN(oldOffset,maxY)) animated:NO];
+    });
 }
 @end
 
