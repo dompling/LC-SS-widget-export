@@ -34,10 +34,13 @@ mv ./tmp/SideStoreSupport.framework Payload/LiveContainer.app/Frameworks
 /usr/libexec/PlistBuddy -c "Add :NSUserActivityTypes:0 string RefreshAllIntent" ./Payload/LiveContainer.app/Info.plist
 /usr/libexec/PlistBuddy -c "Add :NSUserActivityTypes:1 string ViewAppIntent" ./Payload/LiveContainer.app/Info.plist
 
-/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:3:Type string PSToggleSwitchSpecifier" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
-/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:3:Title string Open SideStore" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
-/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:3:Key string LCOpenSideStore" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
-/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:3:DefaultValue bool false" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
+/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:2 dict" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
+/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:2:Type string PSToggleSwitchSpecifier" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
+/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:2:Title string Open SideStore" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
+/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:2:Key string LCOpenSideStore" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
+/usr/libexec/PlistBuddy -c "Add :PreferenceSpecifiers:2:DefaultValue bool false" ./Payload/LiveContainer.app/Settings.bundle/Root.plist
+# Fail the package step if the repair toggle was not actually added.
+/usr/libexec/PlistBuddy -c "Print :PreferenceSpecifiers:2:Key" ./Payload/LiveContainer.app/Settings.bundle/Root.plist | grep -qx 'LCOpenSideStore' || exit 1
 
 # download SideStore
 cd tmp
