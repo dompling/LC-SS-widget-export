@@ -212,6 +212,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) FMGlassWindow *window;
 @property(nonatomic,strong) UIButton *orb;
 @property(nonatomic,strong) UIView *panel;
+@property(nonatomic,strong) UIView *dismissLayer;
 @property(nonatomic,assign) CGFloat orbY;
 @property(nonatomic,assign) BOOL left;
 @property(nonatomic,assign) BOOL isOpen;
@@ -328,6 +329,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)removePanel {
     [self.panel removeFromSuperview]; self.panel=nil;
+    [self.dismissLayer removeFromSuperview]; self.dismissLayer=nil;
 }
 - (void)drawOrb {
     [self.orb removeFromSuperview]; self.orb=nil;
@@ -495,38 +497,61 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [stack addArrangedSubview:row];
 }
 - (void)buildPanel {
-    CGFloat totalWidth=self.window.bounds.size.width;
-    CGFloat pw=MIN(325,totalWidth-35),ph=MIN(self.window.bounds.size.height-115,560);
-    CGFloat x=self.left?15:totalWidth-pw-15;
-    CGFloat y=Clamp(CGRectGetMidY(self.orb.frame)-ph*.50,55,self.window.bounds.size.height-ph-36);
+    CGRect bounds=self.window.bounds;
+    CGFloat safeTop=MAX(38,self.window.safeAreaInsets.top+6);
+    CGFloat safeBottom=MAX(26,self.window.safeAreaInsets.bottom+10);
+    CGFloat available=bounds.size.height-safeTop-safeBottom;
+    BOOL small=[self.page isEqualToString:@"apps"];
+    CGFloat pw=MIN(small?304:346,bounds.size.width-28);
+    CGFloat target=small?MIN(550,228+72*MIN(self.apps.count,5)):610;
+    if([self.page isEqualToString:@"manage"]) target=620;
+    if([self.page isEqualToString:@"diy"]) target=675;
+    CGFloat ph=MIN(available,target);
+    CGFloat x=self.left?15:bounds.size.width-pw-15;
+    CGFloat y=small?Clamp(CGRectGetMidY(self.orb.frame)-ph*.48,
+                          safeTop,bounds.size.height-safeBottom-ph)
+                   :safeTop+(available-ph)*.5;
+    UIControl *under=[[UIControl alloc] initWithFrame:bounds];
+    under.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:.06];
+    [under addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
+    [self.window.rootViewController.view addSubview:under];
+    self.dismissLayer=under;
     UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(x,y,pw,ph)];
     shadow.layer.shadowColor=UIColor.blackColor.CGColor;
-    shadow.layer.shadowOpacity=.21; shadow.layer.shadowRadius=22;
-    shadow.layer.shadowOffset=CGSizeMake(0,10);
-    UIView *glass=[self glass:shadow.bounds radius:29 strong:YES];
+    shadow.layer.shadowOpacity=.15;shadow.layer.shadowRadius=24;
+    shadow.layer.shadowOffset=CGSizeMake(0,9);
+    UIView *glass=[self glass:shadow.bounds radius:small?28:32 strong:YES];
     [shadow addSubview:glass];
-    UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectInset(glass.bounds,13,12)];
-    scroll.showsVerticalScrollIndicator=NO; scroll.alwaysBounceVertical=YES;
+    UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectInset(glass.bounds,14,14)];
+    scroll.showsVerticalScrollIndicator=NO;
+    scroll.alwaysBounceVertical=NO;
     scroll.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    scroll.contentInset=UIEdgeInsetsMake(0,0,4,0);
     [glass addSubview:scroll];
-    UIStackView *s=[self stack];
-    [scroll addSubview:s];
+    UIStackView *stack=[self stack];
+    stack.spacing=small?7:10;
+    [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
-        [s.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
-        [s.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
-        [s.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
-        [s.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
-        [s.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
     ]];
-    if([self.page isEqualToString:@"apps"]) [self appPage:s];
-    else if([self.page isEqualToString:@"settings"]) [self settingsPage:s];
-    else if([self.page isEqualToString:@"diy"]) [self diyPage:s];
-    else [self perAppPage:s];
+    if([self.page isEqualToString:@"apps"]) [self appPage:stack];
+    else if([self.page isEqualToString:@"settings"]) [self settingsPage:stack];
+    else if([self.page isEqualToString:@"diy"]) [self diyPage:stack];
+    else if([self.page isEqualToString:@"manage"]) [self managePage:stack];
+    else [self perAppPage:stack];
     [self.window.rootViewController.view addSubview:shadow];
-    self.panel=shadow; shadow.alpha=0; shadow.transform=CGAffineTransformMakeScale(.94,.94);
-    [UIView animateWithDuration:.30 delay:0 usingSpringWithDamping:.83 initialSpringVelocity:0
+    self.panel=shadow;
+    shadow.alpha=0;
+    shadow.transform=CGAffineTransformMakeScale(.965,.96);
+    NSTimeInterval duration=UIAccessibilityIsReduceMotionEnabled()?.10:.29;
+    [UIView animateWithDuration:duration delay:0
+        usingSpringWithDamping:.88 initialSpringVelocity:0
         options:UIViewAnimationOptionCurveEaseOut animations:^{
-            shadow.alpha=1; shadow.transform=CGAffineTransformIdentity;
+            shadow.alpha=1;shadow.transform=CGAffineTransformIdentity;
         } completion:nil];
 }
 - (void)header:(UIStackView *)stack title:(NSString *)title sub:(NSString *)sub {
