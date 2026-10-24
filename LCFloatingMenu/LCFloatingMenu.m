@@ -348,13 +348,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     line.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:.85];
     line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
     [button addSubview:line];
-    CGFloat alpha=FloatPref([@"appAlpha." stringByAppendingString:GuestID()],
-                            FloatPref(@"idleAlpha",.72));
+    CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
+        FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
+        FloatPref(@"idleAlpha",.72);
     button.alpha=self.isOpen?1:Clamp(alpha,.16,1);
     button.accessibilityLabel=@"LC 悬浮菜单";
     button.accessibilityHint=@"轻触展开，拖动移动，长按显示快捷操作";
     button.accessibilityTraits=UIAccessibilityTraitButton;
-    if(BoolPref([@"doubleTap." stringByAppendingString:GuestID()],NO)) {
+    if(BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
+       BoolPref([@"doubleTap." stringByAppendingString:GuestID()],NO)) {
         UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggle)];
         tap.numberOfTapsRequired=2;[button addGestureRecognizer:tap];
     } else [button addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
@@ -640,12 +642,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self addRow:[self rowForTitle:@"菜单管理与排序" icon:@"line.3.horizontal.decrease" height:40 action:@selector(openManage)] height:40 to:s];
     UIStackView *toolbar=[UIStackView new];toolbar.axis=UILayoutConstraintAxisHorizontal;
     toolbar.distribution=UIStackViewDistributionFillEqually;toolbar.spacing=2;
-    NSArray *itemsToolbar=@[
-        @[@"arrow.clockwise",@"重启",NSStringFromSelector(@selector(restart))],
+    NSMutableArray *itemsToolbar=[NSMutableArray array];
+    if(BoolPref(@"showRestart",YES)) [itemsToolbar addObject:@[@"arrow.clockwise",@"重启",NSStringFromSelector(@selector(restart))]];
+    [itemsToolbar addObjectsFromArray:@[
         @[@"house.fill",@"返回",NSStringFromSelector(@selector(goHome))],
         @[@"gearshape.fill",@"设置",NSStringFromSelector(@selector(openSettings))],
         @[@"chevron.up",@"收起",NSStringFromSelector(@selector(toggle))]
-    ];
+    ]];
     for(NSArray *spec in itemsToolbar) {
         UIControl *b=[[UIControl alloc] initWithFrame:CGRectMake(0,0,65,59)];
         b.layer.cornerRadius=15;
@@ -683,6 +686,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     slider.value=FloatPref(key,def);slider.tag=tag;
     slider.tintColor=RGBA(.29,.52,1,1);
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    [slider addTarget:self action:@selector(sliderFinished:)
+        forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     [self addRow:slider height:28 to:s];
 }
 - (void)section:(NSString *)title sub:(NSString *)sub in:(UIStackView *)stack {
@@ -865,16 +870,37 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [s addArrangedSubview:note];
 }
 - (void)switchChanged:(UISwitch*)sw {
-    NSString *key= sw.tag==1?@"haptic":sw.tag==2?@"confirm":sw.tag==3?@"showRestart":sw.tag==5?@"roundOrb":AppPref();
+    NSString *key=nil;
+    switch(sw.tag) {
+        case 1:key=@"haptic";break;
+        case 2:key=@"confirm";break;
+        case 3:key=@"showRestart";break;
+        case 5:key=@"roundOrb";break;
+        case 6:key=@"autoFade";break;
+        case 7:key=[@"override." stringByAppendingString:GuestID()];break;
+        case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
+        case 4:key=AppPref();break;
+        default:return;
+    }
     SetPref(key,@(sw.isOn));
-    if(sw.tag==3 || sw.tag==5) [self draw];
+    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8) [self draw];
 }
 - (void)sliderChanged:(UISlider*)slider {
-    NSString *key=slider.tag==10?@"idleAlpha":slider.tag==11?@"orbWidth":slider.tag==13?@"glassTint":[@"appAlpha." stringByAppendingString:GuestID()];
+    NSString *key=slider.tag==10?@"idleAlpha":
+        slider.tag==11?@"orbWidth":
+        slider.tag==13?@"glassTint":
+        slider.tag==12?[@"appAlpha." stringByAppendingString:GuestID()]:nil;
+    if(!key) return;
     SetPref(key,@(slider.value));
-    if(slider.tag==10 || slider.tag==12) self.orb.alpha=slider.value;
-    else if(slider.tag==13) [self draw];
-    else { [self drawOrb]; if(self.isOpen) [self.window.rootViewController.view bringSubviewToFront:self.orb]; }
+    if(slider.tag==10 || slider.tag==12) {
+        CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
+            FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
+            FloatPref(@"idleAlpha",.72);
+        self.orb.alpha=alpha;
+    }
+}
+- (void)sliderFinished:(UISlider*)slider {
+    if(slider.tag==11||slider.tag==13) [self draw];
 }
 - (void)exportLogs {
     FMLog(@"diagnostics-export",@"user-requested");
@@ -917,9 +943,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 - (void)resetStyle {
-    SetPref(@"idleAlpha",@(.68));SetPref(@"orbWidth",@(27));
+    SetPref(@"idleAlpha",@(.72));SetPref(@"orbWidth",@(12));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
-    SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(.16));
+    SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(.08));
+    SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);
     [self draw];
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
@@ -983,7 +1010,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)confirmTitle:(NSString*)title action:(void(^)(void))action {
-    if(!BoolPref(AppPref(),BoolPref(@"confirm",YES))) {action();return;}
+    BOOL independent=BoolPref([@"override." stringByAppendingString:GuestID()],NO);
+    BOOL confirm=independent?BoolPref(AppPref(),BoolPref(@"confirm",YES)):BoolPref(@"confirm",YES);
+    if(!confirm) {action();return;}
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:title
         message:@"经典单任务切换会结束当前 App 的内存状态；请先保存进度。"
         preferredStyle:UIAlertControllerStyleAlert];
