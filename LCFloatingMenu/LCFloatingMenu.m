@@ -481,6 +481,16 @@ static UIColor *TintFor(NSString *s) {
         return;
     }
     NSUserDefaults *host=HostDefaults();
+    if([path isEqualToString:@"ui"]) {
+        SEL home=NSSelectorFromString(@"launchToGuestAppWithClassicMode:");
+        if(![utils respondsToSelector:home]) return;
+        [host setObject:@"ui" forKey:@"selected"];
+        [host removeObjectForKey:@"selectedContainer"];
+        [host setBool:NO forKey:@"LCOpenSideStore"];
+        BOOL ok=((BOOL(*)(id,SEL,NSUInteger))objc_msgSend)(utils,home,0);
+        if(!ok) [host removeObjectForKey:@"selected"];
+        return;
+    }
     // SideStore and pending deep links must not intercept a guest switch.
     [host setBool:NO forKey:@"LCOpenSideStore"];
     [host removeObjectForKey:@"launchAppUrlScheme"];
