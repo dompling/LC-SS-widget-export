@@ -531,12 +531,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (UIView *)appRow:(NSDictionary *)app {
     // Standard mode extends the drawer without changing its optical material.
     UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,60)];
-    row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:
-                         FMSystemDark()?.12:.19];
-    row.layer.cornerRadius=17;
-    row.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
-                           FMSystemDark()?.13:.53].CGColor;
-    row.layer.borderWidth=.45;
+    row.backgroundColor=UIColor.clearColor;
+    UIView *optics=[self glass:row.bounds radius:17 strong:NO];
+    optics.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    optics.userInteractionEnabled=NO;
+    [row addSubview:optics];
     UIView *icon=[self iconViewForApp:app size:46];
     icon.frame=CGRectMake(8,7,46,46);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
@@ -708,10 +707,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // Integrate the original edge bead as the drawer's outside pull handle.
     // Preserve its existing drag, tap and accessibility gestures.
     if(small && compact && self.orb) {
-        CGPoint grip=[shadow convertPoint:CGPointMake(self.left?0:pw,ph*.54)
-                                   toView:self.window.rootViewController.view];
-        self.orb.center=CGPointMake(self.left?MAX(6,grip.x-4):
-                                  MIN(bounds.size.width-6,grip.x+4),grip.y);
+        // Use the *scaled* visual perimeter rather than the untransformed
+        // shadow bounds to keep the pull-tab attached at every scale.
+        CGFloat edgeX=self.left?(centerX-visualW*.5):
+                                 (centerX+visualW*.5);
+        CGFloat handleX=self.left?edgeX-3:edgeX+3;
+        self.orb.center=CGPointMake(Clamp(handleX,6,bounds.size.width-6),
+                                     centerY+visualH*.04);
     }
     shadow.alpha=0;
     shadow.transform=CGAffineTransformMakeScale(actualScale*.965,actualScale*.96);
@@ -813,8 +815,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         BOOL compact=BoolPref(@"compactMode",NO);
         UIControl *tile=[[UIControl alloc] initWithFrame:
             CGRectMake(14+i*(cell+gap),compact?5:8,cell,compact?48:65)];
-        tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.18];
-        tile.layer.cornerRadius=14;
+        tile.backgroundColor=UIColor.clearColor;
+        UIView *optics=[self glass:tile.bounds radius:14 strong:NO];
+        optics.userInteractionEnabled=NO;
+        [tile addSubview:optics];
         CGFloat iconSize=compact?40:36;
         UIView *icon=[self iconViewForApp:app size:iconSize];
         icon.frame=CGRectMake((cell-iconSize)*.5,compact?4:4,iconSize,iconSize);
@@ -997,6 +1001,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self section:@"单任务切换" sub:nil in:s];
         [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         [self settingSwitch:s title:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
+        [self settingSwitch:s title:@"精简抽屉显示重启按钮" key:@"compactRestart" defaultValue:NO tag:17];
     } else if([category isEqualToString:@"apps"]) {
         [self perAppPage:s];
         [self spacer:s size:20];
@@ -1308,11 +1313,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 9:key=@"preferDarkIcons";break;
         case 15:key=[@"stealth." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
+        case 17:key=@"compactRestart";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
     if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==9||sw.tag==15) [self draw];
+    if(sw.tag==17) FMLog(@"compact-toolbar",sw.on?@"four-actions":@"three-actions");
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
 - (void)sliderChanged:(UISlider*)slider {
@@ -1385,6 +1392,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(.08));
     SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);SetPref(@"preferDarkIcons",@NO);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
+    SetPref(@"compactRestart",@NO);
     [self draw];
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
