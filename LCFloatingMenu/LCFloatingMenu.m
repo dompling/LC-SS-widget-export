@@ -685,37 +685,182 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
     [self addRow:slider height:28 to:s];
 }
+- (void)section:(NSString *)title sub:(NSString *)sub in:(UIStackView *)stack {
+    UILabel *heading=[self label:title size:14 weight:UIFontWeightSemibold];
+    [stack addArrangedSubview:heading];
+    if(sub.length) {
+        UILabel *description=[self label:sub size:11 weight:UIFontWeightRegular];
+        description.textColor=UIColor.secondaryLabelColor;
+        [stack addArrangedSubview:description];
+    }
+}
 - (void)settingsPage:(UIStackView*)s {
-    [self addRow:[self rowForTitle:@"返回切换菜单" icon:@"chevron.left" height:40 action:@selector(backToApps)] height:40 to:s];
-    [self header:s title:@"悬浮菜单设置" sub:@"实时预览 · 不影响 LC+SS 主程序"];
-    [self settingSwitch:s title:@"轻触震动反馈" key:@"haptic" defaultValue:YES tag:1];
-    [self settingSwitch:s title:@"切换应用前确认" key:@"confirm" defaultValue:YES tag:2];
-    [self settingSlider:s title:@"收起态透明度" key:@"idleAlpha" min:.25 max:1 def:.68 tag:10];
-    [self settingSlider:s title:@"收起态尺寸" key:@"orbWidth" min:20 max:50 def:27 tag:11];
-    [self addRow:[self rowForTitle:@"DIY 外观与菜单" icon:@"paintbrush.pointed.fill" height:48 action:@selector(openDIY)] height:48 to:s];
-    [self addRow:[self rowForTitle:@"当前 App 独立设置" icon:@"square.on.square" height:48 action:@selector(openPerApp)] height:48 to:s];
-    [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:48 action:@selector(exportLogs)] height:48 to:s];
-    [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:48 action:@selector(clearLogs)] height:48 to:s];
+    [self addRow:[self rowForTitle:@"‹ 返回菜单" icon:@"chevron.left" height:40 action:@selector(backToApps)] height:40 to:s];
+    [self header:s title:@"设置中心" sub:@"LCFloatingMenu · Liquid Glass"];
+    UIView *preview=[self glass:CGRectMake(0,0,300,91) radius:20 strong:NO];
+    UIImageView *symbol=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"circle.grid.2x2.fill"]];
+    symbol.tintColor=FMAccent();symbol.frame=CGRectMake(18,23,35,35);
+    [preview addSubview:symbol];
+    UILabel *caption=[self label:@"实时预览" size:15 weight:UIFontWeightSemibold];
+    caption.frame=CGRectMake(68,14,178,30);[preview addSubview:caption];
+    UILabel *hint=[self label:@"边缘微珠 · 弹性玻璃菜单" size:11 weight:UIFontWeightRegular];
+    hint.textColor=UIColor.secondaryLabelColor;hint.frame=CGRectMake(68,46,220,20);
+    [preview addSubview:hint];
+    [self addRow:preview height:91 to:s];
+    [self spacer:s size:8];
+    [self section:@"基础交互" sub:@"日常控制与防误触" in:s];
+    [self settingSwitch:s title:@"静止后自动淡化" key:@"autoFade" defaultValue:YES tag:6];
+    [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
+    [self spacer:s size:4];
+    [self section:@"外观与布局" sub:nil in:s];
+    [self addRow:[self rowForTitle:@"DIY 视觉工坊" icon:@"paintpalette.fill" height:46 action:@selector(openDIY)] height:46 to:s];
+    [self addRow:[self rowForTitle:@"菜单管理与排序" icon:@"line.3.horizontal.decrease" height:46 action:@selector(openManage)] height:46 to:s];
+    [self addRow:[self rowForTitle:@"每 App 独立设置" icon:@"square.on.square" height:46 action:@selector(openPerApp)] height:46 to:s];
+    [self spacer:s size:4];
+    [self section:@"安全单任务切换" sub:@"切换时会重启目标 App，不保留内存状态" in:s];
+    [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
+    [self spacer:s size:5];
+    [self section:@"诊断与支持" sub:nil in:s];
+    [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:44 action:@selector(exportLogs)] height:44 to:s];
+    [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:44 action:@selector(clearLogs)] height:44 to:s];
+}
+- (void)themeTapped:(UIControl *)sender {
+    NSInteger theme=sender.tag-30;
+    if(theme<0||theme>3) return;
+    SetPref(@"theme",@(theme));
+    FMLog(@"theme-updated",[NSString stringWithFormat:@"preset=%ld",(long)theme]);
+    [self draw];
 }
 - (void)diyPage:(UIStackView*)s {
-    [self addRow:[self rowForTitle:@"返回设置" icon:@"chevron.left" height:40 action:@selector(backToSettings)] height:40 to:s];
-    [self header:s title:@"DIY 编辑" sub:@"液态玻璃 · 自定义触感与可见项"];
-    UILabel *intro=[self label:@"收起态：贴边玻璃胶囊\n展开态：可滚动磨砂应用面板" size:13 weight:UIFontWeightRegular];
-    intro.textColor=UIColor.secondaryLabelColor;[s addArrangedSubview:intro];
-    [self settingSlider:s title:@"透明度" key:@"idleAlpha" min:.25 max:1 def:.68 tag:10];
-    [self settingSlider:s title:@"胶囊大小" key:@"orbWidth" min:20 max:50 def:27 tag:11];
-    [self settingSwitch:s title:@"显示重新启动" key:@"showRestart" defaultValue:YES tag:3];
-    [self settingSwitch:s title:@"圆形玻璃按钮" key:@"roundOrb" defaultValue:NO tag:5];
-    [self settingSlider:s title:@"玻璃着色强度" key:@"glassTint" min:.03 max:.36 def:.16 tag:13];
-    [self settingSwitch:s title:@"轻触震动" key:@"haptic" defaultValue:YES tag:1];
-    [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:44 action:@selector(resetStyle)] height:44 to:s];
+    [self addRow:[self rowForTitle:@"‹ 返回设置" icon:@"chevron.left" height:39 action:@selector(backToSettings)] height:39 to:s];
+    [self header:s title:@"DIY 视觉工坊" sub:@"所见即所得 · 个性化悬浮玻璃"];
+    UIView *preview=[[UIView alloc] initWithFrame:CGRectMake(0,0,300,120)];
+    preview.layer.cornerRadius=20;preview.clipsToBounds=YES;
+    CAGradientLayer *gradient=[CAGradientLayer layer];gradient.frame=preview.bounds;
+    gradient.colors=@[(__bridge id)RGBA(.23,.43,.88,1).CGColor,
+                      (__bridge id)RGBA(.79,.29,.78,1).CGColor,
+                      (__bridge id)RGBA(.13,.67,.81,1).CGColor];
+    gradient.startPoint=CGPointMake(0,0);
+    gradient.endPoint=CGPointMake(1,1);
+    [preview.layer addSublayer:gradient];
+    UIView *panel=[self glass:CGRectMake(61,30,177,62) radius:19 strong:NO];
+    UIImageView *ico=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"square.grid.2x2.fill"]];
+    ico.tintColor=FMAccent();ico.frame=CGRectMake(12,18,26,26);
+    [panel addSubview:ico];
+    UILabel *title=[self label:@"Liquid Glass" size:15 weight:UIFontWeightSemibold];
+    title.frame=CGRectMake(49,13,120,34);
+    [panel addSubview:title];
+    [preview addSubview:panel];
+    [self addRow:preview height:120 to:s];
+    [self spacer:s size:4];
+    [self section:@"预设主题" sub:@"点击切换；面板、图标及高光同步改变" in:s];
+    NSArray *names=@[@"默认液态",@"极简无界",@"深空晶体",@"极光彩色"];
+    NSArray *colors=@[RGBA(.55,.77,.96,1),RGBA(.86,.87,.90,1),RGBA(.13,.18,.30,1),RGBA(.65,.31,.79,1)];
+    UIStackView *themes=[UIStackView new];themes.axis=UILayoutConstraintAxisHorizontal;
+    themes.distribution=UIStackViewDistributionFillEqually;themes.spacing=5;
+    NSInteger selected=[HostDefaults() integerForKey:Pref(@"theme")];
+    for(NSInteger i=0;i<4;i++) {
+        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,68,77)];
+        tile.layer.cornerRadius=15;tile.tag=30+i;
+        tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.28];
+        tile.layer.borderWidth=selected==i?1.5:.4;
+        tile.layer.borderColor=selected==i?FMAccent().CGColor:
+            [UIColor.whiteColor colorWithAlphaComponent:.26].CGColor;
+        UIView *swatch=[[UIView alloc] initWithFrame:CGRectMake(18,8,33,33)];
+        swatch.layer.cornerRadius=12;swatch.backgroundColor=colors[i];
+        swatch.layer.borderWidth=.6;
+        swatch.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.65].CGColor;
+        [tile addSubview:swatch];
+        UILabel *name=[self label:names[i] size:9 weight:UIFontWeightMedium];
+        name.textAlignment=NSTextAlignmentCenter;name.frame=CGRectMake(0,49,68,16);
+        [tile addSubview:name];
+        [tile addTarget:self action:@selector(themeTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [themes addArrangedSubview:tile];
+    }
+    [self addRow:themes height:77 to:s];
+    [self spacer:s size:5];
+    [self section:@"材质微调" sub:@"调节微珠与面板的独立视觉参数" in:s];
+    [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
+    [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
+    [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
+    [self settingSlider:s title:@"玻璃着色" key:@"glassTint" min:0 max:.30 def:.08 tag:13];
+    [self settingSwitch:s title:@"显示重启入口" key:@"showRestart" defaultValue:YES tag:3];
+    [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:40 action:@selector(resetStyle)] height:40 to:s];
+}
+- (void)pinApp:(UIControl *)button {
+    NSDictionary *app=objc_getAssociatedObject(button,@selector(pinApp:));
+    NSString *path=app[@"path"];
+    if(!path.length) return;
+    NSMutableArray *pins=[[self favorites] mutableCopy];
+    if([pins containsObject:path]) [pins removeObject:path];
+    else {
+        if(pins.count>=4) {
+            [self showMessage:@"常用应用已满" details:@"最多固定 4 个应用，请先取消一个固定项。"];
+            return;
+        }
+        [pins addObject:path];
+    }
+    SetPref(@"favoritePaths",pins);
+    [self draw];
+}
+- (void)promoteApp:(UIControl *)button {
+    NSDictionary *app=objc_getAssociatedObject(button,@selector(promoteApp:));
+    NSArray *items=[self visibleApps];
+    NSMutableArray *order=[NSMutableArray array];
+    for(NSDictionary *item in items) [order addObject:item[@"path"]];
+    NSUInteger index=[order indexOfObject:app[@"path"]];
+    if(index!=NSNotFound && index>0) {
+        [order exchangeObjectAtIndex:index withObjectAtIndex:index-1];
+        SetPref(@"menuOrder",order);
+    }
+    [self draw];
+}
+- (void)managePage:(UIStackView*)s {
+    [self addRow:[self rowForTitle:@"‹ 返回菜单" icon:@"chevron.left" height:39 action:@selector(backToApps)] height:39 to:s];
+    [self header:s title:@"菜单管理与排序" sub:@"固定 4 个常用应用 · 点击箭头上移"];
+    [self section:@"应用列表" sub:@"星标固定常用区，右侧上箭头调整菜单顺序" in:s];
+    for(NSDictionary *app in [self visibleApps]) {
+        UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,300,58)];
+        row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.25];
+        row.layer.cornerRadius=17;
+        UIView *icon=[self iconViewForApp:app size:37];
+        icon.frame=CGRectMake(8,10,37,37);icon.userInteractionEnabled=NO;
+        [row addSubview:icon];
+        UILabel *name=[self label:app[@"title"] size:13 weight:UIFontWeightSemibold];
+        name.frame=CGRectMake(53,7,146,42);name.lineBreakMode=NSLineBreakByTruncatingTail;
+        [row addSubview:name];
+        UIButton *pin=[UIButton buttonWithType:UIButtonTypeSystem];
+        [pin setImage:[UIImage systemImageNamed:
+            [[self favorites] containsObject:app[@"path"]]?@"star.fill":@"star"]
+                 forState:UIControlStateNormal];
+        pin.tintColor=FMAccent();
+        pin.frame=CGRectMake(209,8,35,42);
+        objc_setAssociatedObject(pin,@selector(pinApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [pin addTarget:self action:@selector(pinApp:) forControlEvents:UIControlEventTouchUpInside];
+        [row addSubview:pin];
+        UIButton *up=[UIButton buttonWithType:UIButtonTypeSystem];
+        [up setImage:[UIImage systemImageNamed:@"arrow.up.circle"] forState:UIControlStateNormal];
+        up.tintColor=UIColor.secondaryLabelColor;
+        up.frame=CGRectMake(252,8,32,42);
+        objc_setAssociatedObject(up,@selector(promoteApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [up addTarget:self action:@selector(promoteApp:) forControlEvents:UIControlEventTouchUpInside];
+        [row addSubview:up];
+        [self addRow:row height:58 to:s];
+    }
 }
 - (void)perAppPage:(UIStackView*)s {
-    [self addRow:[self rowForTitle:@"返回设置" icon:@"chevron.left" height:40 action:@selector(backToSettings)] height:40 to:s];
-    [self header:s title:@"当前 App" sub:GuestID()];
+    [self addRow:[self rowForTitle:@"‹ 返回设置" icon:@"chevron.left" height:39 action:@selector(backToSettings)] height:39 to:s];
+    [self header:s title:@"每 App 独立设置" sub:GuestID()];
+    [self section:@"专属覆盖" sub:@"仅影响当前 Guest；关闭后沿用全局选项" in:s];
+    [self settingSwitch:s title:@"启用独立设置" key:[@"override." stringByAppendingString:GuestID()] defaultValue:NO tag:7];
+    [self spacer:s size:4];
+    [self section:@"外观与位置" sub:nil in:s];
+    [self settingSlider:s title:@"当前 App 微珠透明度" key:[@"appAlpha." stringByAppendingString:GuestID()] min:.20 max:1 def:FloatPref(@"idleAlpha",.72) tag:12];
+    [self settingSwitch:s title:@"双击展开（游戏防误触）" key:[@"doubleTap." stringByAppendingString:GuestID()] defaultValue:NO tag:8];
+    [self spacer:s size:4];
+    [self section:@"单任务切换行为" sub:nil in:s];
     [self settingSwitch:s title:@"当前 App 切换前确认" key:AppPref() defaultValue:BoolPref(@"confirm",YES) tag:4];
-    [self settingSlider:s title:@"当前 App 收起态透明度" key:[@"appAlpha." stringByAppendingString:GuestID()] min:.25 max:1 def:FloatPref(@"idleAlpha",.68) tag:12];
-    UILabel *note=[self label:@"仅覆盖当前 App 的行为；不影响其他 Guest。所有配置保存在 LC 宿主偏好设置中。" size:12 weight:UIFontWeightRegular];
+    UILabel *note=[self label:@"修改后即时应用；个别触控敏感 App 可以开启双击以降低误触。关闭独立设置后继承全局配置。" size:11 weight:UIFontWeightRegular];
     note.textColor=UIColor.secondaryLabelColor;
     [s addArrangedSubview:note];
 }
