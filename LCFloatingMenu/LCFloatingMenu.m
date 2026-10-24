@@ -462,6 +462,8 @@ static UIColor *TintFor(NSString *s) {
     [self settingSlider:s title:@"收起态尺寸" key:@"orbWidth" min:20 max:50 def:27 tag:11];
     [self addRow:[self rowForTitle:@"DIY 外观与菜单" icon:@"paintbrush.pointed.fill" height:48 action:@selector(openDIY)] height:48 to:s];
     [self addRow:[self rowForTitle:@"当前 App 独立设置" icon:@"square.on.square" height:48 action:@selector(openPerApp)] height:48 to:s];
+    [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:48 action:@selector(exportLogs)] height:48 to:s];
+    [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:48 action:@selector(clearLogs)] height:48 to:s];
 }
 - (void)diyPage:(UIStackView*)s {
     [self addRow:[self rowForTitle:@"返回设置" icon:@"chevron.left" height:40 action:@selector(backToSettings)] height:40 to:s];
