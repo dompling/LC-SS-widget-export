@@ -1,0 +1,51 @@
+name: Build LCFloatingMenu dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [lcss-original]
+    paths:
+      - 'LCFloatingMenu/**'
+      - '.github/workflows/lc-floating-menu.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile iOS arm64 dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          mkdir -p dist
+          xcrun clang -arch arm64 -isysroot "$SDK" \
+            -miphoneos-version-min=16.0 -fobjc-arc -O2 \
+            -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore \
+            -install_name "@rpath/LCFloatingMenu.dylib" \
+            LCFloatingMenu/LCFloatingMenu.m -o dist/LCFloatingMenu.dylib
+          file dist/LCFloatingMenu.dylib
+          xcrun lipo -info dist/LCFloatingMenu.dylib
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: LCFloatingMenu-dylib
+          path: dist/LCFloatingMenu.dylib
+          if-no-files-found: error
+      - name: Release standalone dylib without replacing LC+SS latest
+        if: github.ref == 'refs/heads/lcss-original'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="lc-floating-menu-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" dist/LCFloatingMenu.dylib \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "LCFloatingMenu ${GITHUB_RUN_NUMBER} - Liquid Glass" \
+            --notes "Standalone iOS arm64 dylib. Import and sign in LC Tweaks. Independent prerelease; does not replace the combined IPA." \
+            --prerelease
