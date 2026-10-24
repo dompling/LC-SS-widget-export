@@ -144,7 +144,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     static NSCache *cache;
     static dispatch_once_t once;
     dispatch_once(&once,^{ cache=[NSCache new];cache.countLimit=90; });
-    id saved=[cache objectForKey:folder];
+    NSString *cacheKey=[folder stringByAppendingFormat:@"|%d",BoolPref(@"preferDarkIcons",NO)];
+    id saved=[cache objectForKey:cacheKey];
     if(saved) return saved==NSNull.null?nil:saved;
     NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[folder stringByAppendingPathComponent:@"Info.plist"]];
     if(![info isKindOfClass:NSDictionary.class]) return nil;
@@ -189,7 +190,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
         if(result) break;
     }
-    [cache setObject:result?:NSNull.null forKey:folder];
+    if(result) [cache setObject:result forKey:cacheKey];
     return result;
 }
 
@@ -314,20 +315,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     v.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.48].CGColor;
     return v;
 }
-- (UIButton *)symbolButton:(NSString *)symbol title:(NSString *)title {
-    UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];
-    UIImage *image=[UIImage systemImageNamed:symbol];
-    [b setImage:image forState:UIControlStateNormal];
-    [b setTitle:title forState:UIControlStateNormal];
-    b.tintColor=UIColor.labelColor;
-    b.titleLabel.font=[UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-    b.semanticContentAttribute=UISemanticContentAttributeForceLeftToRight;
-    b.contentHorizontalAlignment=UIControlContentHorizontalAlignmentLeft;
-    b.imageEdgeInsets=UIEdgeInsetsMake(0,12,0,12);
-    b.layer.cornerRadius=16;
-    b.backgroundColor=RGBA(1,1,1,.24);
-    return b;
-}
 - (void)removePanel {
     [self.panel removeFromSuperview]; self.panel=nil;
     [self.dismissLayer removeFromSuperview]; self.dismissLayer=nil;
@@ -373,8 +360,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                        dispatch_get_main_queue(),^{
             if(self.orb==button && !self.isOpen && !UIAccessibilityIsReduceMotionEnabled()) {
                 [UIView animateWithDuration:.42 animations:^{
-                    bead.transform=CGAffineTransformMakeScale(.32,.88);
-                    line.alpha=.4;
+                    BOOL stealth=BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
+                                 BoolPref([@"stealth." stringByAppendingString:GuestID()],NO);
+                    bead.transform=CGAffineTransformMakeScale(stealth?.18:.32,.88);
+                    line.alpha=stealth?.12:.4;
                 }];
             }
         });
@@ -506,7 +495,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat available=bounds.size.height-safeTop-safeBottom;
     BOOL small=[self.page isEqualToString:@"apps"];
     CGFloat pw=MIN(small?304:346,bounds.size.width-28);
-    CGFloat target=small?MIN(550,228+72*MIN(self.apps.count,5)):610;
+    CGFloat target=small?MIN(440,236+65*MIN(self.apps.count,5)):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available,target);
@@ -791,6 +780,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
     [self settingSlider:s title:@"玻璃着色" key:@"glassTint" min:0 max:.30 def:.08 tag:13];
     [self settingSwitch:s title:@"显示重启入口" key:@"showRestart" defaultValue:YES tag:3];
+    [self settingSwitch:s title:@"优先深色应用图标" key:@"preferDarkIcons" defaultValue:NO tag:9];
     [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:40 action:@selector(resetStyle)] height:40 to:s];
 }
 - (void)pinApp:(UIControl *)button {
@@ -915,6 +905,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self section:@"外观与位置" sub:nil in:s];
     [self settingSlider:s title:@"当前 App 微珠透明度" key:[@"appAlpha." stringByAppendingString:GuestID()] min:.20 max:1 def:FloatPref(@"idleAlpha",.72) tag:12];
     [self settingSwitch:s title:@"双击展开（游戏防误触）" key:[@"doubleTap." stringByAppendingString:GuestID()] defaultValue:NO tag:8];
+    [self settingSwitch:s title:@"极细边缘提示（保留触摸区）" key:[@"stealth." stringByAppendingString:GuestID()] defaultValue:NO tag:15];
     [self spacer:s size:4];
     [self section:@"单任务切换行为" sub:nil in:s];
     [self settingSwitch:s title:@"当前 App 切换前确认" key:AppPref() defaultValue:BoolPref(@"confirm",YES) tag:4];
@@ -932,11 +923,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 6:key=@"autoFade";break;
         case 7:key=[@"override." stringByAppendingString:GuestID()];break;
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
+        case 9:key=@"preferDarkIcons";break;
+        case 15:key=[@"stealth." stringByAppendingString:GuestID()];break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
-    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8) [self draw];
+    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==9||sw.tag==15) [self draw];
 }
 - (void)sliderChanged:(UISlider*)slider {
     NSString *key=slider.tag==10?@"idleAlpha":
@@ -999,7 +992,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbWidth",@(12));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(.08));
-    SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);
+    SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);SetPref(@"preferDarkIcons",@NO);
     [self draw];
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
@@ -1103,7 +1096,7 @@ __attribute__((constructor)) static void LCFloatingMenuEntry(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         FMLog(@"dylib-loaded",@"constructor");
         NSNotificationCenter *nc=NSNotificationCenter.defaultCenter;
-        for(NSString *name in @[UIApplicationDidBecomeActiveNotification,UIWindowDidBecomeVisibleNotification,UIApplicationDidChangeStatusBarOrientationNotification]) {
+        for(NSString *name in @[UIApplicationDidBecomeActiveNotification,UIWindowDidBecomeVisibleNotification,@"UIApplicationDidChangeStatusBarOrientationNotification"]) {
             [nc addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
                 [[FMManager shared] installIfPossible];
             }];
