@@ -213,6 +213,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) UIButton *orb;
 @property(nonatomic,strong) UIView *panel;
 @property(nonatomic,strong) UIView *dismissLayer;
+@property(nonatomic,strong) NSMutableArray<UIView*> *manageRows;
 @property(nonatomic,assign) CGFloat orbY;
 @property(nonatomic,assign) BOOL left;
 @property(nonatomic,assign) BOOL isOpen;
@@ -820,10 +821,57 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     [self draw];
 }
+- (void)sortDrag:(UILongPressGestureRecognizer *)gesture {
+    if(!self.panel || !self.manageRows.count) return;
+    UIView *handle=gesture.view;
+    NSDictionary *app=objc_getAssociatedObject(handle,@selector(sortDrag:));
+    if(!app) return;
+    CGPoint finger=[gesture locationInView:self.panel];
+    static const CGFloat kMaxMotion=240;
+    if(gesture.state==UIGestureRecognizerStateBegan) {
+        objc_setAssociatedObject(gesture,@selector(sortDrag:),@(finger.y),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if(BoolPref(@"haptic",YES))
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+        handle.superview.layer.zPosition=10;
+        handle.superview.alpha=.82;
+    } else if(gesture.state==UIGestureRecognizerStateChanged) {
+        CGFloat initial=[objc_getAssociatedObject(gesture,@selector(sortDrag:)) doubleValue];
+        handle.superview.transform=CGAffineTransformMakeTranslation(0,Clamp(finger.y-initial,-kMaxMotion,kMaxMotion));
+    } else if(gesture.state==UIGestureRecognizerStateEnded) {
+        NSArray *items=[self visibleApps];
+        NSUInteger from=[items indexOfObject:app];
+        NSUInteger to=NSNotFound;
+        CGFloat closest=CGFLOAT_MAX;
+        for(NSUInteger i=0;i<self.manageRows.count;i++) {
+            UIView *row=self.manageRows[i];
+            CGRect rect=[row convertRect:row.bounds toView:self.panel];
+            CGFloat distance=fabs(CGRectGetMidY(rect)-finger.y);
+            if(distance<closest){closest=distance;to=i;}
+        }
+        if(from!=NSNotFound && to!=NSNotFound && to<items.count && from!=to) {
+            NSMutableArray *paths=[NSMutableArray arrayWithCapacity:items.count];
+            for(NSDictionary *item in items) [paths addObject:item[@"path"]];
+            NSString *picked=paths[from];
+            [paths removeObjectAtIndex:from];
+            [paths insertObject:picked atIndex:MIN(to,paths.count)];
+            SetPref(@"menuOrder",paths);
+            FMLog(@"menu-reordered",@"user drag");
+        }
+        handle.superview.transform=CGAffineTransformIdentity;
+        handle.superview.alpha=1;
+        handle.superview.layer.zPosition=0;
+        [self draw];
+    } else if(gesture.state==UIGestureRecognizerStateCancelled || gesture.state==UIGestureRecognizerStateFailed) {
+        handle.superview.transform=CGAffineTransformIdentity;
+        handle.superview.alpha=1;
+        handle.superview.layer.zPosition=0;
+    }
+}
 - (void)managePage:(UIStackView*)s {
     [self addRow:[self rowForTitle:@"‹ 返回菜单" icon:@"chevron.left" height:39 action:@selector(backToApps)] height:39 to:s];
-    [self header:s title:@"菜单管理与排序" sub:@"固定 4 个常用应用 · 点击箭头上移"];
-    [self section:@"应用列表" sub:@"星标固定常用区，右侧上箭头调整菜单顺序" in:s];
+    [self header:s title:@"菜单管理与排序" sub:@"固定至多 4 个常用应用 · 长按右侧手柄拖动"];
+    [self section:@"应用列表" sub:@"星标固定常用区；拖动右侧手柄重新排序" in:s];
+    self.manageRows=[NSMutableArray array];
     for(NSDictionary *app in [self visibleApps]) {
         UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,300,58)];
         row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.25];
@@ -843,13 +891,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         objc_setAssociatedObject(pin,@selector(pinApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [pin addTarget:self action:@selector(pinApp:) forControlEvents:UIControlEventTouchUpInside];
         [row addSubview:pin];
-        UIButton *up=[UIButton buttonWithType:UIButtonTypeSystem];
-        [up setImage:[UIImage systemImageNamed:@"arrow.up.circle"] forState:UIControlStateNormal];
-        up.tintColor=UIColor.secondaryLabelColor;
-        up.frame=CGRectMake(252,8,32,42);
-        objc_setAssociatedObject(up,@selector(promoteApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [up addTarget:self action:@selector(promoteApp:) forControlEvents:UIControlEventTouchUpInside];
-        [row addSubview:up];
+        UIView *handle=[[UIView alloc] initWithFrame:CGRectMake(245,5,44,48)];
+        UIImageView *lines=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal"]];
+        lines.tintColor=UIColor.secondaryLabelColor;
+        lines.frame=CGRectMake(13,16,19,17);
+        [handle addSubview:lines];
+        UILongPressGestureRecognizer *drag=[[UILongPressGestureRecognizer alloc]
+            initWithTarget:self action:@selector(sortDrag:)];
+        drag.minimumPressDuration=.35;
+        [handle addGestureRecognizer:drag];
+        objc_setAssociatedObject(handle,@selector(sortDrag:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [row addSubview:handle];
+        [self.manageRows addObject:row];
         [self addRow:row height:58 to:s];
     }
 }
