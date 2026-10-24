@@ -51,3 +51,11 @@ Standalone iOS 16+ arm64 tweak for classic, single-task fullscreen Guest Apps on
 - The built-in SideStore appears alongside ordinary LC Guest Apps when the LC+SS host contains a valid SideStoreApp.framework. The entry uses the LC internal SideStore launch flag, not a synthetic Guest bundle ID or external URL.
 - SideStore switches close the current Guest and restart LC in classic single-task mode. If the built-in framework or LC launcher cannot be found, the entry fails closed with a diagnostic event.
 - Action icons remain accessible through VoiceOver accessibility labels even though their visible text labels were removed.
+
+## Native iOS 26 glass and settings refresh (2026-10-25)
+
+- On iOS 26+, **every glass surface** is built from the public `UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular` and displayed in a `UIVisualEffectView`. The previous opaque color wash, custom gradient and manually stroked glowing rim have been removed from the native path. iOS 16-25 keeps a system `UIBlurEffect` accessibility/compatibility fallback only.
+- The compact drawer is now **76pt wide before panel scaling** (instead of 108pt), with a single 50pt real App icon per row and matching action icon alignment. Hit areas remain 63pt high before scaling.
+- Settings opens a **separate key UIWindow**. Appearance and Interaction controls now appear **inline on the first settings page**; App Management and Diagnostics remain push-navigation subpages.
+- Favorites/Sorting now uses a native grouped system-color list with Auto Layout, proper dynamic label truncation, a star button and a drag handle; drop indices ignore the dragged row's own temporary transform.
+- Keep LC+SS classic single-task launch logic and built-in SideStore one-shot launch safeguard. Real-device verification is still required even when arm64 compilation succeeds.
