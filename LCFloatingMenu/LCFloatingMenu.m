@@ -569,8 +569,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat available=bounds.size.height-safeTop-safeBottom;
     BOOL small=[self.page isEqualToString:@"apps"];
     BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat pw=MIN(small?(compact?116:304):346,bounds.size.width-28);
-    CGFloat target=small?(compact?MIN(455,136+69*MIN(5,self.apps.count)):
+    // 146 pt keeps one vertical icon column while 75% scale preserves
+    // at least 44pt hit targets in the compact 2x2 footer.
+    CGFloat pw=MIN(small?(compact?146:304):346,bounds.size.width-28);
+    CGFloat target=small?(compact?MAX(232,MIN(480,172+70*MIN(5,[self visibleApps].count))):
         MIN(405,199+65*MIN(self.apps.count,5))):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
@@ -607,7 +609,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         if(!compact) [self buildAppHeader:glass];
-        CGFloat top=compact?12:80, bottom=compact?116:76;
+        CGFloat top=compact?12:80, bottom=compact?145:76;
         scroll.frame=CGRectMake(14,top,pw-28,MAX(20,ph-top-bottom));
         [self buildAppFooter:glass];
     }
@@ -749,7 +751,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)buildAppFooter:(UIView *)glass {
     CGFloat w=glass.bounds.size.width;
     BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat fh=compact?102:59;
+    CGFloat fh=compact?128:59;
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(9,glass.bounds.size.height-fh-8,w-18,fh)];
     footer.layer.cornerRadius=20;
     footer.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.22];
@@ -765,7 +767,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat cell=footer.bounds.size.width/(compact?2:items.count);
     for(NSUInteger i=0;i<items.count;i++) {
         NSArray *spec=items[i];
-        CGRect frame=compact?CGRectMake((i%2)*cell,(i/2)*51,cell,51):
+        CGRect frame=compact?CGRectMake((i%2)*cell,(i/2)*64,cell,64):
                              CGRectMake(i*cell,0,cell,59);
         UIControl *button=[[UIControl alloc] initWithFrame:frame];
         button.accessibilityLabel=spec[2];
@@ -773,7 +775,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium]];
         UIImageView *iv=[[UIImageView alloc] initWithImage:image];
         iv.contentMode=UIViewContentModeScaleAspectFit;iv.tintColor=FMAccent();
-        iv.frame=CGRectMake((cell-25)*.5,compact?12:16,25,25);[button addSubview:iv];
+        iv.frame=CGRectMake((cell-25)*.5,compact?19:16,25,25);[button addSubview:iv];
         [button addTarget:self action:NSSelectorFromString(spec[1]) forControlEvents:UIControlEventTouchUpInside];
         [footer addSubview:button];
     }
@@ -1450,7 +1452,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!self.isViewLoaded || !self.contentScroll) return;
     UIScrollView *scroll=self.contentScroll;
     CGFloat offset=scroll.contentOffset.y;
-    for(UIView *child in [scroll.subviews copy]) [child removeFromSuperview];
+    for(UIView *child in [scroll.subviews copy])
+        if([child isKindOfClass:UIStackView.class]) [child removeFromSuperview];
     UIStackView *stack=[UIStackView new];
     stack.axis=UILayoutConstraintAxisVertical;
     stack.alignment=UIStackViewAlignmentFill;
