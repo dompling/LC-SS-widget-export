@@ -349,45 +349,49 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat bottom=MAX(24,self.window.safeAreaInsets.bottom+8);
     return CGRectMake(x,Clamp(b.size.height*self.orbY-h*.5,top,b.size.height-h-bottom),w,h);
 }
+// Native iOS 26 Liquid Glass. Keep all other blur/gloss simulation strictly
+// in the iOS < 26 fallback; decorative scrims must never cover UIGlassEffect.
 - (UIView *)glass:(CGRect)frame radius:(CGFloat)radius strong:(BOOL)strong {
-    UIView *v=[[UIView alloc] initWithFrame:frame];
-    v.layer.cornerRadius=radius;v.clipsToBounds=YES;
+    UIView *surface=[[UIView alloc] initWithFrame:frame];
+    surface.backgroundColor=UIColor.clearColor;
+    surface.layer.cornerRadius=radius;
+    surface.clipsToBounds=YES;
     UIVisualEffect *effect=nil;
-    // Public UIKit glass API exists from iOS 26; resolve at runtime so the
-    // same signed tweak safely runs on older iOS with regular blur.
+    BOOL nativeGlass=NO;
     if(@available(iOS 26.0,*)) {
-        Class cls=NSClassFromString(@"UIGlassEffect");
-        if(cls && [cls isSubclassOfClass:UIVisualEffect.class]) {
-            effect=[[cls alloc] init];
-        }
+        // Use the SDK-native UIKit API instead of a dynamically allocated
+        // effect with simulated gradient layers obscuring its output.
+        UIGlassEffect *glassEffect=[[UIGlassEffect alloc] init];
+        glassEffect.interactive=!strong;
+        CGFloat tint=Clamp(FloatPref(@"glassTint",.08),0,.30);
+        glassEffect.tintColor=[FMAccent() colorWithAlphaComponent:tint];
+        effect=glassEffect;
+        nativeGlass=YES;
     }
     if(!effect) {
         BOOL dark=FMSystemDark();
-        UIBlurEffectStyle style=strong?(dark?UIBlurEffectStyleSystemMaterialDark:UIBlurEffectStyleSystemMaterialLight)
-                                        :(dark?UIBlurEffectStyleSystemThinMaterialDark:UIBlurEffectStyleSystemThinMaterialLight);
+        UIBlurEffectStyle style=strong?
+            (dark?UIBlurEffectStyleSystemMaterialDark:UIBlurEffectStyleSystemMaterialLight):
+            (dark?UIBlurEffectStyleSystemThinMaterialDark:UIBlurEffectStyleSystemThinMaterialLight);
         effect=[UIBlurEffect effectWithStyle:style];
     }
-    UIVisualEffectView *blur=[[UIVisualEffectView alloc] initWithEffect:effect];
-    blur.frame=v.bounds;
-    blur.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    [v addSubview:blur];
-    // Legibility on Guest apps that disable Glass, force dark/light, or render
-    // via Metal: add a system-color scrim independent of the Guest backdrop.
-    UIView *base=[[UIView alloc] initWithFrame:v.bounds];
-    base.backgroundColor=[UIColor.systemBackgroundColor colorWithAlphaComponent:
-                          strong?(FMSystemDark()?.56:.69):(FMSystemDark()?.16:.21)];
-    base.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    [v addSubview:base];
-    CGFloat alpha=Clamp(FloatPref(@"glassTint",strong?.08:.04),0,.30);
-    UIView *wash=[[UIView alloc] initWithFrame:v.bounds];
-    UIColor *t=FMAccent();
-    wash.backgroundColor=[t colorWithAlphaComponent:alpha];
-    wash.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    [v addSubview:wash];
-    v.layer.borderWidth=.65;
-    v.layer.borderColor=[FMSystemDark()?[UIColor.whiteColor colorWithAlphaComponent:.28]:
-        [UIColor.blackColor colorWithAlphaComponent:.08] CGColor];
-    return v;
+    UIVisualEffectView *material=[[UIVisualEffectView alloc] initWithEffect:effect];
+    material.frame=surface.bounds;
+    material.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    material.userInteractionEnabled=NO;
+    [surface addSubview:material];
+    if(!nativeGlass) {
+        // Only older iOS receives the limited compatibility approximation.
+        UIView *scrim=[[UIView alloc] initWithFrame:surface.bounds];
+        scrim.backgroundColor=[UIColor.systemBackgroundColor colorWithAlphaComponent:
+            strong?(FMSystemDark()?.25:.34):.10];
+        scrim.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        scrim.userInteractionEnabled=NO;
+        [surface addSubview:scrim];
+        surface.layer.borderWidth=.6;
+        surface.layer.borderColor=[UIColor.separatorColor colorWithAlphaComponent:.32].CGColor;
+    }
+    return surface;
 }
 - (void)removePanel {
     [self.panel removeFromSuperview]; self.panel=nil;
@@ -589,7 +593,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL compact=BoolPref(@"compactMode",NO);
     // 146 pt keeps one vertical icon column while 75% scale preserves
     // at least 44pt hit targets in the compact 2x2 footer.
-    CGFloat pw=MIN(small?(compact?108:310):346,bounds.size.width-24);
+    CGFloat pw=MIN(small?(compact?90:310):346,bounds.size.width-24);
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
@@ -628,44 +632,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat radius=small?(compact?31:29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
     [shadow addSubview:glass];
-    // The same optical treatment is used by both switcher modes.
-    // Tone is selected from the system, never from the running Guest.
-    UIView *tint=[[UIView alloc] initWithFrame:glass.bounds];
-    tint.userInteractionEnabled=NO;
-    tint.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    CAGradientLayer *depth=[CAGradientLayer layer];
-    depth.frame=glass.bounds;
-    depth.colors=night?@[
-        (__bridge id)RGBA(.16,.22,.30,.83).CGColor,
-        (__bridge id)RGBA(.07,.10,.17,.91).CGColor,
-        (__bridge id)RGBA(.12,.19,.30,.87).CGColor]:
-        @[(__bridge id)RGBA(.96,.98,1,.75).CGColor,
-          (__bridge id)RGBA(.82,.89,.99,.79).CGColor,
-          (__bridge id)RGBA(.93,.97,1,.81).CGColor];
-    depth.locations=@[@0,@.48,@1];
-    [tint.layer addSublayer:depth];
-    [glass addSubview:tint];
-    // Highlighted metallic perimeter and blue cold-edge shine, like the
-    // reference drawer, without any animation or expensive custom shaders.
-    CAGradientLayer *rim=[CAGradientLayer layer];
-    rim.frame=glass.bounds;
-    rim.colors=night?@[
-       (__bridge id)RGBA(1,1,1,.97).CGColor,
-       (__bridge id)RGBA(.30,.68,1,.76).CGColor,
-       (__bridge id)RGBA(.91,.96,1,.74).CGColor]:
-       @[(__bridge id)RGBA(1,1,1,.94).CGColor,
-         (__bridge id)RGBA(.30,.58,.91,.65).CGColor,
-         (__bridge id)RGBA(1,1,1,.82).CGColor];
-    rim.startPoint=CGPointMake(0,0);rim.endPoint=CGPointMake(1,1);
-    CAShapeLayer *outline=[CAShapeLayer layer];
-    outline.frame=glass.bounds;
-    outline.path=[UIBezierPath bezierPathWithRoundedRect:CGRectInset(glass.bounds,1,1)
-                                          cornerRadius:radius-1].CGPath;
-    outline.fillColor=UIColor.clearColor.CGColor;
-    outline.strokeColor=UIColor.whiteColor.CGColor;
-    outline.lineWidth=1.7;
-    rim.mask=outline;
-    [glass.layer addSublayer:rim];
+    // On iOS 26+ the UIKit glass material itself renders the edge and
+    // depth. Do not obscure it with gradients, strokes or opaque washes.
     UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectInset(glass.bounds,14,14)];
     scroll.showsVerticalScrollIndicator=NO;
     scroll.alwaysBounceVertical=NO;
@@ -676,7 +644,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         // Only the central application list scrolls; header and footer never move.
         if(!compact) [self buildAppHeader:glass];
         CGFloat top=compact?12:86, bottom=footerHeight+9;
-        scroll.frame=CGRectMake(compact?10:13,top,pw-(compact?20:26),
+        scroll.frame=CGRectMake(compact?3:13,top,pw-(compact?6:26),
                                 MAX(22,ph-top-bottom));
         scroll.clipsToBounds=YES;
         [self buildAppFooter:glass];
@@ -716,13 +684,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         self.orb.center=CGPointMake(Clamp(handleX,6,bounds.size.width-6),
                                      centerY+visualH*.04);
     }
-    shadow.alpha=0;
+    shadow.alpha=1;
+    // Native glass can silently fail to render if its owning view starts
+    // at alpha=0. Animate scale only, leaving the effect continuously active.
     shadow.transform=CGAffineTransformMakeScale(actualScale*.965,actualScale*.96);
     NSTimeInterval duration=UIAccessibilityIsReduceMotionEnabled()?.10:.29;
     [UIView animateWithDuration:duration delay:0
         usingSpringWithDamping:.88 initialSpringVelocity:0
         options:UIViewAnimationOptionCurveEaseOut animations:^{
-            shadow.alpha=1;
             shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
         } completion:nil];
 }
@@ -860,8 +829,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     CGFloat w=glass.bounds.size.width;
     CGFloat height=compact?(16+items.count*63+12):74;
-    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?10:13,
-                       glass.bounds.size.height-height-7,w-(compact?20:26),height)];
+    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:13,
+                       glass.bounds.size.height-height-7,w-(compact?6:26),height)];
     footer.backgroundColor=UIColor.clearColor;
     [glass addSubview:footer];
     if(compact) {
