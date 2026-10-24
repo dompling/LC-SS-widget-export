@@ -141,6 +141,13 @@ void SideStoreMyAppsViewController_hook_viewDidload(UICollectionViewController* 
 }
 
 void SideStoreMyAppsViewController_hook_escapeButtonTapped(UICollectionViewController* self, SEL cmd, id target) {
+    // Explicit rescue path for old LCFloatingMenu builds.  The previous
+    // quick-switcher left this flag stuck and trapped users in SideStore.
+    NSUserDefaults *defaults = NSUserDefaults.lcUserDefaults ?: NSUserDefaults.standardUserDefaults;
+    [defaults setBool:NO forKey:@"LCOpenSideStore"];
+    [defaults setObject:@"ui" forKey:@"selected"];
+    [defaults removeObjectForKey:@"selectedContainer"];
+    [defaults removeObjectForKey:@"launchAppUrlScheme"];
     [LCSharedUtils launchToGuestAppWithClassicMode:0];
 }
 
