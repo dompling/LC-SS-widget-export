@@ -63,8 +63,8 @@ static void FMLog(NSString *event, NSString *detail) {
                 [NSFileManager.defaultManager removeItemAtPath:old error:nil];
                 [NSFileManager.defaultManager moveItemAtPath:file toPath:old error:nil];
             }
-            NSString *line=[NSString stringWithFormat:@"%@ event=%@ detail=%@\n",
-                NSDate.date,event?:@"unknown",detail?:@""];
+            NSString *line=[NSString stringWithFormat:@"%@ guest=%@ event=%@ detail=%@\n",
+                NSDate.date,GuestID(),event?:@"unknown",detail?:@""];
             NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
             if(![NSFileManager.defaultManager fileExistsAtPath:file])
                 [NSFileManager.defaultManager createFileAtPath:file contents:nil attributes:nil];
