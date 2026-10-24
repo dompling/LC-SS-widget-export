@@ -740,11 +740,17 @@ int LiveContainerMain(int argc, char *argv[]) {
         sideStoreExist = [NSFileManager.defaultManager fileExistsAtPath:[lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStoreApp.framework"]];
     }
 
-    if([lcUserDefaults boolForKey:@"LCOpenSideStore"] || [selectedApp isEqualToString:@"builtinSideStore"]) {
+    // LCOpenSideStore was historically persisted by some third-party tweaks.
+    // Consume it exactly once to prevent permanent SideStore re-entry.
+    // The supported path for launching the built-in SideStore is selected=builtinSideStore.
+    BOOL legacySideStoreRequest = [lcUserDefaults boolForKey:@"LCOpenSideStore"];
+    if(legacySideStoreRequest) {
+        [lcUserDefaults setBool:NO forKey:@"LCOpenSideStore"];
+        NSLog(@"[LCBootstrap] Cleared legacy one-shot LCOpenSideStore request");
+    }
+    if(legacySideStoreRequest || [selectedApp isEqualToString:@"builtinSideStore"]) {
         if(sideStoreExist) {
             isSideStore = true;
-        } else {
-            [lcUserDefaults setBool:NO forKey:@"LCOpenSideStore"];
         }
     }
     
