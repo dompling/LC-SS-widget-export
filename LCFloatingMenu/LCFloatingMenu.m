@@ -498,7 +498,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.23];
     row.layer.cornerRadius=MIN(18,height*.38);
     row.layer.borderWidth=.4;
-    row.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.24].CGColor;
+    row.layer.borderColor=UIColor.separatorColor.CGColor;
     UIImageView *symbol=[[UIImageView alloc] initWithImage:
         [UIImage systemImageNamed:icon withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium]]];
     symbol.tintColor=FMAccent();
@@ -903,14 +903,27 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)backToSettings { [self openSettings]; }
 - (void)backToApps { [self closeSettings]; }
 - (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
-    UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,280,48)];
+    UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,280,51)];
+    row.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    row.layer.cornerRadius=13;
     UILabel *l=[self label:title size:14 weight:UIFontWeightMedium];
-    l.frame=CGRectMake(6,0,211,48); [row addSubview:l];
+    l.translatesAutoresizingMaskIntoConstraints=NO;
+    l.adjustsFontSizeToFitWidth=YES;
+    l.minimumScaleFactor=.79;
+    [row addSubview:l];
     UISwitch *sw=[UISwitch new]; sw.on=BoolPref(key,def); sw.tag=tag;
-    sw.onTintColor=RGBA(.27,.53,1,1);
-    sw.frame=CGRectMake(221,8,51,31);
+    sw.translatesAutoresizingMaskIntoConstraints=NO;
+    sw.onTintColor=FMAccent();
     [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-    [row addSubview:sw]; [self addRow:row height:48 to:s];
+    [row addSubview:sw];
+    [NSLayoutConstraint activateConstraints:@[
+        [l.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [l.trailingAnchor constraintLessThanOrEqualToAnchor:sw.leadingAnchor constant:-10],
+        [l.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [sw.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-13],
+        [sw.centerYAnchor constraintEqualToAnchor:row.centerYAnchor]
+    ]];
+    [self addRow:row height:51 to:s];
 }
 - (void)settingSlider:(UIStackView*)s title:(NSString*)title key:(NSString*)key min:(float)min max:(float)max def:(float)def tag:(NSInteger)tag {
     UILabel *l=[self label:title size:14 weight:UIFontWeightMedium];
@@ -983,27 +996,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self draw];
 }
 - (void)diyPage:(UIStackView*)s {
-    [self section:@"外观与主题" sub:nil in:s];
-    UIView *preview=[[UIView alloc] initWithFrame:CGRectMake(0,0,300,120)];
-    preview.layer.cornerRadius=20;preview.clipsToBounds=YES;
-    CAGradientLayer *gradient=[CAGradientLayer layer];gradient.frame=preview.bounds;
-    gradient.colors=@[(__bridge id)RGBA(.23,.43,.88,1).CGColor,
-                      (__bridge id)RGBA(.79,.29,.78,1).CGColor,
-                      (__bridge id)RGBA(.13,.67,.81,1).CGColor];
-    gradient.startPoint=CGPointMake(0,0);
-    gradient.endPoint=CGPointMake(1,1);
-    [preview.layer addSublayer:gradient];
-    UIView *panel=[self glass:CGRectMake(61,30,177,62) radius:19 strong:NO];
-    UIImageView *ico=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"square.grid.2x2.fill"]];
-    ico.tintColor=FMAccent();ico.frame=CGRectMake(12,18,26,26);
-    [panel addSubview:ico];
-    UILabel *title=[self label:@"Liquid Glass" size:15 weight:UIFontWeightSemibold];
-    title.frame=CGRectMake(49,13,120,34);
-    [panel addSubview:title];
-    [preview addSubview:panel];
-    [self addRow:preview height:120 to:s];
-    [self spacer:s size:4];
-    [self section:@"预设主题" sub:@"点击切换；面板、图标及高光同步改变" in:s];
+    [self section:@"主题样式" sub:nil in:s];
     NSArray *names=@[@"默认液态",@"极简无界",@"深空晶体",@"极光彩色"];
     NSArray *colors=@[RGBA(.55,.77,.96,1),RGBA(.86,.87,.90,1),RGBA(.13,.18,.30,1),RGBA(.65,.31,.79,1)];
     UIStackView *themes=[UIStackView new];themes.axis=UILayoutConstraintAxisHorizontal;
@@ -1029,7 +1022,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     [self addRow:themes height:77 to:s];
     [self spacer:s size:5];
-    [self section:@"材质微调" sub:@"调节微珠与面板的独立视觉参数" in:s];
+    [self spacer:s size:10];
+    [self section:@"玻璃与微珠" sub:nil in:s];
     [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
@@ -1310,10 +1304,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)showMessage:(NSString *)title details:(NSString *)detail {
     FMLog(@"ui-warning",title);
-    if(!self.window.rootViewController.presentedViewController) {
+    UIViewController *presenter=self.settingsNavigation.topViewController ?: self.window.rootViewController;
+    if(!presenter.presentedViewController) {
         UIAlertController *alert=[UIAlertController alertControllerWithTitle:title message:detail preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
-        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+        [presenter presentViewController:alert animated:YES completion:nil];
     }
 }
 - (void)confirmTitle:(NSString*)title action:(void(^)(void))action {
