@@ -20,8 +20,8 @@
 
 1. **Collapsed:** a narrow edge microbead; low intrusion, side snap, optional 3-second slim fade. Large *invisible hit area* (target roughly 44pt) even if visual bead is 9-16pt wide; no Android-style oversized bubble.
 2. **Expanded:** title-free and description-free. Header: real installed LC/SideStore icons/favorites. Middle: **only this region scrolls**. Footer: **fixed centered icon-only actions** (home/restart/settings/collapse). Adaptive panel height and configurable scale from 75 to 120 percent; never clip beyond the safe area.
-3. **Modes:** normal = real icon + app name; compact = real app icons only in a 4-column grid, with VoiceOver accessibility labels. Don't replace icons with initial-letter tiles.
-4. **Settings:** a **separate full-screen page** launched by tapping the gear; back navigation returns to Guest app switcher without relaunching Guest. DIY theme presets, placement, opacity, scale, compact mode, per-App settings, favorites management, logging. Keep a single scrollable settings page with clear subsections, not floating submenus.
+3. **Modes:** normal = real icon + app name; compact = a **single narrow vertical column** of one app icon per row, each with a full-width, enlarged tap target and VoiceOver accessibility label. Don't replace icons with initial-letter tiles.
+4. **Settings:** a **separate full-screen page** launched by tapping the gear; back navigation returns to Guest app switcher without relaunching Guest. DIY theme presets, placement, opacity, scale, compact mode, per-App settings, favorites management, logging. Use a **dedicated opaque settings UIWindow** that becomes key while settings are open; within it, a native **grouped UITableView home and UINavigationController** lead to four categories: Appearance, Interaction, App Management and Diagnostics. Restore the Guest's key window on exit. Never allow taps to leak into the Guest.
 5. **Theme:** reflect **iOS system** light/dark mode, not the Guest app's forced style. Validate when Guest forces dark/light, when Reduce Transparency/Increase Contrast/Reduce Motion are on, and when the phone transitions light↔dark. Glass must remain legible on white, black, colorful, video and non-glass backgrounds: use an adaptive readability layer where needed.
 6. **Motion:** a restrained spring transition (roughly 200-330 ms), single focal animation. Prefer a morph of the bead into the panel; avoid strong elastic overshoot, performance-heavy continuous blur/refraction, and custom rendering inside active games.
 7. **Safety:** keep LiveContainer classic single-task switch. Avoid activating unsupported, locked, JIT-dependent or stale-signed guests directly. Do not inject SpringBoard. Preserve locally exportable rotating diagnostics.
@@ -30,7 +30,7 @@
 ## Suggested review order
 
 P0: real app icons, non-intrusive bead, clean fixed-footer expanded menu, correct system-mode color.
-P1: high-contrast full-screen settings and live DIY controls, compact icon grid, scale gesture correctness.
+P1: high-contrast full-screen settings and live DIY controls, compact single-column icon shelf, >=44pt actual hit targets at 75% scale, scale gesture correctness.
 P2: fine optical refraction, restrained highlight movement, adaptive microanimations.
 P3: optional advanced presets or animated interaction variants after device performance testing.
 
@@ -41,7 +41,8 @@ P3: optional advanced presets or animated interaction variants after device perf
 - [ ] Fixed footer stays stationary while scrolling 10+ apps.
 - [ ] Compact mode has no unnecessary visible labels but retains accessibility labels.
 - [ ] Panel at 75%, 100%, 120% retains tappable controls and fits safe area in landscape and portrait.
-- [ ] Settings appears as a full-screen page, and closing returns without terminating Guest.
+- [ ] Settings appears as a separate full-screen key window, divided into native UIKit category pages; there is no Guest touch-through and closing returns without terminating Guest.
+- [ ] A single vertical app icon column is used in compact mode; never switch back to 4-column app grid.
 - [ ] App icons are genuine LC icon caches/CFBundleIcons or neutral fallbacks.
 - [ ] No non-essential explanatory title or menu-management row in expanded switcher.
 - [ ] Each Guest can disable problematic tweak injection; logs remain exportable.
