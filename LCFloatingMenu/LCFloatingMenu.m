@@ -40,6 +40,42 @@ static void SetPref(NSString *key,id value) {
 }
 static NSString *AppPref(void) {return [NSString stringWithFormat:@"appEnabled.%@", GuestID()];}
 
+// Local diagnostics: bounded rotation, no app content, certificates or secrets.
+static NSString *FMLogFile(void) {
+    NSString *root=GroupPath();
+    if(root.length) root=[root stringByAppendingPathComponent:@"LiveContainer/LCFloatingMenu"];
+    else {
+        const char *home=getenv("LC_HOME_PATH");
+        if(!home || !home[0]) return nil;
+        root=[[NSString stringWithUTF8String:home] stringByAppendingPathComponent:@"Documents/LCFloatingMenu"];
+    }
+    [NSFileManager.defaultManager createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil];
+    return [root stringByAppendingPathComponent:@"diagnostics.log"];
+}
+static void FMLog(NSString *event, NSString *detail) {
+    @try {
+        @synchronized(NSFileManager.class) {
+            NSString *file=FMLogFile();
+            if(!file) return;
+            NSUInteger size=[[NSFileManager.defaultManager attributesOfItemAtPath:file error:nil] fileSize];
+            if(size>262144) {
+                NSString *old=[file stringByAppendingString:@".old"];
+                [NSFileManager.defaultManager removeItemAtPath:old error:nil];
+                [NSFileManager.defaultManager moveItemAtPath:file toPath:old error:nil];
+            }
+            NSString *line=[NSString stringWithFormat:@"%@ event=%@ detail=%@\n",
+                NSDate.date,event?:@"unknown",detail?:@""];
+            NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+            if(![NSFileManager.defaultManager fileExistsAtPath:file])
+                [NSFileManager.defaultManager createFileAtPath:file contents:nil attributes:nil];
+            NSFileHandle *out=[NSFileHandle fileHandleForWritingAtPath:file];
+            [out seekToEndOfFile];[out writeData:data];[out closeFile];
+        }
+    } @catch(NSException *ex) {
+        NSLog(@"[LCFloatingMenu] diagnostics unavailable: %@",ex.name);
+    }
+}
+
 static NSArray<NSDictionary*> *InstalledApps(void) {
     NSMutableArray<NSDictionary*> *list=[NSMutableArray array];
     NSMutableSet<NSString*> *seen=[NSMutableSet set];
