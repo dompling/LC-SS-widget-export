@@ -832,34 +832,80 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)buildAppFooter:(UIView *)glass {
-    CGFloat w=glass.bounds.size.width;
     BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat fh=compact?128:59;
-    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(9,glass.bounds.size.height-fh-8,w-18,fh)];
-    footer.layer.cornerRadius=20;
-    footer.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.22];
+    NSMutableArray<NSArray*> *items=[NSMutableArray array];
+    // The narrow drawer defaults to three actions, like the reference;
+    // restarting can be explicitly opted in under Interaction & Switching.
+    if(compact) {
+        [items addObjectsFromArray:@[
+            @[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LiveContainer"],
+            @[@"gearshape.fill",NSStringFromSelector(@selector(openSettings)),@"设置"],
+            @[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起菜单"]
+        ]];
+        if(BoolPref(@"compactRestart",NO))
+            [items insertObject:@[@"arrow.clockwise",NSStringFromSelector(@selector(restart)),@"重新启动"] atIndex:0];
+    } else {
+        if(BoolPref(@"showRestart",YES))
+            [items addObject:@[@"arrow.clockwise",NSStringFromSelector(@selector(restart)),@"重新启动"]];
+        [items addObjectsFromArray:@[
+            @[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LiveContainer"],
+            @[@"gearshape.fill",NSStringFromSelector(@selector(openSettings)),@"设置"],
+            @[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起菜单"]
+        ]];
+    }
+    CGFloat w=glass.bounds.size.width;
+    CGFloat height=compact?(16+items.count*63+12):74;
+    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?10:13,
+                       glass.bounds.size.height-height-7,w-(compact?20:26),height)];
+    footer.backgroundColor=UIColor.clearColor;
     [glass addSubview:footer];
-    NSMutableArray *items=[NSMutableArray array];
-    if(BoolPref(@"showRestart",YES))
-        [items addObject:@[@"arrow.clockwise",NSStringFromSelector(@selector(restart)),@"重启"]];
-    [items addObjectsFromArray:@[
-        @[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LC"],
-        @[@"gearshape.fill",NSStringFromSelector(@selector(openSettings)),@"设置"],
-        @[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起"]
-    ]];
-    CGFloat cell=footer.bounds.size.width/(compact?2:items.count);
+    if(compact) {
+        // Keep one continuous drawer shell rather than nesting another
+        // pill-shaped control panel inside it.
+        UIView *separator=[[UIView alloc] initWithFrame:CGRectMake(13,0,
+                                               footer.bounds.size.width-26,.8)];
+        separator.backgroundColor=FMSystemDark()?
+             [UIColor.whiteColor colorWithAlphaComponent:.35]:
+             [UIColor.blackColor colorWithAlphaComponent:.12];
+        [footer addSubview:separator];
+    }
+    CGFloat slot=compact?63:footer.bounds.size.width/items.count;
     for(NSUInteger i=0;i<items.count;i++) {
         NSArray *spec=items[i];
-        CGRect frame=compact?CGRectMake((i%2)*cell,(i/2)*64,cell,64):
-                             CGRectMake(i*cell,0,cell,59);
-        UIControl *button=[[UIControl alloc] initWithFrame:frame];
+        CGRect hit=compact?
+            CGRectMake(0,10+i*slot,footer.bounds.size.width,slot):
+            CGRectMake(i*slot,3,slot,65);
+        UIControl *button=[[UIControl alloc] initWithFrame:hit];
+        button.backgroundColor=UIColor.clearColor;
         button.accessibilityLabel=spec[2];
-        UIImage *image=[UIImage systemImageNamed:spec[0] withConfiguration:
-            [UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium]];
-        UIImageView *iv=[[UIImageView alloc] initWithImage:image];
-        iv.contentMode=UIViewContentModeScaleAspectFit;iv.tintColor=FMAccent();
-        iv.frame=CGRectMake((cell-25)*.5,compact?19:16,25,25);[button addSubview:iv];
-        [button addTarget:self action:NSSelectorFromString(spec[1]) forControlEvents:UIControlEventTouchUpInside];
+        button.accessibilityTraits=UIAccessibilityTraitButton;
+        button.accessibilityHint=@"轻触执行";
+        CGFloat tileSize=compact?50:44;
+        UIView *tile=[self glass:CGRectMake((hit.size.width-tileSize)*.5,
+                                          (hit.size.height-tileSize)*.5,
+                                          tileSize,tileSize)
+                            radius:tileSize*.24 strong:NO];
+        tile.userInteractionEnabled=NO;
+        tile.layer.borderWidth=.8;
+        tile.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
+                                  FMSystemDark()?.55:.85].CGColor;
+        // The exact same optical tile size/radius rhythm as the Guest icons.
+        tile.layer.shadowColor=UIColor.blackColor.CGColor;
+        tile.layer.shadowOpacity=FMSystemDark()?.20:.09;
+        tile.layer.shadowRadius=3;
+        [button addSubview:tile];
+        UIImageSymbolConfiguration *conf=[UIImageSymbolConfiguration
+           configurationWithPointSize:compact?23:20 weight:UIImageSymbolWeightSemibold];
+        UIImageView *glyph=[[UIImageView alloc] initWithImage:
+                                     [UIImage systemImageNamed:spec[0] withConfiguration:conf]];
+        glyph.frame=CGRectInset(tile.bounds,12,12);
+        glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        glyph.contentMode=UIViewContentModeScaleAspectFit;
+        glyph.tintColor=FMSystemDark()?RGBA(.38,.75,1,1):RGBA(.17,.39,.70,1);
+        glyph.userInteractionEnabled=NO;
+        [tile addSubview:glyph];
+        [button addTarget:self action:NSSelectorFromString(spec[1])
+                    forControlEvents:UIControlEventTouchUpInside];
         [footer addSubview:button];
     }
 }
