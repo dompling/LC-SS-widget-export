@@ -111,7 +111,8 @@ static NSArray<NSDictionary*> *InstalledApps(void) {
             NSString *uuid=lc[@"LCDataUUID"];
             if(!uuid.length) continue;
             [list addObject:@{@"path":entry,@"title":title,@"uuid":uuid,
-                              @"bundle":info[@"CFBundleIdentifier"] ?: @""}];
+                              @"bundle":info[@"CFBundleIdentifier"] ?: @"",
+                              @"folder":folder}];
         }
     }
     [list sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){
@@ -128,6 +129,64 @@ static UIColor *TintFor(NSString *s) {
     });
     return colors[(NSUInteger)(s.hash & 0x7fffffff)%colors.count];
 }
+
+static UIColor *FMAccent(void) {
+    switch ([HostDefaults() integerForKey:Pref(@"theme")]) {
+        case 1: return RGBA(.80,.84,.91,1); // minimalist
+        case 2: return RGBA(.36,.52,1,1); // deep sapphire
+        case 3: return RGBA(.58,.36,.95,1); // aurora
+        default: return RGBA(.34,.69,1,1); // native glass
+    }
+}
+static UIImage *FMGuestIcon(NSDictionary *app) {
+    NSString *folder=app[@"folder"];
+    if(![folder isKindOfClass:NSString.class] || !folder.length) return nil;
+    static NSCache *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once,^{ cache=[NSCache new];cache.countLimit=90; });
+    id saved=[cache objectForKey:folder];
+    if(saved) return saved==NSNull.null?nil:saved;
+    NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[folder stringByAppendingPathComponent:@"Info.plist"]];
+    if(![info isKindOfClass:NSDictionary.class]) return nil;
+    NSDictionary *icons=info[@"CFBundleIcons"];
+    if(![icons isKindOfClass:NSDictionary.class]) icons=info[@"CFBundleIcons~ipad"];
+    NSDictionary *primary=[icons isKindOfClass:NSDictionary.class]?icons[@"CFBundlePrimaryIcon"]:nil;
+    NSMutableArray<NSString*> *names=[NSMutableArray array];
+    if([primary[@"CFBundleIconName"] isKindOfClass:NSString.class])
+        [names addObject:primary[@"CFBundleIconName"]];
+    NSArray *files=primary[@"CFBundleIconFiles"];
+    if([files isKindOfClass:NSArray.class]) {
+        for(id name in [files reverseObjectEnumerator])
+            if([name isKindOfClass:NSString.class]) [names addObject:name];
+    }
+    for(id name in @[info[@"CFBundleIconFile"]?:@"", @"AppIcon60x60",@"AppIcon",@"Icon"])
+        if([name isKindOfClass:NSString.class] && [name length]) [names addObject:name];
+    UIImage *result=nil;
+    NSBundle *bundle=[NSBundle bundleWithPath:folder];
+    NSFileManager *fm=NSFileManager.defaultManager;
+    for(NSString *name in names) {
+        if(![name isKindOfClass:NSString.class] || !name.length) continue;
+        @try {
+            result=[UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
+            if(result) break;
+        } @catch(NSException *ex) {}
+        NSString *base=name.stringByDeletingPathExtension;
+        NSArray<NSString*> *variants=@[name,[base stringByAppendingString:@"@3x.png"],
+            [base stringByAppendingString:@"@2x.png"],[base stringByAppendingString:@".png"],
+            [base stringByAppendingString:@".jpg"]];
+        for(NSString *variant in variants) {
+            NSString *full=[folder stringByAppendingPathComponent:variant];
+            if([fm fileExistsAtPath:full]) {
+                result=[UIImage imageWithContentsOfFile:full];
+                if(result) break;
+            }
+        }
+        if(result) break;
+    }
+    [cache setObject:result?:NSNull.null forKey:folder];
+    return result;
+}
+
 @interface FMHitButton : UIButton @end
 @implementation FMHitButton
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
@@ -208,26 +267,44 @@ static UIColor *TintFor(NSString *s) {
     FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu",(unsigned long)self.apps.count]);
     [self draw];
 }
-- (CGFloat)orbWidth {return Clamp(FloatPref(@"orbWidth",27),20,55);}
-- (CGFloat)orbHeight {return BoolPref(@"roundOrb",NO)?self.orbWidth:self.orbWidth*1.68;}
+- (CGFloat)orbWidth { return Clamp(FloatPref(@"orbWidth",12),9,28); }
+- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:Clamp(FloatPref(@"orbHeight",38),26,48); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
-    CGFloat x=self.left ? -w*.15 : b.size.width-w*.85;
-    return CGRectMake(x,Clamp(b.size.height*self.orbY-h*.5,60,b.size.height-h-36),w,h);
+    CGFloat x=self.left?-w*.16:b.size.width-w*.84;
+    CGFloat top=MAX(25,self.window.safeAreaInsets.top+6);
+    CGFloat bottom=MAX(24,self.window.safeAreaInsets.bottom+8);
+    return CGRectMake(x,Clamp(b.size.height*self.orbY-h*.5,top,b.size.height-h-bottom),w,h);
 }
 - (UIView *)glass:(CGRect)frame radius:(CGFloat)radius strong:(BOOL)strong {
     UIView *v=[[UIView alloc] initWithFrame:frame];
-    v.layer.cornerRadius=radius; v.clipsToBounds=YES;
-    UIBlurEffectStyle style=strong?UIBlurEffectStyleSystemMaterial:UIBlurEffectStyleSystemUltraThinMaterial;
-    UIVisualEffectView *blur=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:style]];
-    blur.frame=v.bounds; blur.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    v.layer.cornerRadius=radius;v.clipsToBounds=YES;
+    UIVisualEffect *effect=nil;
+    // Public UIKit glass API exists from iOS 26; resolve at runtime so the
+    // same signed tweak safely runs on older iOS with regular blur.
+    if(@available(iOS 26.0,*)) {
+        Class cls=NSClassFromString(@"UIGlassEffect");
+        SEL make=NSSelectorFromString(@"effectWithStyle:");
+        if([cls respondsToSelector:make]) {
+            effect=((id(*)(id,SEL,NSInteger))objc_msgSend)(cls,make,0);
+        }
+    }
+    if(!effect) {
+        effect=[UIBlurEffect effectWithStyle:strong?UIBlurEffectStyleSystemThinMaterial:UIBlurEffectStyleSystemUltraThinMaterial];
+    }
+    UIVisualEffectView *blur=[[UIVisualEffectView alloc] initWithEffect:effect];
+    blur.frame=v.bounds;
+    blur.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [v addSubview:blur];
+    CGFloat alpha=Clamp(FloatPref(@"glassTint",strong?.08:.04),0,.30);
     UIView *wash=[[UIView alloc] initWithFrame:v.bounds];
-    wash.backgroundColor=RGBA(.73,.82,1,Clamp(FloatPref(@"glassTint",strong?.20:.12),.03,.36));
+    UIColor *t=FMAccent();
+    wash.backgroundColor=[t colorWithAlphaComponent:alpha];
     wash.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [v addSubview:wash];
-    v.layer.borderWidth=.75; v.layer.borderColor=RGBA(1,1,1,.70).CGColor;
+    v.layer.borderWidth=.65;
+    v.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.58].CGColor;
     return v;
 }
 - (UIButton *)symbolButton:(NSString *)symbol title:(NSString *)title {
@@ -252,29 +329,54 @@ static UIColor *TintFor(NSString *s) {
     CGRect f=[self orbFrame];
     UIButton *button=[FMHitButton buttonWithType:UIButtonTypeCustom];
     button.frame=f;
-    button.layer.cornerRadius=f.size.width*.5;
-    button.layer.shadowColor=RGBA(.32,.50,1,1).CGColor;
-    button.layer.shadowOpacity=.27;
-    button.layer.shadowRadius=8;
-    button.layer.shadowOffset=CGSizeMake(0,2);
-    UIView *glass=[self glass:button.bounds radius:f.size.width*.5 strong:NO];
-    glass.userInteractionEnabled=NO;
-    [button addSubview:glass];
-    UIView *core=[[UIView alloc] initWithFrame:CGRectMake(0,0,8,8)];
-    core.center=CGPointMake(f.size.width*.5,f.size.height*.5);
-    core.backgroundColor=UIColor.whiteColor; core.layer.cornerRadius=4;
-    core.layer.shadowColor=RGBA(.19,.53,1,1).CGColor;
-    core.layer.shadowOpacity=.9; core.layer.shadowRadius=6;
-    core.userInteractionEnabled=NO;
-    [button addSubview:core];
-    button.alpha=self.isOpen?1:Clamp(FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.68)),.22,1);
-    button.accessibilityLabel=@"展开或收起悬浮菜单";
+    button.layer.shadowColor=FMAccent().CGColor;
+    button.layer.shadowOpacity=.24;button.layer.shadowRadius=6;
+    button.layer.shadowOffset=CGSizeMake(0,1);
+    UIView *bead=[self glass:button.bounds radius:f.size.width*.5 strong:NO];
+    bead.userInteractionEnabled=NO;
+    bead.tag=9202;
+    [button addSubview:bead];
+    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,2.5,14)];
+    line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
+    line.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:.85];
+    line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
+    [button addSubview:line];
+    CGFloat alpha=FloatPref([@"appAlpha." stringByAppendingString:GuestID()],
+                            FloatPref(@"idleAlpha",.72));
+    button.alpha=self.isOpen?1:Clamp(alpha,.16,1);
+    button.accessibilityLabel=@"LC 悬浮菜单";
+    button.accessibilityHint=@"轻触展开，拖动移动，长按显示快捷操作";
     button.accessibilityTraits=UIAccessibilityTraitButton;
-    [button addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
+    if(BoolPref([@"doubleTap." stringByAppendingString:GuestID()],NO)) {
+        UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggle)];
+        tap.numberOfTapsRequired=2;[button addGestureRecognizer:tap];
+    } else [button addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
+    UILongPressGestureRecognizer *hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hold:)];
+    hold.minimumPressDuration=.55;
+    [button addGestureRecognizer:hold];
     UIPanGestureRecognizer *pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
     [button addGestureRecognizer:pan];
     [self.window.rootViewController.view addSubview:button];
     self.orb=button;
+    if(!self.isOpen && BoolPref(@"autoFade",YES)) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(3.0*NSEC_PER_SEC)),
+                       dispatch_get_main_queue(),^{
+            if(self.orb==button && !self.isOpen && !UIAccessibilityIsReduceMotionEnabled()) {
+                [UIView animateWithDuration:.42 animations:^{
+                    bead.transform=CGAffineTransformMakeScale(.32,.88);
+                    line.alpha=.4;
+                }];
+            }
+        });
+    }
+}
+- (void)hold:(UILongPressGestureRecognizer *)gesture {
+    if(gesture.state!=UIGestureRecognizerStateBegan) return;
+    if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
+        initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    if(!self.isOpen) self.isOpen=YES;
+    self.page=@"apps";self.apps=InstalledApps();
+    [self draw];
 }
 - (void)draw {
     if(!self.window) return;
@@ -317,40 +419,58 @@ static UIColor *TintFor(NSString *s) {
     l.textColor=UIColor.labelColor; l.numberOfLines=0; return l;
 }
 - (UIView *)rowForTitle:(NSString *)title icon:(NSString *)icon height:(CGFloat)height action:(SEL)action {
-    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,280,height)];
-    row.backgroundColor=RGBA(1,1,1,.20);
-    row.layer.cornerRadius=17;
-    UIImageView *symbol=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:icon]];
-    symbol.tintColor=RGBA(.24,.49,1,1);
-    symbol.frame=CGRectMake(15,(height-23)/2,23,23);
+    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,278,height)];
+    row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.23];
+    row.layer.cornerRadius=MIN(18,height*.38);
+    row.layer.borderWidth=.4;
+    row.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.24].CGColor;
+    UIImageView *symbol=[[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:icon withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium]]];
+    symbol.tintColor=FMAccent();
+    symbol.contentMode=UIViewContentModeScaleAspectFit;
+    symbol.frame=CGRectMake(13,(height-22)/2,22,22);
     [row addSubview:symbol];
-    UILabel *name=[self label:title size:15 weight:UIFontWeightMedium];
-    name.frame=CGRectMake(51,0,216,height);
+    UILabel *name=[self label:title size:14 weight:UIFontWeightMedium];
+    name.frame=CGRectMake(47,0,225,height);
     [row addSubview:name];
     if(action) [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return row;
 }
+- (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
+    UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    box.layer.cornerRadius=size*.22;box.clipsToBounds=YES;
+    box.backgroundColor=[UIColor.secondarySystemFillColor colorWithAlphaComponent:.50];
+    UIImage *real=FMGuestIcon(app);
+    if(real) {
+        UIImageView *iv=[[UIImageView alloc] initWithImage:real];
+        iv.frame=box.bounds;iv.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        iv.contentMode=UIViewContentModeScaleAspectFill;
+        [box addSubview:iv];
+    } else {
+        UIImageView *fallback=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"app.fill"]];
+        fallback.tintColor=FMAccent();fallback.contentMode=UIViewContentModeScaleAspectFit;
+        fallback.frame=CGRectInset(box.bounds,size*.26,size*.26);
+        [box addSubview:fallback];
+    }
+    return box;
+}
 - (UIView *)appRow:(NSDictionary *)app {
-    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,280,55)];
-    row.backgroundColor=RGBA(1,1,1,.19); row.layer.cornerRadius=17;
-    UIView *icon=[[UIView alloc] initWithFrame:CGRectMake(9,7,41,41)];
-    icon.backgroundColor=TintFor(app[@"bundle"]);
-    icon.layer.cornerRadius=13;
-    [row addSubview:icon];
-    UILabel *letter=[self label:[[app[@"title"] substringToIndex:MIN(1,[app[@"title"] length])] uppercaseString] size:21 weight:UIFontWeightBold];
-    letter.textColor=UIColor.whiteColor; letter.textAlignment=NSTextAlignmentCenter;
-    letter.frame=icon.bounds;
-    [icon addSubview:letter];
-    UILabel *name=[self label:app[@"title"] size:15 weight:UIFontWeightSemibold];
-    name.frame=CGRectMake(60,5,175,28);
+    CGFloat w=275,h=52;
+    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,w,h)];
+    row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.16];
+    row.layer.cornerRadius=17;
+    UIView *icon=[self iconViewForApp:app size:37];
+    icon.frame=CGRectMake(7,7.5,37,37);
+    icon.userInteractionEnabled=NO;[row addSubview:icon];
+    UILabel *name=[self label:app[@"title"] size:14 weight:UIFontWeightSemibold];
+    name.frame=CGRectMake(54,5,190,25);name.lineBreakMode=NSLineBreakByTruncatingTail;
     [row addSubview:name];
-    UILabel *subtitle=[self label:@"单任务切换" size:10 weight:UIFontWeightRegular];
-    subtitle.textColor=UIColor.secondaryLabelColor;
-    subtitle.frame=CGRectMake(60,29,175,17);
+    UILabel *subtitle=[self label:@"轻触切换 · 单任务" size:10 weight:UIFontWeightRegular];
+    subtitle.textColor=UIColor.secondaryLabelColor;subtitle.frame=CGRectMake(54,29,190,15);
     [row addSubview:subtitle];
     UIImageView *chevron=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
     chevron.tintColor=UIColor.tertiaryLabelColor;
-    chevron.frame=CGRectMake(251,21,9,13); [row addSubview:chevron];
+    chevron.frame=CGRectMake(251,21,8,11);[row addSubview:chevron];
     objc_setAssociatedObject(row,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [row addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
     return row;
