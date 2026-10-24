@@ -43,7 +43,9 @@ static NSString *AppPref(void) {return [NSString stringWithFormat:@"appEnabled.%
 static NSArray<NSDictionary*> *InstalledApps(void) {
     NSMutableArray<NSDictionary*> *list=[NSMutableArray array];
     NSMutableSet<NSString*> *seen=[NSMutableSet set];
-    NSString *home=getenv("LC_HOME_PATH")?@(getenv("LC_HOME_PATH")):NSHomeDirectory();
+    const char *hostHome=getenv("LC_HOME_PATH");
+    if(!hostHome || !hostHome[0]) return @[];
+    NSString *home=[NSString stringWithUTF8String:hostHome];
     NSMutableArray<NSString*> *roots=[NSMutableArray arrayWithObject:
         [home stringByAppendingPathComponent:@"Documents/Applications"]];
     NSString *shared=GroupPath();
@@ -63,7 +65,8 @@ static NSArray<NSDictionary*> *InstalledApps(void) {
                [lc[@"isJITNeeded"] boolValue] || [lc[@"is32bit"] boolValue]) continue;
             // LC can require an app re-sign, authentication, or JIT acquisition.
             // For v1, launch only already-patched ordinary guests.
-            if(!lc[@"LCPatchRevision"]) continue;
+            if([lc[@"LCPatchRevision"] integerValue] < 7) continue;
+    if([lc[@"dontLoadTweakLoader"] boolValue] || [lc[@"dontInjectTweakLoader"] boolValue]) continue;
             NSString *title=info[@"CFBundleDisplayName"] ?: info[@"CFBundleName"] ?: entry.stringByDeletingPathExtension;
             NSString *uuid=lc[@"LCDataUUID"];
             if(!uuid.length) continue;
@@ -85,6 +88,12 @@ static UIColor *TintFor(NSString *s) {
     });
     return colors[(NSUInteger)(s.hash & 0x7fffffff)%colors.count];
 }
+@interface FMHitButton : UIButton @end
+@implementation FMHitButton
+- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
+    return CGRectContainsPoint(CGRectInset(self.bounds,-14,-10),p);
+}
+@end
 @interface FMGlassWindow : UIWindow @end
 @implementation FMGlassWindow
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)event {
@@ -125,8 +134,22 @@ static UIColor *TintFor(NSString *s) {
     return nil;
 }
 - (void)installIfPossible {
-    if(self.window || !GuestInfo() || ![self foregroundScene]) return;
-    self.window=[[FMGlassWindow alloc] initWithWindowScene:[self foregroundScene]];
+    UIWindowScene *scene=[self foregroundScene];
+    if(!scene || !GuestInfo().count) return;
+    if([LCClassCall(NSUserDefaults.class,@"isSideStore") boolValue] ||
+       [LCClassCall(NSUserDefaults.class,@"isLiveProcess") boolValue]) return;
+    if(self.window && self.window.windowScene != scene) {
+        self.window.hidden=YES; self.window=nil; self.orb=nil; self.panel=nil;
+    }
+    if(self.window) {
+        CGRect nextFrame=scene.coordinateSpace.bounds;
+        if(!CGRectEqualToRect(self.window.frame,nextFrame)) {
+            self.window.frame=nextFrame;
+            [self draw];
+        }
+        return;
+    }
+    self.window=[[FMGlassWindow alloc] initWithWindowScene:scene];
     self.window.frame=self.window.windowScene.coordinateSpace.bounds;
     self.window.backgroundColor=UIColor.clearColor;
     self.window.windowLevel=UIWindowLevelAlert+20;
@@ -142,7 +165,7 @@ static UIColor *TintFor(NSString *s) {
     [self draw];
 }
 - (CGFloat)orbWidth {return Clamp(FloatPref(@"orbWidth",27),20,55);}
-- (CGFloat)orbHeight {return self.orbWidth*1.68;}
+- (CGFloat)orbHeight {return BoolPref(@"roundOrb",NO)?self.orbWidth:self.orbWidth*1.68;}
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -157,7 +180,7 @@ static UIColor *TintFor(NSString *s) {
     blur.frame=v.bounds; blur.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [v addSubview:blur];
     UIView *wash=[[UIView alloc] initWithFrame:v.bounds];
-    wash.backgroundColor=RGBA(.73,.82,1,strong?.22:.14);
+    wash.backgroundColor=RGBA(.73,.82,1,Clamp(FloatPref(@"glassTint",strong?.20:.12),.03,.36));
     wash.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [v addSubview:wash];
     v.layer.borderWidth=.75; v.layer.borderColor=RGBA(1,1,1,.70).CGColor;
@@ -183,7 +206,7 @@ static UIColor *TintFor(NSString *s) {
 - (void)drawOrb {
     [self.orb removeFromSuperview]; self.orb=nil;
     CGRect f=[self orbFrame];
-    UIButton *button=[UIButton buttonWithType:UIButtonTypeCustom];
+    UIButton *button=[FMHitButton buttonWithType:UIButtonTypeCustom];
     button.frame=f;
     button.layer.cornerRadius=f.size.width*.5;
     button.layer.shadowColor=RGBA(.32,.50,1,1).CGColor;
@@ -201,6 +224,8 @@ static UIColor *TintFor(NSString *s) {
     core.userInteractionEnabled=NO;
     [button addSubview:core];
     button.alpha=self.isOpen?1:Clamp(FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.68)),.22,1);
+    button.accessibilityLabel=@"展开或收起悬浮菜单";
+    button.accessibilityTraits=UIAccessibilityTraitButton;
     [button addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
     UIPanGestureRecognizer *pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
     [button addGestureRecognizer:pan];
@@ -211,7 +236,10 @@ static UIColor *TintFor(NSString *s) {
     if(!self.window) return;
     [self removePanel];
     [self drawOrb];
-    if(self.isOpen) [self buildPanel];
+    if(self.isOpen) {
+        [self buildPanel];
+        [self.window.rootViewController.view bringSubviewToFront:self.orb];
+    }
 }
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.window.rootViewController.view];
@@ -233,6 +261,7 @@ static UIColor *TintFor(NSString *s) {
 }
 - (void)toggle {
     self.isOpen=!self.isOpen; self.page=@"apps";
+    if(self.isOpen) self.apps=InstalledApps();
     if(BoolPref(@"haptic",YES)) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     }
@@ -337,6 +366,7 @@ static UIColor *TintFor(NSString *s) {
 }
 - (void)appPage:(UIStackView *)s {
     [self header:s title:@"快速切换" sub:@"LC+SS · 经典全屏单任务"];
+    [self addRow:[self rowForTitle:@"收起菜单" icon:@"xmark.circle.fill" height:42 action:@selector(toggle)] height:42 to:s];
     [self addRow:[self rowForTitle:@"返回 LiveContainer" icon:@"square.grid.2x2.fill" height:49 action:@selector(goHome)] height:49 to:s];
     if(BoolPref(@"showRestart",YES))
         [self addRow:[self rowForTitle:@"重新启动当前应用" icon:@"arrow.clockwise" height:45 action:@selector(restart)] height:45 to:s];
@@ -396,6 +426,8 @@ static UIColor *TintFor(NSString *s) {
     [self settingSlider:s title:@"透明度" key:@"idleAlpha" min:.25 max:1 def:.68 tag:10];
     [self settingSlider:s title:@"胶囊大小" key:@"orbWidth" min:20 max:50 def:27 tag:11];
     [self settingSwitch:s title:@"显示重新启动" key:@"showRestart" defaultValue:YES tag:3];
+    [self settingSwitch:s title:@"圆形玻璃按钮" key:@"roundOrb" defaultValue:NO tag:5];
+    [self settingSlider:s title:@"玻璃着色强度" key:@"glassTint" min:.03 max:.36 def:.16 tag:13];
     [self settingSwitch:s title:@"轻触震动" key:@"haptic" defaultValue:YES tag:1];
     [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:44 action:@selector(resetStyle)] height:44 to:s];
 }
@@ -409,38 +441,66 @@ static UIColor *TintFor(NSString *s) {
     [s addArrangedSubview:note];
 }
 - (void)switchChanged:(UISwitch*)sw {
-    NSString *key= sw.tag==1?@"haptic":sw.tag==2?@"confirm":sw.tag==3?@"showRestart":AppPref();
+    NSString *key= sw.tag==1?@"haptic":sw.tag==2?@"confirm":sw.tag==3?@"showRestart":sw.tag==5?@"roundOrb":AppPref();
     SetPref(key,@(sw.isOn));
-    if(sw.tag==3) [self draw];
+    if(sw.tag==3 || sw.tag==5) [self draw];
 }
 - (void)sliderChanged:(UISlider*)slider {
-    NSString *key=slider.tag==10?@"idleAlpha":slider.tag==11?@"orbWidth":[@"appAlpha." stringByAppendingString:GuestID()];
+    NSString *key=slider.tag==10?@"idleAlpha":slider.tag==11?@"orbWidth":slider.tag==13?@"glassTint":[@"appAlpha." stringByAppendingString:GuestID()];
     SetPref(key,@(slider.value));
     if(slider.tag==10 || slider.tag==12) self.orb.alpha=slider.value;
-    else [self drawOrb];
+    else if(slider.tag==13) [self draw];
+    else { [self drawOrb]; if(self.isOpen) [self.window.rootViewController.view bringSubviewToFront:self.orb]; }
 }
 - (void)resetStyle {
     SetPref(@"idleAlpha",@(.68));SetPref(@"orbWidth",@(27));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
+    SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(.16));
     [self draw];
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
     if(!path.length) return;
+    if(![path isEqualToString:@"ui"]) {
+        BOOL exists=NO;
+        for(NSDictionary *item in InstalledApps()) {
+            if([item[@"path"] isEqualToString:path] && [item[@"uuid"] isEqualToString:uuid]) {exists=YES;break;}
+        }
+        if(!exists) { [self showMessage:@"不可安全切换" details:@"目标 App 不存在、已锁定、需要 JIT，或补丁需要在 LC 中重新签名。请先返回 LC 启动。"]; return; }
+    }
     Class utils=NSClassFromString(@"LCSharedUtils");
     SEL sel=NSSelectorFromString(@"launchToGuestAppWithURL:");
-    if(![utils respondsToSelector:sel]) return;
+    if(![utils respondsToSelector:sel]) {
+        [self showMessage:@"切换不可用" details:@"当前 LC 版本不提供启动接口。"];
+        return;
+    }
     NSUserDefaults *host=HostDefaults();
     // SideStore and pending deep links must not intercept a guest switch.
     [host setBool:NO forKey:@"LCOpenSideStore"];
     [host removeObjectForKey:@"launchAppUrlScheme"];
     NSURLComponents *url=[NSURLComponents new];
-    url.scheme=LCClassCall(NSUserDefaults.class,@"lcAppUrlScheme") ?: @"livecontainer";
+    url.scheme=LCClassCall(NSUserDefaults.class,@"lcAppUrlScheme");
+    if(!url.scheme.length) {
+        [self showMessage:@"切换不可用" details:@"无法确认当前 LC 的 URL Scheme。"];
+        return;
+    }
     url.host=@"livecontainer-launch";
     NSMutableArray *qs=[NSMutableArray arrayWithObject:[NSURLQueryItem queryItemWithName:@"bundle-name" value:path]];
     if(uuid.length) [qs addObject:[NSURLQueryItem queryItemWithName:@"container-folder-name" value:uuid]];
     url.queryItems=qs;
     if(!url.URL) return;
-    ((BOOL(*)(id,SEL,NSURL*))objc_msgSend)(utils,sel,url.URL);
+    BOOL accepted=((BOOL(*)(id,SEL,NSURL*))objc_msgSend)(utils,sel,url.URL);
+    if(!accepted) {
+        [host removeObjectForKey:@"selected"];
+        [host removeObjectForKey:@"selectedContainer"];
+        [self showMessage:@"切换失败" details:@"LC 未能接受启动请求。已清理待启动状态，请返回 LC 检查签名。"];
+    }
+}
+- (void)showMessage:(NSString *)title details:(NSString *)detail {
+    if(!self.window.rootViewController.presentedViewController) {
+        UIAlertController *alert=[UIAlertController alertControllerWithTitle:title message:detail preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
+        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+    }
 }
 - (void)confirmTitle:(NSString*)title action:(void(^)(void))action {
     if(!BoolPref(AppPref(),BoolPref(@"confirm",YES))) {action();return;}
@@ -479,7 +539,7 @@ __attribute__((constructor)) static void LCFloatingMenuEntry(void) {
     // UIWindow/UIApplication are not necessarily ready when a dylib constructor executes.
     dispatch_async(dispatch_get_main_queue(), ^{
         NSNotificationCenter *nc=NSNotificationCenter.defaultCenter;
-        for(NSString *name in @[UIApplicationDidBecomeActiveNotification,UIWindowDidBecomeVisibleNotification]) {
+        for(NSString *name in @[UIApplicationDidBecomeActiveNotification,UIWindowDidBecomeVisibleNotification,UIApplicationDidChangeStatusBarOrientationNotification]) {
             [nc addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
                 [[FMManager shared] installIfPossible];
             }];
