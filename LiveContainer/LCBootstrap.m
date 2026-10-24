@@ -740,18 +740,17 @@ int LiveContainerMain(int argc, char *argv[]) {
         sideStoreExist = [NSFileManager.defaultManager fileExistsAtPath:[lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStoreApp.framework"]];
     }
 
-    // LCOpenSideStore was historically persisted by some third-party tweaks.
-    // Consume it exactly once to prevent permanent SideStore re-entry.
-    // The supported path for launching the built-in SideStore is selected=builtinSideStore.
-    BOOL legacySideStoreRequest = [lcUserDefaults boolForKey:@"LCOpenSideStore"];
-    if(legacySideStoreRequest) {
+    // Recovery: LCOpenSideStore is a legacy sticky flag. An older floating
+    // tweak could leave it enabled forever, trapping the entire host in
+    // SideStore on every launch. Clear it unconditionally and never use it
+    // to select the startup target. Official SideStore launches are represented
+    // by the one-shot selected=builtinSideStore token instead.
+    if([lcUserDefaults boolForKey:@"LCOpenSideStore"]) {
         [lcUserDefaults setBool:NO forKey:@"LCOpenSideStore"];
-        NSLog(@"[LCBootstrap] Cleared legacy one-shot LCOpenSideStore request");
+        NSLog(@"[LCBootstrap] Recovered from sticky LCOpenSideStore");
     }
-    if(legacySideStoreRequest || [selectedApp isEqualToString:@"builtinSideStore"]) {
-        if(sideStoreExist) {
-            isSideStore = true;
-        }
+    if(sideStoreExist && [selectedApp isEqualToString:@"builtinSideStore"]) {
+        isSideStore = true;
     }
     
     if(selectedApp && !isSideStore && !selectedContainer) {
