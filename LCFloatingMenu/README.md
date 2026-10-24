@@ -29,13 +29,13 @@ Standalone iOS 16+ arm64 tweak for classic, single-task fullscreen Guest Apps on
 - Diagnostics include bundle identifiers and predefined event categories, but do not intentionally log credentials, app content, certificates or signing keys.
 - Icon display uses real LC-provided icon cache first, with CFBundleIcons and an unbranded placeholder as fallbacks.
 - The look is an iOS Liquid Glass-inspired UIKit approximation, not the proprietary system material API.
-- The settings screen is embedded in the guest overlay, not the LiveContainer host settings navigation.
+- Settings uses a dedicated, opaque, key `UIWindow` with `UINavigationController` and native inset-grouped category navigation; it does **not** create a separate native LC host settings tab, and restores the Guest key window when closed.
 - GitHub Actions validates arm64 compilation, not runtime behavior. Import and sign with LC, then test on real hardware; a successful CI build does **not** guarantee that every guest is compatible.
 
 ## Gemini-design UI overhaul
 
 - Edge microbead: default 12 x 38 pt, snap-to-edge, enlarged touch target, 3-second ultra-thin idle fade and long-press shortcuts.
-- Compact app panel: approximately 304 x 440 pt, Favorites grid (up to four), scrollable Guest list and small circular toolbar.
+- Normal mode: approximately 304pt-wide app switcher with real-icon Favorites, scrollable Guest list and a fixed icon footer. Compact mode: a **single 146pt-wide vertical app icon shelf**, one full-width 62pt row per App, a fixed 2x2 icon footer and no titles or hints. Size scales from 75% to 120%, respecting device bounds.
 - Genuine LC app icons: first LCAppIconLight.png / LCAppIconDark.png in Guest bundle; fallback to CFBundleIcons assets or neutral icon (never fake initials).
 - Settings center: preview, auto fade, haptics, DIY workshop, manager, per-App controls and diagnostics export.
 - DIY workshop: Liquid / Minimal / Deep Crystal / Aurora themes, visual preview, opacity, bead size, color tint and icon theme controls.
@@ -44,10 +44,10 @@ Standalone iOS 16+ arm64 tweak for classic, single-task fullscreen Guest Apps on
 - Compatibility: UIKit dynamically creates UIGlassEffect when supported (iOS 26+); older versions use UIBlurEffect, and the launch path stays classic single-task.
 - Notes: source artwork is a visual reference, not a guarantee of pixel-identical rendering on all iOS releases.
 
-## Single-page UI and built-in SideStore
+## Independent categorized settings and built-in SideStore
 
 - The app switcher fixes the Favorites header and icon-only footer in place; only the middle Guest app list scrolls. There is no standalone menu-management row or instructional subtitle in the switcher.
-- All settings are on one vertically scrollable sheet: basics, theme/DIY, per-App overrides, Favorites and long-press reordering, then diagnostics. Changes preserve settings scroll position.
+- The gear opens a separate full-screen **key** settings window, not another transparent floating sheet. A native grouped home organizes **Display & Appearance / Interaction & Switching / App Management / Diagnostics & Logs**. Each category has its own navigable detail page and returns to the Guest without relaunching.
 - The built-in SideStore appears alongside ordinary LC Guest Apps when the LC+SS host contains a valid SideStoreApp.framework. The entry uses the LC internal SideStore launch flag, not a synthetic Guest bundle ID or external URL.
 - SideStore switches close the current Guest and restart LC in classic single-task mode. If the built-in framework or LC launcher cannot be found, the entry fails closed with a diagnostic event.
 - Action icons remain accessible through VoiceOver accessibility labels even though their visible text labels were removed.
