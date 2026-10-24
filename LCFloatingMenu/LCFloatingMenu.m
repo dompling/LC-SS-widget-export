@@ -529,22 +529,42 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return box;
 }
 - (UIView *)appRow:(NSDictionary *)app {
-    CGFloat w=275,h=52;
-    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,w,h)];
-    row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.16];
+    // Standard mode extends the drawer without changing its optical material.
+    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,60)];
+    row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:
+                         FMSystemDark()?.12:.19];
     row.layer.cornerRadius=17;
-    UIView *icon=[self iconViewForApp:app size:37];
-    icon.frame=CGRectMake(7,7.5,37,37);
-    icon.userInteractionEnabled=NO;[row addSubview:icon];
-    UILabel *name=[self label:app[@"title"] size:14 weight:UIFontWeightSemibold];
-    name.frame=CGRectMake(54,4,190,44);name.lineBreakMode=NSLineBreakByTruncatingTail;
-    [row addSubview:name];
-
-    UIImageView *chevron=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
-    chevron.tintColor=UIColor.tertiaryLabelColor;
-    chevron.frame=CGRectMake(251,21,8,11);[row addSubview:chevron];
+    row.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
+                           FMSystemDark()?.13:.53].CGColor;
+    row.layer.borderWidth=.45;
+    UIView *icon=[self iconViewForApp:app size:46];
+    icon.frame=CGRectMake(8,7,46,46);icon.userInteractionEnabled=NO;
+    [row addSubview:icon];
+    UILabel *title=[self label:app[@"title"] size:15 weight:UIFontWeightMedium];
+    title.translatesAutoresizingMaskIntoConstraints=NO;
+    title.numberOfLines=1;
+    title.lineBreakMode=NSLineBreakByTruncatingTail;
+    [row addSubview:title];
+    UIImageView *arrow=[[UIImageView alloc] initWithImage:
+                        [UIImage systemImageNamed:@"chevron.right"]];
+    arrow.translatesAutoresizingMaskIntoConstraints=NO;
+    arrow.tintColor=UIColor.secondaryLabelColor;
+    arrow.contentMode=UIViewContentModeScaleAspectFit;
+    [row addSubview:arrow];
+    [NSLayoutConstraint activateConstraints:@[
+        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:10],
+        [title.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-9],
+        [arrow.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
+        [arrow.widthAnchor constraintEqualToConstant:9],
+        [arrow.heightAnchor constraintEqualToConstant:13]
+    ]];
+    row.accessibilityLabel=app[@"title"];
+    row.accessibilityTraits=UIAccessibilityTraitButton;
     objc_setAssociatedObject(row,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [row addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
+    [row addTarget:self action:@selector(switchFromRow:)
+        forControlEvents:UIControlEventTouchUpInside];
     return row;
 }
 - (UIStackView *)stack {
@@ -735,34 +755,41 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)appPage:(UIStackView *)stack {
     NSArray<NSDictionary*> *apps=[self visibleApps];
     if(BoolPref(@"compactMode",NO)) {
-        // A true single-file vertical icon shelf, not a four-column grid.
-        // Each app is one full-width, comfortably tappable row.
         for(NSDictionary *app in apps) {
-            UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,120,62)];
-            tile.layer.cornerRadius=17;
-            tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.22];
-            UIView *icon=[self iconViewForApp:app size:46];
+            // 63pt full-width hit area; the visible icon is 50pt square.
+            // Minimum 75% panel scale still yields a 47.25pt tap target.
+            UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,88,63)];
+            row.backgroundColor=UIColor.clearColor;
+            row.accessibilityLabel=app[@"title"];
+            row.accessibilityTraits=UIAccessibilityTraitButton;
+            UIView *icon=[self iconViewForApp:app size:50];
             icon.translatesAutoresizingMaskIntoConstraints=NO;
             icon.userInteractionEnabled=NO;
-            [tile addSubview:icon];
+            icon.layer.borderWidth=.55;
+            icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
+                                    FMSystemDark()?.54:.82].CGColor;
+            icon.layer.shadowColor=UIColor.blackColor.CGColor;
+            icon.layer.shadowOpacity=FMSystemDark()?.22:.13;
+            icon.layer.shadowRadius=4;
+            [row addSubview:icon];
             [NSLayoutConstraint activateConstraints:@[
-                [icon.centerXAnchor constraintEqualToAnchor:tile.centerXAnchor],
-                [icon.centerYAnchor constraintEqualToAnchor:tile.centerYAnchor],
-                [icon.widthAnchor constraintEqualToConstant:46],
-                [icon.heightAnchor constraintEqualToConstant:46]
+                [icon.centerXAnchor constraintEqualToAnchor:row.centerXAnchor],
+                [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+                [icon.widthAnchor constraintEqualToConstant:50],
+                [icon.heightAnchor constraintEqualToConstant:50]
             ]];
-            tile.accessibilityLabel=app[@"title"];
-            tile.accessibilityTraits=UIAccessibilityTraitButton;
-            objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
-            [self addRow:tile height:62 to:stack];
+            objc_setAssociatedObject(row,@selector(switchFromRow:),
+                                     app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [row addTarget:self action:@selector(switchFromRow:)
+                forControlEvents:UIControlEventTouchUpInside];
+            [self addRow:row height:63 to:stack];
         }
     } else {
         for(NSDictionary *app in apps)
-            [self addRow:[self appRow:app] height:52 to:stack];
+            [self addRow:[self appRow:app] height:60 to:stack];
     }
     if(!apps.count) {
-        UILabel *empty=[self label:@"暂无可切换应用" size:13 weight:UIFontWeightMedium];
+        UILabel *empty=[self label:@"暂无应用" size:13 weight:UIFontWeightMedium];
         empty.textAlignment=NSTextAlignmentCenter;
         empty.textColor=UIColor.secondaryLabelColor;
         [self addRow:empty height:68 to:stack];
