@@ -232,6 +232,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) UIView *panel;
 @property(nonatomic,strong) UIView *dismissLayer;
 @property(nonatomic,strong) NSMutableArray<UIView*> *manageRows;
+@property(nonatomic,weak) UIScrollView *settingsScroll;
+@property(nonatomic,assign) CGFloat settingsScrollOffset;
 @property(nonatomic,assign) CGFloat orbY;
 @property(nonatomic,assign) BOOL left;
 @property(nonatomic,assign) BOOL isOpen;
@@ -396,6 +398,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)draw {
     if(!self.window) return;
+    if([self.page isEqualToString:@"settings"] && self.settingsScroll)
+        self.settingsScrollOffset=MAX(0,self.settingsScroll.contentOffset.y);
     [self removePanel];
     [self drawOrb];
     if(self.isOpen) {
@@ -552,11 +556,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
         [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
     ]];
-    if([self.page isEqualToString:@"apps"]) [self appPage:stack];
-    else if([self.page isEqualToString:@"settings"]) [self settingsPage:stack];
-    else if([self.page isEqualToString:@"diy"]) [self diyPage:stack];
-    else if([self.page isEqualToString:@"manage"]) [self managePage:stack];
-    else [self perAppPage:stack];
+    if(small) [self appPage:stack];
+    else {
+        self.settingsScroll=scroll;
+        [self settingsPage:stack];
+        CGFloat offset=self.settingsScrollOffset;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if(self.settingsScroll != scroll || !scroll.superview) return;
+            [scroll layoutIfNeeded];
+            CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height);
+            [scroll setContentOffset:CGPointMake(0,MIN(offset,maxY)) animated:NO];
+        });
+    }
     [self.window.rootViewController.view addSubview:shadow];
     self.panel=shadow;
     shadow.alpha=0;
@@ -669,10 +680,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [footer addSubview:button];
     }
 }
-- (void)openSettings {self.page=@"settings";[self draw];}
-- (void)openDIY {self.page=@"diy";[self draw];}
-- (void)openPerApp {self.page=@"perapp";[self draw];}
-- (void)openManage {self.page=@"manage";[self draw];}
+- (void)openSettings {self.settingsScrollOffset=0;self.page=@"settings";[self draw];}
+- (void)openDIY {self.page=@"settings";[self draw];}
+- (void)openPerApp {self.page=@"settings";[self draw];}
+- (void)openManage {self.page=@"settings";[self draw];}
 - (void)backToSettings {self.page=@"settings";[self draw];}
 - (void)backToApps {self.page=@"apps";[self draw];}
 - (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
@@ -706,32 +717,20 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)settingsPage:(UIStackView*)s {
-    [self addRow:[self rowForTitle:@"‹ 返回菜单" icon:@"chevron.left" height:40 action:@selector(backToApps)] height:40 to:s];
-    [self header:s title:@"设置中心" sub:@"LCFloatingMenu · Liquid Glass"];
-    UIView *preview=[self glass:CGRectMake(0,0,300,91) radius:20 strong:NO];
-    UIImageView *symbol=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"circle.grid.2x2.fill"]];
-    symbol.tintColor=FMAccent();symbol.frame=CGRectMake(18,23,35,35);
-    [preview addSubview:symbol];
-    UILabel *caption=[self label:@"实时预览" size:15 weight:UIFontWeightSemibold];
-    caption.frame=CGRectMake(68,14,178,30);[preview addSubview:caption];
-    UILabel *hint=[self label:@"边缘微珠 · 弹性玻璃菜单" size:11 weight:UIFontWeightRegular];
-    hint.textColor=UIColor.secondaryLabelColor;hint.frame=CGRectMake(68,46,220,20);
-    [preview addSubview:hint];
-    [self addRow:preview height:91 to:s];
-    [self spacer:s size:8];
-    [self section:@"基础交互" sub:@"日常控制与防误触" in:s];
-    [self settingSwitch:s title:@"静止后自动淡化" key:@"autoFade" defaultValue:YES tag:6];
+    [self addRow:[self rowForTitle:@"返回应用" icon:@"chevron.left" height:40 action:@selector(backToApps)] height:40 to:s];
+    [self header:s title:@"悬浮菜单设置" sub:@"外观 · 交互 · 应用 · 诊断"];
+    [self section:@"基础交互" sub:nil in:s];
+    [self settingSwitch:s title:@"静止自动淡化" key:@"autoFade" defaultValue:YES tag:6];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
-    [self spacer:s size:4];
-    [self section:@"外观与布局" sub:nil in:s];
-    [self addRow:[self rowForTitle:@"DIY 视觉工坊" icon:@"paintpalette.fill" height:46 action:@selector(openDIY)] height:46 to:s];
-    [self addRow:[self rowForTitle:@"菜单管理与排序" icon:@"line.3.horizontal.decrease" height:46 action:@selector(openManage)] height:46 to:s];
-    [self addRow:[self rowForTitle:@"每 App 独立设置" icon:@"square.on.square" height:46 action:@selector(openPerApp)] height:46 to:s];
-    [self spacer:s size:4];
-    [self section:@"安全单任务切换" sub:@"切换时会重启目标 App，不保留内存状态" in:s];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
-    [self spacer:s size:5];
-    [self section:@"诊断与支持" sub:nil in:s];
+    [self spacer:s size:10];
+    [self diyPage:s];
+    [self spacer:s size:10];
+    [self perAppPage:s];
+    [self spacer:s size:10];
+    [self managePage:s];
+    [self spacer:s size:10];
+    [self section:@"诊断" sub:nil in:s];
     [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:44 action:@selector(exportLogs)] height:44 to:s];
     [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:44 action:@selector(clearLogs)] height:44 to:s];
 }
@@ -743,8 +742,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self draw];
 }
 - (void)diyPage:(UIStackView*)s {
-    [self addRow:[self rowForTitle:@"‹ 返回设置" icon:@"chevron.left" height:39 action:@selector(backToSettings)] height:39 to:s];
-    [self header:s title:@"DIY 视觉工坊" sub:@"所见即所得 · 个性化悬浮玻璃"];
+    [self section:@"外观与主题" sub:nil in:s];
     UIView *preview=[[UIView alloc] initWithFrame:CGRectMake(0,0,300,120)];
     preview.layer.cornerRadius=20;preview.clipsToBounds=YES;
     CAGradientLayer *gradient=[CAGradientLayer layer];gradient.frame=preview.bounds;
@@ -874,9 +872,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)managePage:(UIStackView*)s {
-    [self addRow:[self rowForTitle:@"‹ 返回菜单" icon:@"chevron.left" height:39 action:@selector(backToApps)] height:39 to:s];
-    [self header:s title:@"菜单管理与排序" sub:@"固定至多 4 个常用应用 · 长按右侧手柄拖动"];
-    [self section:@"应用列表" sub:@"星标固定常用区；拖动右侧手柄重新排序" in:s];
+    [self section:@"常用应用与排序" sub:nil in:s];
     self.manageRows=[NSMutableArray array];
     for(NSDictionary *app in [self visibleApps]) {
         UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,300,58)];
@@ -913,9 +909,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)perAppPage:(UIStackView*)s {
-    [self addRow:[self rowForTitle:@"‹ 返回设置" icon:@"chevron.left" height:39 action:@selector(backToSettings)] height:39 to:s];
-    [self header:s title:@"每 App 独立设置" sub:GuestID()];
-    [self section:@"专属覆盖" sub:@"仅影响当前 Guest；关闭后沿用全局选项" in:s];
+    [self section:@"当前 App 独立设置" sub:GuestID() in:s];
     [self settingSwitch:s title:@"启用独立设置" key:[@"override." stringByAppendingString:GuestID()] defaultValue:NO tag:7];
     [self spacer:s size:4];
     [self section:@"外观与位置" sub:nil in:s];
@@ -925,9 +919,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self spacer:s size:4];
     [self section:@"单任务切换行为" sub:nil in:s];
     [self settingSwitch:s title:@"当前 App 切换前确认" key:AppPref() defaultValue:BoolPref(@"confirm",YES) tag:4];
-    UILabel *note=[self label:@"修改后即时应用；个别触控敏感 App 可以开启双击以降低误触。关闭独立设置后继承全局配置。" size:11 weight:UIFontWeightRegular];
-    note.textColor=UIColor.secondaryLabelColor;
-    [s addArrangedSubview:note];
+
 }
 - (void)switchChanged:(UISwitch*)sw {
     NSString *key=nil;
