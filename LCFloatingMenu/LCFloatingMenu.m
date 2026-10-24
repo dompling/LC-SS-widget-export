@@ -361,7 +361,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(@available(iOS 26.0,*)) {
         // Use the SDK-native UIKit API instead of a dynamically allocated
         // effect with simulated gradient layers obscuring its output.
-        UIGlassEffect *glassEffect=[[UIGlassEffect alloc] init];
+        UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
         glassEffect.interactive=!strong;
         CGFloat tint=Clamp(FloatPref(@"glassTint",.08),0,.30);
         glassEffect.tintColor=[FMAccent() colorWithAlphaComponent:tint];
@@ -591,9 +591,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat available=bounds.size.height-safeTop-safeBottom;
     BOOL small=[self.page isEqualToString:@"apps"];
     BOOL compact=BoolPref(@"compactMode",NO);
-    // 146 pt keeps one vertical icon column while 75% scale preserves
-    // at least 44pt hit targets in the compact 2x2 footer.
-    CGFloat pw=MIN(small?(compact?90:310):346,bounds.size.width-24);
+    // Compact drawer is 76pt before scaling; only the icon column scrolls.
+    // Its invisible row hit target remains >= 44pt even at 75% scale.
+    CGFloat pw=MIN(small?(compact?76:310):346,bounds.size.width-24);
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
