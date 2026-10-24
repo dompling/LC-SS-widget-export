@@ -3,7 +3,7 @@ name: Build LCFloatingMenu dylib
 on:
   workflow_dispatch:
   push:
-    branches: [lcss-original]
+    branches: [lcss-original, lcfloatingmenu-ci-fix]
     paths:
       - 'LCFloatingMenu/**'
       - '.github/workflows/lc-floating-menu.yml'
