@@ -43,3 +43,11 @@ Standalone iOS 16+ arm64 tweak for classic, single-task fullscreen Guest Apps on
 - Per-App override: explicit inheritance switch, collapsed opacity, double-tap-to-open and safe extra-thin edge display.
 - Compatibility: UIKit dynamically creates UIGlassEffect when supported (iOS 26+); older versions use UIBlurEffect, and the launch path stays classic single-task.
 - Notes: source artwork is a visual reference, not a guarantee of pixel-identical rendering on all iOS releases.
+
+## Single-page UI and built-in SideStore
+
+- The app switcher fixes the Favorites header and icon-only footer in place; only the middle Guest app list scrolls. There is no standalone menu-management row or instructional subtitle in the switcher.
+- All settings are on one vertically scrollable sheet: basics, theme/DIY, per-App overrides, Favorites and long-press reordering, then diagnostics. Changes preserve settings scroll position.
+- The built-in SideStore appears alongside ordinary LC Guest Apps when the LC+SS host contains a valid SideStoreApp.framework. The entry uses the LC internal SideStore launch flag, not a synthetic Guest bundle ID or external URL.
+- SideStore switches close the current Guest and restart LC in classic single-task mode. If the built-in framework or LC launcher cannot be found, the entry fails closed with a diagnostic event.
+- Action icons remain accessible through VoiceOver accessibility labels even though their visible text labels were removed.
