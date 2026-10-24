@@ -28,14 +28,14 @@ Standalone iOS 16+ arm64 tweak for classic, single-task fullscreen Guest Apps on
 - **Warning:** Fast switching does not rerun the full LC signApp() path. When signing changes or an app is incompatible, return to LC and launch through the normal app list. Signing/launching cannot be guaranteed by the tweak.
 - Diagnostics include bundle identifiers and predefined event categories, but do not intentionally log credentials, app content, certificates or signing keys.
 - Icon display uses real LC-provided icon cache first, with CFBundleIcons and an unbranded placeholder as fallbacks.
-- The look is an iOS Liquid Glass-inspired UIKit approximation, not the proprietary system material API.
+- UIKit uses public `UIGlassEffect` dynamically where available and system blur on older iOS. An adaptive tint, edge stroke and a static gradient simulate the optical reference without continuously running GPU-intensive animations.
 - Settings uses a dedicated, opaque, key `UIWindow` with `UINavigationController` and native inset-grouped category navigation; it does **not** create a separate native LC host settings tab, and restores the Guest key window when closed.
 - GitHub Actions validates arm64 compilation, not runtime behavior. Import and sign with LC, then test on real hardware; a successful CI build does **not** guarantee that every guest is compatible.
 
 ## Gemini-design UI overhaul
 
 - Edge microbead: default 12 x 38 pt, snap-to-edge, enlarged touch target, 3-second ultra-thin idle fade and long-press shortcuts.
-- Normal mode: approximately 304pt-wide app switcher with real-icon Favorites, scrollable Guest list and a fixed icon footer. Compact mode: a **single 146pt-wide vertical app icon shelf**, one full-width 62pt row per App, a fixed 2x2 icon footer and no titles or hints. Size scales from 75% to 120%, respecting device bounds.
+- **Final drawer design:** Compact mode is one continuous ~108pt-wide Liquid Glass side drawer. Real Guest app icons (50pt) form a single centered vertical row, separated from a **fixed, vertical** action area by one fine hairline. Home, Settings, Collapse use matching 50pt glass icon tiles; Restart is optional. Only the app icon region scrolls. Standard mode uses the **same optical glass, cool edge highlight and matching tile rhythm** in a ~310pt-wide list, with app labels and a compact horizontal icon footer. Both retain a 75%-120% size control and screen bounds protection.
 - Genuine LC app icons: first LCAppIconLight.png / LCAppIconDark.png in Guest bundle; fallback to CFBundleIcons assets or neutral icon (never fake initials).
 - Settings center: preview, auto fade, haptics, DIY workshop, manager, per-App controls and diagnostics export.
 - DIY workshop: Liquid / Minimal / Deep Crystal / Aurora themes, visual preview, opacity, bead size, color tint and icon theme controls.
