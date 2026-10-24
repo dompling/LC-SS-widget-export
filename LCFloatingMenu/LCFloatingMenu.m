@@ -147,6 +147,23 @@ static UIColor *TintFor(NSString *s) {
     return colors[(NSUInteger)(s.hash & 0x7fffffff)%colors.count];
 }
 
+// Read the screen environment, never the Guest view/window trait.  Some Guest
+// apps force UIUserInterfaceStyle in their Info.plist or UIWindow.
+static UIUserInterfaceStyle FMSystemAppearance(void) {
+    UIUserInterfaceStyle style=UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+    if(style==UIUserInterfaceStyleLight || style==UIUserInterfaceStyleDark) return style;
+    // Fallback: scene traits belong to the display, unlike a Guest view override.
+    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if([scene isKindOfClass:UIWindowScene.class]) {
+            style=scene.traitCollection.userInterfaceStyle;
+            if(style!=UIUserInterfaceStyleUnspecified) return style;
+        }
+    }
+    return UIUserInterfaceStyleLight;
+}
+static BOOL FMSystemDark(void) {
+    return FMSystemAppearance()==UIUserInterfaceStyleDark;
+}
 static UIColor *FMAccent(void) {
     switch ([HostDefaults() integerForKey:Pref(@"theme")]) {
         case 1: return RGBA(.80,.84,.91,1); // minimalist
@@ -233,6 +250,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) UIView *dismissLayer;
 @property(nonatomic,strong) NSMutableArray<UIView*> *manageRows;
 @property(nonatomic,weak) UIScrollView *settingsScroll;
+@property(nonatomic,strong) UIView *settingsScreen;
+@property(nonatomic,assign) UIUserInterfaceStyle lastSystemStyle;
 @property(nonatomic,assign) CGFloat settingsScrollOffset;
 @property(nonatomic,assign) CGFloat orbY;
 @property(nonatomic,assign) BOOL left;
@@ -242,6 +261,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 + (instancetype)shared;
 - (void)installIfPossible;
 - (void)draw;
+- (void)renderSettingsScreen;
+- (void)refreshSystemAppearance;
 @end
 @implementation FMManager
 + (instancetype)shared {
@@ -269,20 +290,26 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,sideSel) ||
        ((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,procSel)) return;
     if(self.window && self.window.windowScene != scene) {
+        [self.settingsScreen removeFromSuperview]; self.settingsScreen=nil;
+        self.settingsScroll=nil;
         self.window.hidden=YES; self.window=nil; self.orb=nil; self.panel=nil;
     }
     if(self.window) {
         CGRect nextFrame=scene.coordinateSpace.bounds;
         if(!CGRectEqualToRect(self.window.frame,nextFrame)) {
             self.window.frame=nextFrame;
-            [self draw];
+            if(self.settingsScreen) [self renderSettingsScreen];
+            else [self draw];
         }
+        [self refreshSystemAppearance];
         return;
     }
     self.window=[[FMGlassWindow alloc] initWithWindowScene:scene];
     self.window.frame=self.window.windowScene.coordinateSpace.bounds;
     self.window.backgroundColor=UIColor.clearColor;
     self.window.windowLevel=UIWindowLevelNormal+75;
+    self.lastSystemStyle=FMSystemAppearance();
+    self.window.overrideUserInterfaceStyle=self.lastSystemStyle;
     UIViewController *vc=[UIViewController new];
     vc.view.backgroundColor=UIColor.clearColor;
     vc.view.userInteractionEnabled=YES;
@@ -294,6 +321,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.apps=InstalledApps();
     FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu",(unsigned long)self.apps.count]);
     [self draw];
+    [self scheduleAppearanceCheck];
 }
 - (CGFloat)orbWidth { return Clamp(FloatPref(@"orbWidth",12),9,28); }
 - (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:Clamp(FloatPref(@"orbHeight",38),26,48); }
@@ -318,12 +346,22 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
     }
     if(!effect) {
-        effect=[UIBlurEffect effectWithStyle:strong?UIBlurEffectStyleSystemThinMaterial:UIBlurEffectStyleSystemUltraThinMaterial];
+        BOOL dark=FMSystemDark();
+        UIBlurEffectStyle style=strong?(dark?UIBlurEffectStyleSystemMaterialDark:UIBlurEffectStyleSystemMaterialLight)
+                                        :(dark?UIBlurEffectStyleSystemThinMaterialDark:UIBlurEffectStyleSystemThinMaterialLight);
+        effect=[UIBlurEffect effectWithStyle:style];
     }
     UIVisualEffectView *blur=[[UIVisualEffectView alloc] initWithEffect:effect];
     blur.frame=v.bounds;
     blur.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [v addSubview:blur];
+    // Legibility on Guest apps that disable Glass, force dark/light, or render
+    // via Metal: add a system-color scrim independent of the Guest backdrop.
+    UIView *base=[[UIView alloc] initWithFrame:v.bounds];
+    base.backgroundColor=[UIColor.systemBackgroundColor colorWithAlphaComponent:
+                          strong?(FMSystemDark()?.56:.69):(FMSystemDark()?.16:.21)];
+    base.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    [v addSubview:base];
     CGFloat alpha=Clamp(FloatPref(@"glassTint",strong?.08:.04),0,.30);
     UIView *wash=[[UIView alloc] initWithFrame:v.bounds];
     UIColor *t=FMAccent();
@@ -331,7 +369,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     wash.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [v addSubview:wash];
     v.layer.borderWidth=.65;
-    v.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.48].CGColor;
+    v.layer.borderColor=[FMSystemDark()?[UIColor.whiteColor colorWithAlphaComponent:.28]:
+        [UIColor.blackColor colorWithAlphaComponent:.08] CGColor];
     return v;
 }
 - (void)removePanel {
