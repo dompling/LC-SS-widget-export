@@ -152,13 +152,8 @@ static UIColor *TintFor(NSString *s) {
 static UIUserInterfaceStyle FMSystemAppearance(void) {
     UIUserInterfaceStyle style=UIScreen.mainScreen.traitCollection.userInterfaceStyle;
     if(style==UIUserInterfaceStyleLight || style==UIUserInterfaceStyleDark) return style;
-    // Fallback: scene traits belong to the display, unlike a Guest view override.
-    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if([scene isKindOfClass:UIWindowScene.class]) {
-            style=scene.traitCollection.userInterfaceStyle;
-            if(style!=UIUserInterfaceStyleUnspecified) return style;
-        }
-    }
+    // Do not fall back to UIWindowScene or Guest view traits; those can be
+    // overridden by the running Guest and are not reliable system preferences.
     return UIUserInterfaceStyleLight;
 }
 static BOOL FMSystemDark(void) {
@@ -555,20 +550,30 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat available=bounds.size.height-safeTop-safeBottom;
     BOOL small=[self.page isEqualToString:@"apps"];
     CGFloat pw=MIN(small?304:346,bounds.size.width-28);
-    CGFloat target=small?MIN(405,199+65*MIN(self.apps.count,5)):610;
+    BOOL compact=BoolPref(@"compactMode",NO);
+    CGFloat target=small?(compact?MIN(385,177+64*MIN(5,(self.apps.count+3)/4)):
+        MIN(405,199+65*MIN(self.apps.count,5))):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available,target);
-    CGFloat x=self.left?15:bounds.size.width-pw-15;
-    CGFloat y=small?Clamp(CGRectGetMidY(self.orb.frame)-ph*.48,
-                          safeTop,bounds.size.height-safeBottom-ph)
-                   :safeTop+(available-ph)*.5;
+    CGFloat desiredScale=small?Clamp(FloatPref(@"panelScale",1.0),.75,1.20):1.0;
+    // Cap the visual bounds: transforms also affect UIKit hit testing.
+    CGFloat actualScale=MIN(desiredScale,MIN((bounds.size.width-20)/pw,
+                                               available/MAX(1,ph)));
+    actualScale=MAX(.60,actualScale);
+    CGFloat visualW=pw*actualScale, visualH=ph*actualScale;
+    CGFloat centerX=self.left?(10+visualW*.5):(bounds.size.width-10-visualW*.5);
+    CGFloat topY=small?Clamp(CGRectGetMidY(self.orb.frame)-visualH*.48,
+                          safeTop,bounds.size.height-safeBottom-visualH)
+                   :safeTop+(available-visualH)*.5;
+    CGFloat centerY=topY+visualH*.5;
     UIControl *under=[[UIControl alloc] initWithFrame:bounds];
     under.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:.06];
     [under addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
     [self.window.rootViewController.view addSubview:under];
     self.dismissLayer=under;
-    UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(x,y,pw,ph)];
+    UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(0,0,pw,ph)];
+    shadow.center=CGPointMake(centerX,centerY);
     shadow.layer.shadowColor=UIColor.blackColor.CGColor;
     shadow.layer.shadowOpacity=.15;shadow.layer.shadowRadius=24;
     shadow.layer.shadowOffset=CGSizeMake(0,9);
@@ -583,7 +588,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         [self buildAppHeader:glass];
-        CGFloat top=80, bottom=76;
+        CGFloat top=compact?59:80, bottom=76;
         scroll.frame=CGRectMake(14,top,pw-28,MAX(20,ph-top-bottom));
         [self buildAppFooter:glass];
     }
@@ -612,12 +617,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self.window.rootViewController.view addSubview:shadow];
     self.panel=shadow;
     shadow.alpha=0;
-    shadow.transform=CGAffineTransformMakeScale(.965,.96);
+    shadow.transform=CGAffineTransformMakeScale(actualScale*.965,actualScale*.96);
     NSTimeInterval duration=UIAccessibilityIsReduceMotionEnabled()?.10:.29;
     [UIView animateWithDuration:duration delay:0
         usingSpringWithDamping:.88 initialSpringVelocity:0
         options:UIViewAnimationOptionCurveEaseOut animations:^{
-            shadow.alpha=1;shadow.transform=CGAffineTransformIdentity;
+            shadow.alpha=1;
+            shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
         } completion:nil];
 }
 - (void)header:(UIStackView *)stack title:(NSString *)title sub:(NSString *)sub {
@@ -650,9 +656,43 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return [v isKindOfClass:NSArray.class]?v:@[];
 }
 - (void)appPage:(UIStackView *)stack {
-    NSArray *apps=[self visibleApps];
-    for(NSDictionary *app in apps)
-        [self addRow:[self appRow:app] height:52 to:stack];
+    NSArray<NSDictionary*> *apps=[self visibleApps];
+    if(BoolPref(@"compactMode",NO)) {
+        UIStackView *row=nil;
+        for(NSUInteger i=0;i<apps.count;i++) {
+            if(i%4==0) {
+                row=[UIStackView new];
+                row.axis=UILayoutConstraintAxisHorizontal;
+                row.distribution=UIStackViewDistributionFillEqually;
+                row.alignment=UIStackViewAlignmentFill;
+                row.spacing=6;
+                [self addRow:row height:62 to:stack];
+            }
+            NSDictionary *app=apps[i];
+            UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,61,62)];
+            tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.16];
+            tile.layer.cornerRadius=15;
+            UIView *icon=[self iconViewForApp:app size:43];
+            icon.translatesAutoresizingMaskIntoConstraints=NO;
+            icon.userInteractionEnabled=NO;
+            [tile addSubview:icon];
+            [NSLayoutConstraint activateConstraints:@[
+                [icon.centerXAnchor constraintEqualToAnchor:tile.centerXAnchor],
+                [icon.centerYAnchor constraintEqualToAnchor:tile.centerYAnchor],
+                [icon.widthAnchor constraintEqualToConstant:43],
+                [icon.heightAnchor constraintEqualToConstant:43]
+            ]];
+            tile.accessibilityLabel=app[@"title"];
+            tile.accessibilityTraits=UIAccessibilityTraitButton;
+            objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
+            [row addArrangedSubview:tile];
+        }
+        if(row) while(row.arrangedSubviews.count<4) [row addArrangedSubview:[UIView new]];
+    } else {
+        for(NSDictionary *app in apps)
+            [self addRow:[self appRow:app] height:52 to:stack];
+    }
     if(!apps.count) {
         UILabel *empty=[self label:@"暂无可切换应用" size:13 weight:UIFontWeightMedium];
         empty.textAlignment=NSTextAlignmentCenter;
@@ -675,16 +715,22 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat gap=6,cell=(inner-gap*3)/4;
     for(NSUInteger i=0;i<pinned.count;i++) {
         NSDictionary *app=pinned[i];
-        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(14+i*(cell+gap),8,cell,65)];
+        BOOL compact=BoolPref(@"compactMode",NO);
+        UIControl *tile=[[UIControl alloc] initWithFrame:
+            CGRectMake(14+i*(cell+gap),compact?5:8,cell,compact?48:65)];
         tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.18];
         tile.layer.cornerRadius=14;
-        UIView *icon=[self iconViewForApp:app size:36];
-        icon.frame=CGRectMake((cell-36)*.5,4,36,36);icon.userInteractionEnabled=NO;
+        CGFloat iconSize=compact?40:36;
+        UIView *icon=[self iconViewForApp:app size:iconSize];
+        icon.frame=CGRectMake((cell-iconSize)*.5,compact?4:4,iconSize,iconSize);
+        icon.userInteractionEnabled=NO;
         [tile addSubview:icon];
-        UILabel *name=[self label:app[@"title"] size:10 weight:UIFontWeightMedium];
-        name.frame=CGRectMake(1,44,cell-2,16);name.textAlignment=NSTextAlignmentCenter;
-        name.lineBreakMode=NSLineBreakByTruncatingTail;
-        [tile addSubview:name];
+        if(!compact) {
+            UILabel *name=[self label:app[@"title"] size:10 weight:UIFontWeightMedium];
+            name.frame=CGRectMake(1,44,cell-2,16);name.textAlignment=NSTextAlignmentCenter;
+            name.lineBreakMode=NSLineBreakByTruncatingTail;
+            [tile addSubview:name];
+        }
         objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
         tile.accessibilityLabel=app[@"title"];[glass addSubview:tile];
@@ -860,6 +906,29 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     [self addRow:slider height:28 to:s];
 }
+- (void)settingScaleControl:(UIStackView *)stack {
+    UIStackView *heading=[UIStackView new];
+    heading.axis=UILayoutConstraintAxisHorizontal;
+    heading.distribution=UIStackViewDistributionFill;
+    UILabel *name=[self label:@"弹出菜单缩放" size:14 weight:UIFontWeightMedium];
+    UILabel *percent=[self label:
+        [NSString stringWithFormat:@"%.0f%%",100*Clamp(FloatPref(@"panelScale",1.0),.75,1.20)]
+        size:13 weight:UIFontWeightSemibold];
+    percent.textColor=UIColor.secondaryLabelColor;
+    percent.textAlignment=NSTextAlignmentRight;
+    [heading addArrangedSubview:name];
+    [heading addArrangedSubview:percent];
+    [percent.widthAnchor constraintEqualToConstant:65].active=YES;
+    [self addRow:heading height:29 to:stack];
+    UISlider *slider=[UISlider new];
+    slider.minimumValue=.75;slider.maximumValue=1.20;
+    slider.value=Clamp(FloatPref(@"panelScale",1.0),.75,1.20);
+    slider.tag=14;slider.tintColor=FMAccent();
+    slider.accessibilityLabel=@"弹出菜单缩放";
+    objc_setAssociatedObject(slider,@selector(sliderChanged:),percent,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    [self addRow:slider height:34 to:stack];
+}
 - (void)section:(NSString *)title sub:(NSString *)sub in:(UIStackView *)stack {
     UILabel *heading=[self label:title size:14 weight:UIFontWeightSemibold];
     [stack addArrangedSubview:heading];
@@ -870,6 +939,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)settingsPage:(UIStackView*)s {
+    [self section:@"显示布局" sub:nil in:s];
+    [self settingSwitch:s title:@"精简模式 · 只显示 App 图标" key:@"compactMode" defaultValue:NO tag:16];
+    [self settingScaleControl:s];
+    [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
     [self settingSwitch:s title:@"静止自动淡化" key:@"autoFade" defaultValue:YES tag:6];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
@@ -1084,19 +1157,26 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
         case 9:key=@"preferDarkIcons";break;
         case 15:key=[@"stealth." stringByAppendingString:GuestID()];break;
+        case 16:key=@"compactMode";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
     if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==9||sw.tag==15) [self draw];
+    if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
 - (void)sliderChanged:(UISlider*)slider {
-    NSString *key=slider.tag==10?@"idleAlpha":
+    NSString *key=slider.tag==14?@"panelScale":slider.tag==10?@"idleAlpha":
         slider.tag==11?@"orbWidth":
         slider.tag==13?@"glassTint":
         slider.tag==12?[@"appAlpha." stringByAppendingString:GuestID()]:nil;
     if(!key) return;
     SetPref(key,@(slider.value));
+    if(slider.tag==14) {
+        UILabel *value=objc_getAssociatedObject(slider,@selector(sliderChanged:));
+        value.text=[NSString stringWithFormat:@"%.0f%%",round(slider.value*100)];
+        slider.accessibilityValue=value.text;
+    }
     if(slider.tag==10 || slider.tag==12) {
         CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
             FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
@@ -1152,6 +1232,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(.08));
     SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);SetPref(@"preferDarkIcons",@NO);
+    SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     [self draw];
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
