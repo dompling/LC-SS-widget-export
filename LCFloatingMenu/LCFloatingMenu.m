@@ -559,29 +559,111 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UILabel *b=[self label:sub size:12 weight:UIFontWeightRegular]; b.textColor=UIColor.secondaryLabelColor;
     [stack addArrangedSubview:b]; [self spacer:stack size:8];
 }
+- (NSArray<NSDictionary*> *)visibleApps {
+    NSString *current=GuestID();
+    NSMutableArray *found=[NSMutableArray array];
+    for(NSDictionary *item in self.apps) {
+        if([item[@"bundle"] isEqualToString:current]) continue;
+        [found addObject:item];
+    }
+    NSArray *order=[HostDefaults() arrayForKey:Pref(@"menuOrder")];
+    if([order isKindOfClass:NSArray.class] && order.count) {
+        [found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
+            NSUInteger ai=[order indexOfObject:a[@"path"]];
+            NSUInteger bi=[order indexOfObject:b[@"path"]];
+            if(ai==NSNotFound) ai=NSUIntegerMax;
+            if(bi==NSNotFound) bi=NSUIntegerMax;
+            if(ai!=bi) return ai<bi?NSOrderedAscending:NSOrderedDescending;
+            return [a[@"title"] localizedStandardCompare:b[@"title"]];
+        }];
+    }
+    return found;
+}
+- (NSArray<NSString*> *)favorites {
+    NSArray *v=[HostDefaults() arrayForKey:Pref(@"favoritePaths")];
+    return [v isKindOfClass:NSArray.class]?v:@[];
+}
 - (void)appPage:(UIStackView *)s {
-    [self header:s title:@"快速切换" sub:@"LC+SS · 经典全屏单任务"];
-    [self addRow:[self rowForTitle:@"收起菜单" icon:@"xmark.circle.fill" height:42 action:@selector(toggle)] height:42 to:s];
-    [self addRow:[self rowForTitle:@"返回 LiveContainer" icon:@"square.grid.2x2.fill" height:49 action:@selector(goHome)] height:49 to:s];
-    if(BoolPref(@"showRestart",YES))
-        [self addRow:[self rowForTitle:@"重新启动当前应用" icon:@"arrow.clockwise" height:45 action:@selector(restart)] height:45 to:s];
-    [self spacer:s size:4];
-    UILabel *appsTitle=[self label:@"我的应用" size:12 weight:UIFontWeightSemibold];
-    appsTitle.textColor=UIColor.secondaryLabelColor; [s addArrangedSubview:appsTitle];
-    for(NSDictionary *app in self.apps) {
-        if([app[@"bundle"] isEqualToString:GuestID()]) continue;
-        [self addRow:[self appRow:app] height:55 to:s];
+    NSArray<NSDictionary*> *items=[self visibleApps];
+    UILabel *heading=[self label:@"LC · 快速切换" size:16 weight:UIFontWeightSemibold];
+    [s addArrangedSubview:heading];
+    UILabel *subtitle=[self label:@"单任务 · 只保留一个 App 运行" size:11 weight:UIFontWeightRegular];
+    subtitle.textColor=UIColor.secondaryLabelColor;[s addArrangedSubview:subtitle];
+    [self spacer:s size:7];
+    UILabel *pinned=[self label:@"常用应用" size:11 weight:UIFontWeightSemibold];
+    pinned.textColor=UIColor.secondaryLabelColor;[s addArrangedSubview:pinned];
+    NSArray *favs=[self favorites];
+    NSMutableArray *selected=[NSMutableArray array];
+    for(NSString *path in favs) for(NSDictionary *item in items) {
+        if([item[@"path"] isEqualToString:path] && selected.count<4) {
+            [selected addObject:item];break;
+        }
     }
-    if(self.apps.count<2) {
-        UILabel *empty=[self label:@"暂无可快捷切换的应用；加锁或需要 JIT 的应用请从 LC 打开。" size:12 weight:UIFontWeightRegular];
-        empty.textColor=UIColor.secondaryLabelColor; [s addArrangedSubview:empty];
+    if(selected.count==0) {
+        for(NSDictionary *item in items) {
+            if(selected.count>=4) break;
+            [selected addObject:item];
+        }
     }
-    [self spacer:s size:5];
-    [self addRow:[self rowForTitle:@"外观与菜单设置" icon:@"slider.horizontal.3" height:45 action:@selector(openSettings)] height:45 to:s];
+    UIStackView *quick=[UIStackView new];quick.axis=UILayoutConstraintAxisHorizontal;
+    quick.alignment=UIStackViewAlignmentFill;
+    quick.distribution=UIStackViewDistributionFillEqually;quick.spacing=5;
+    for(NSDictionary *app in selected) {
+        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,62,70)];
+        tile.layer.cornerRadius=15;
+        tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.30];
+        UIView *icon=[self iconViewForApp:app size:38];icon.center=CGPointMake(31,27);
+        icon.userInteractionEnabled=NO;[tile addSubview:icon];
+        UILabel *name=[self label:app[@"title"] size:10 weight:UIFontWeightMedium];
+        name.frame=CGRectMake(2,51,58,15);
+        name.textAlignment=NSTextAlignmentCenter;name.lineBreakMode=NSLineBreakByTruncatingTail;
+        [tile addSubview:name];
+        objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
+        [quick addArrangedSubview:tile];
+    }
+    while(quick.arrangedSubviews.count<4) {
+        UIView *placeholder=[UIView new];[quick addArrangedSubview:placeholder];
+    }
+    [self addRow:quick height:71 to:s];
+    [self spacer:s size:7];
+    UILabel *all=[self label:[NSString stringWithFormat:@"容器应用 · %lu",(unsigned long)items.count]
+                       size:11 weight:UIFontWeightSemibold];
+    all.textColor=UIColor.secondaryLabelColor;[s addArrangedSubview:all];
+    for(NSDictionary *item in items) [self addRow:[self appRow:item] height:52 to:s];
+    if(!items.count) {
+        UILabel *empty=[self label:@"没有符合快捷切换条件的 App，请通过 LC 主界面启动。" size:12 weight:UIFontWeightRegular];
+        empty.textColor=UIColor.secondaryLabelColor;
+        [s addArrangedSubview:empty];
+    }
+    [self spacer:s size:9];
+    [self addRow:[self rowForTitle:@"菜单管理与排序" icon:@"line.3.horizontal.decrease" height:40 action:@selector(openManage)] height:40 to:s];
+    UIStackView *toolbar=[UIStackView new];toolbar.axis=UILayoutConstraintAxisHorizontal;
+    toolbar.distribution=UIStackViewDistributionFillEqually;toolbar.spacing=2;
+    NSArray *itemsToolbar=@[
+        @[@"arrow.clockwise",@"重启",NSStringFromSelector(@selector(restart))],
+        @[@"house.fill",@"返回",NSStringFromSelector(@selector(goHome))],
+        @[@"gearshape.fill",@"设置",NSStringFromSelector(@selector(openSettings))],
+        @[@"chevron.up",@"收起",NSStringFromSelector(@selector(toggle))]
+    ];
+    for(NSArray *spec in itemsToolbar) {
+        UIControl *b=[[UIControl alloc] initWithFrame:CGRectMake(0,0,65,59)];
+        b.layer.cornerRadius=15;
+        UIImageView *symbol=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:spec[0]]];
+        symbol.tintColor=FMAccent();symbol.contentMode=UIViewContentModeScaleAspectFit;
+        symbol.frame=CGRectMake(21,5,23,23);[b addSubview:symbol];
+        UILabel *label=[self label:spec[1] size:10 weight:UIFontWeightMedium];
+        label.frame=CGRectMake(0,35,65,18);label.textAlignment=NSTextAlignmentCenter;
+        [b addSubview:label];
+        [b addTarget:self action:NSSelectorFromString(spec[2]) forControlEvents:UIControlEventTouchUpInside];
+        [toolbar addArrangedSubview:b];
+    }
+    [self addRow:toolbar height:59 to:s];
 }
 - (void)openSettings {self.page=@"settings";[self draw];}
 - (void)openDIY {self.page=@"diy";[self draw];}
 - (void)openPerApp {self.page=@"perapp";[self draw];}
+- (void)openManage {self.page=@"manage";[self draw];}
 - (void)backToSettings {self.page=@"settings";[self draw];}
 - (void)backToApps {self.page=@"apps";[self draw];}
 - (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
