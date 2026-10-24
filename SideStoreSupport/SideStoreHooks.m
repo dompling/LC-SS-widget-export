@@ -135,7 +135,7 @@ void SideStoreMyAppsViewController_hook_viewDidload(UICollectionViewController* 
                                                                   target:self
                                                                   action:@selector(escapeButtonTapped:)];
         
-    NSMutableArray* oldToolBarItems = [self.navigationItem.leftBarButtonItems mutableCopy];
+    NSMutableArray* oldToolBarItems = [self.navigationItem.leftBarButtonItems mutableCopy] ?: [NSMutableArray array];
     [oldToolBarItems addObject:escapeItem];
     self.navigationItem.leftBarButtonItems = oldToolBarItems;
 }
