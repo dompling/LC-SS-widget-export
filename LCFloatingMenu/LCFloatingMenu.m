@@ -549,9 +549,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat safeBottom=MAX(26,self.window.safeAreaInsets.bottom+10);
     CGFloat available=bounds.size.height-safeTop-safeBottom;
     BOOL small=[self.page isEqualToString:@"apps"];
-    CGFloat pw=MIN(small?304:346,bounds.size.width-28);
     BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat target=small?(compact?MIN(385,177+64*MIN(5,(self.apps.count+3)/4)):
+    CGFloat pw=MIN(small?(compact?156:304):346,bounds.size.width-28);
+    CGFloat target=small?(compact?MIN(455,150+69*MIN(5,self.apps.count)):
         MIN(405,199+65*MIN(self.apps.count,5))):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
@@ -587,8 +587,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [glass addSubview:scroll];
     if(small) {
         // Only the central application list scrolls; header and footer never move.
-        [self buildAppHeader:glass];
-        CGFloat top=compact?59:80, bottom=76;
+        if(!compact) [self buildAppHeader:glass];
+        CGFloat top=compact?12:80, bottom=compact?116:76;
         scroll.frame=CGRectMake(14,top,pw-28,MAX(20,ph-top-bottom));
         [self buildAppFooter:glass];
     }
@@ -658,37 +658,28 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)appPage:(UIStackView *)stack {
     NSArray<NSDictionary*> *apps=[self visibleApps];
     if(BoolPref(@"compactMode",NO)) {
-        UIStackView *row=nil;
-        for(NSUInteger i=0;i<apps.count;i++) {
-            if(i%4==0) {
-                row=[UIStackView new];
-                row.axis=UILayoutConstraintAxisHorizontal;
-                row.distribution=UIStackViewDistributionFillEqually;
-                row.alignment=UIStackViewAlignmentFill;
-                row.spacing=6;
-                [self addRow:row height:62 to:stack];
-            }
-            NSDictionary *app=apps[i];
-            UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,61,62)];
-            tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.16];
-            tile.layer.cornerRadius=15;
-            UIView *icon=[self iconViewForApp:app size:43];
+        // A true single-file vertical icon shelf, not a four-column grid.
+        // Each app is one full-width, comfortably tappable row.
+        for(NSDictionary *app in apps) {
+            UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,120,62)];
+            tile.layer.cornerRadius=17;
+            tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.22];
+            UIView *icon=[self iconViewForApp:app size:46];
             icon.translatesAutoresizingMaskIntoConstraints=NO;
             icon.userInteractionEnabled=NO;
             [tile addSubview:icon];
             [NSLayoutConstraint activateConstraints:@[
                 [icon.centerXAnchor constraintEqualToAnchor:tile.centerXAnchor],
                 [icon.centerYAnchor constraintEqualToAnchor:tile.centerYAnchor],
-                [icon.widthAnchor constraintEqualToConstant:43],
-                [icon.heightAnchor constraintEqualToConstant:43]
+                [icon.widthAnchor constraintEqualToConstant:46],
+                [icon.heightAnchor constraintEqualToConstant:46]
             ]];
             tile.accessibilityLabel=app[@"title"];
             tile.accessibilityTraits=UIAccessibilityTraitButton;
             objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
-            [row addArrangedSubview:tile];
+            [self addRow:tile height:62 to:stack];
         }
-        if(row) while(row.arrangedSubviews.count<4) [row addArrangedSubview:[UIView new]];
     } else {
         for(NSDictionary *app in apps)
             [self addRow:[self appRow:app] height:52 to:stack];
@@ -738,7 +729,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)buildAppFooter:(UIView *)glass {
     CGFloat w=glass.bounds.size.width;
-    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(9,glass.bounds.size.height-67,w-18,59)];
+    BOOL compact=BoolPref(@"compactMode",NO);
+    CGFloat fh=compact?102:59;
+    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(9,glass.bounds.size.height-fh-8,w-18,fh)];
     footer.layer.cornerRadius=20;
     footer.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.22];
     [glass addSubview:footer];
@@ -750,16 +743,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         @[@"gearshape.fill",NSStringFromSelector(@selector(openSettings)),@"设置"],
         @[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起"]
     ]];
-    CGFloat cell=footer.bounds.size.width/items.count;
+    CGFloat cell=footer.bounds.size.width/(compact?2:items.count);
     for(NSUInteger i=0;i<items.count;i++) {
         NSArray *spec=items[i];
-        UIControl *button=[[UIControl alloc] initWithFrame:CGRectMake(i*cell,0,cell,59)];
+        CGRect frame=compact?CGRectMake((i%2)*cell,(i/2)*51,cell,51):
+                             CGRectMake(i*cell,0,cell,59);
+        UIControl *button=[[UIControl alloc] initWithFrame:frame];
         button.accessibilityLabel=spec[2];
         UIImage *image=[UIImage systemImageNamed:spec[0] withConfiguration:
             [UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium]];
         UIImageView *iv=[[UIImageView alloc] initWithImage:image];
         iv.contentMode=UIViewContentModeScaleAspectFit;iv.tintColor=FMAccent();
-        iv.frame=CGRectMake((cell-25)*.5,16,25,25);[button addSubview:iv];
+        iv.frame=CGRectMake((cell-25)*.5,compact?12:16,25,25);[button addSubview:iv];
         [button addTarget:self action:NSSelectorFromString(spec[1]) forControlEvents:UIControlEventTouchUpInside];
         [footer addSubview:button];
     }
