@@ -66,7 +66,11 @@ static NSArray<NSDictionary*> *InstalledApps(void) {
             // LC can require an app re-sign, authentication, or JIT acquisition.
             // For v1, launch only already-patched ordinary guests.
             if([lc[@"LCPatchRevision"] integerValue] < 7) continue;
+    if([lc[@"dontSign"] boolValue] || [lc[@"LCTweakLoaderCantInject"] boolValue]) continue;
     if([lc[@"dontLoadTweakLoader"] boolValue] || [lc[@"dontInjectTweakLoader"] boolValue]) continue;
+    NSString *exec=info[@"CFBundleExecutable"];
+    if(![exec isKindOfClass:NSString.class] || !exec.length ||
+       ![fm fileExistsAtPath:[folder stringByAppendingPathComponent:exec]]) continue;
             NSString *title=info[@"CFBundleDisplayName"] ?: info[@"CFBundleName"] ?: entry.stringByDeletingPathExtension;
             NSString *uuid=lc[@"LCDataUUID"];
             if(!uuid.length) continue;
@@ -135,9 +139,12 @@ static UIColor *TintFor(NSString *s) {
 }
 - (void)installIfPossible {
     UIWindowScene *scene=[self foregroundScene];
-    if(!scene || !GuestInfo().count) return;
-    if([LCClassCall(NSUserDefaults.class,@"isSideStore") boolValue] ||
-       [LCClassCall(NSUserDefaults.class,@"isLiveProcess") boolValue]) return;
+    if(!scene || !GuestInfo()) return;
+    SEL sideSel=NSSelectorFromString(@"isSideStore");
+    SEL procSel=NSSelectorFromString(@"isLiveProcess");
+    if(![NSUserDefaults respondsToSelector:sideSel] || ![NSUserDefaults respondsToSelector:procSel]) return;
+    if(((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,sideSel) ||
+       ((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,procSel)) return;
     if(self.window && self.window.windowScene != scene) {
         self.window.hidden=YES; self.window=nil; self.orb=nil; self.panel=nil;
     }
@@ -152,7 +159,7 @@ static UIColor *TintFor(NSString *s) {
     self.window=[[FMGlassWindow alloc] initWithWindowScene:scene];
     self.window.frame=self.window.windowScene.coordinateSpace.bounds;
     self.window.backgroundColor=UIColor.clearColor;
-    self.window.windowLevel=UIWindowLevelAlert+20;
+    self.window.windowLevel=UIWindowLevelNormal+75;
     UIViewController *vc=[UIViewController new];
     vc.view.backgroundColor=UIColor.clearColor;
     vc.view.userInteractionEnabled=YES;
@@ -487,7 +494,10 @@ static UIColor *TintFor(NSString *s) {
     NSMutableArray *qs=[NSMutableArray arrayWithObject:[NSURLQueryItem queryItemWithName:@"bundle-name" value:path]];
     if(uuid.length) [qs addObject:[NSURLQueryItem queryItemWithName:@"container-folder-name" value:uuid]];
     url.queryItems=qs;
-    if(!url.URL) return;
+    if(!url.URL) {
+        [self showMessage:@"切换失败" details:@"目标 URL 不合法。未发起切换。"];
+        return;
+    }
     BOOL accepted=((BOOL(*)(id,SEL,NSURL*))objc_msgSend)(utils,sel,url.URL);
     if(!accepted) {
         [host removeObjectForKey:@"selected"];
@@ -509,7 +519,8 @@ static UIColor *TintFor(NSString *s) {
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"继续" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){action();}]];
-    [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+    if(!self.window.rootViewController.presentedViewController)
+        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 - (void)goHome {
     [self confirmTitle:@"返回 LiveContainer？" action:^{[self launchPath:@"ui" uuid:nil];}];
