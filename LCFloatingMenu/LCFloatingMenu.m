@@ -1263,7 +1263,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         pin.translatesAutoresizingMaskIntoConstraints=NO;
         BOOL favored=[[self favorites] containsObject:app[@"path"]];
         UIImageSymbolConfiguration *starConfig=[UIImageSymbolConfiguration
-            configurationWithPointSize:18 weight:UIFontWeightMedium];
+            configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
         [pin setImage:[UIImage systemImageNamed:favored?@"star.fill":@"star"
                               withConfiguration:starConfig] forState:UIControlStateNormal];
         pin.tintColor=favored?UIColor.systemYellowColor:UIColor.secondaryLabelColor;
