@@ -238,6 +238,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 @end
 
+@interface FMSettingsRootController : UITableViewController @end
+@interface FMSettingsSectionController : UIViewController
+@property(nonatomic,copy) NSString *sectionKey;
+@property(nonatomic,strong) UIScrollView *contentScroll;
+- (instancetype)initWithSection:(NSString *)key;
+- (void)rebuild;
+@end
+
 @interface FMManager : NSObject
 @property(nonatomic,strong) FMGlassWindow *window;
 @property(nonatomic,strong) UIButton *orb;
@@ -771,93 +779,99 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)refreshUI {
-    if(self.settingsScreen) [self renderSettingsScreen];
+    if(self.settingsWindow) [self updateSettingsContent];
     else [self draw];
 }
+- (void)openSettings {
+    if(self.settingsWindow || !self.window || !self.window.windowScene) return;
+    // The Guest is still running, but its window must not receive any taps
+    // while native navigation is open. This is a separate opaque UIWindow.
+    self.page=@"settings";
+    self.isOpen=NO;
+    [self removePanel];
+    [self.orb removeFromSuperview];self.orb=nil;
+    self.previousKeyWindow=UIApplication.sharedApplication.keyWindow;
+    self.window.hidden=YES;
+    UIWindow *settings=[[UIWindow alloc] initWithWindowScene:self.window.windowScene];
+    settings.frame=self.window.windowScene.coordinateSpace.bounds;
+    settings.windowLevel=UIWindowLevelNormal+90;
+    settings.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    settings.overrideUserInterfaceStyle=FMSystemAppearance();
+    FMSettingsRootController *home=[[FMSettingsRootController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:home];
+    nav.navigationBar.prefersLargeTitles=YES;
+    UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
+    [appearance configureWithDefaultBackground];
+    nav.navigationBar.standardAppearance=appearance;
+    nav.navigationBar.scrollEdgeAppearance=appearance;
+    nav.navigationBar.compactAppearance=appearance;
+    home.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc]
+        initWithTitle:@"完成" style:UIBarButtonItemStyleDone
+        target:self action:@selector(closeSettings)];
+    settings.rootViewController=nav;
+    self.settingsNavigation=nav;
+    self.settingsWindow=settings;
+    [settings makeKeyAndVisible];
+    FMLog(@"settings-open",@"navigation-window");
+}
 - (void)closeSettings {
-    if(!self.settingsScreen) return;
-    [self.settingsScreen removeFromSuperview];
-    self.settingsScreen=nil;
-    self.settingsScroll=nil;
-    self.settingsScrollOffset=0;
+    if(!self.settingsWindow) return;
+    UIWindow *prior=self.previousKeyWindow;
+    UIWindow *old=self.settingsWindow;
+    self.settingsWindow=nil;
+    self.settingsNavigation=nil;
+    self.previousKeyWindow=nil;
+    old.hidden=YES;
+    old.rootViewController=nil;
+    self.window.hidden=NO;
+    if(prior && prior!=old && !prior.hidden) [prior makeKeyWindow];
+    else {
+        // Try to return keyboard status to a normal Guest window.
+        for(UIWindow *candidate in self.window.windowScene.windows) {
+            if(candidate!=self.window && candidate!=old && !candidate.hidden &&
+               candidate.windowLevel<UIWindowLevelAlert) {
+                [candidate makeKeyWindow]; break;
+            }
+        }
+    }
     self.page=@"apps";
     self.isOpen=YES;
     self.apps=InstalledApps();
-    FMLog(@"settings-close",@"switcher");
+    FMLog(@"settings-close",@"guest-foreground");
     [self draw];
 }
-// Full-screen local settings: separate from the floating switcher, and never
-// restarts the Guest. The host UIWindow stays non-key to protect Guest input.
-- (void)renderSettingsScreen {
-    if(!self.window) return;
-    if(self.settingsScroll && self.settingsScroll.superview)
-        self.settingsScrollOffset=MAX(0,self.settingsScroll.contentOffset.y);
-    [self removePanel];
-    [self.settingsScreen removeFromSuperview];
-    self.settingsScreen=nil;
-    self.settingsScroll=nil;
-    [self.orb removeFromSuperview];self.orb=nil;
-    self.page=@"settings";
-    CGRect bounds=self.window.bounds;
-    UIView *screen=[[UIView alloc] initWithFrame:bounds];
-    screen.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    // Opaque system-grouped surface: legible even over games, videos and
-    // Guest apps that override their own light/dark appearance or disable blur.
-    screen.backgroundColor=UIColor.systemGroupedBackgroundColor;
-    screen.overrideUserInterfaceStyle=self.lastSystemStyle;
-    [self.window.rootViewController.view addSubview:screen];
-    self.settingsScreen=screen;
-    CGFloat top=MAX(12,self.window.safeAreaInsets.top);
-    CGFloat bottom=MAX(16,self.window.safeAreaInsets.bottom);
-    UIView *navigation=[[UIView alloc] initWithFrame:CGRectMake(0,top,bounds.size.width,56)];
-    navigation.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
-    [screen addSubview:navigation];
-    UIButton *back=[UIButton buttonWithType:UIButtonTypeSystem];
-    back.frame=CGRectMake(14,7,82,42);
-    back.contentHorizontalAlignment=UIControlContentHorizontalAlignmentLeft;
-    back.tintColor=UIColor.labelColor;
-    [back setImage:[UIImage systemImageNamed:@"chevron.left"] forState:UIControlStateNormal];
-    [back setTitle:@" 返回" forState:UIControlStateNormal];
-    back.titleLabel.font=[UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
-    [back addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
-    back.accessibilityLabel=@"返回应用切换";
-    [navigation addSubview:back];
-    UILabel *title=[self label:@"设置" size:19 weight:UIFontWeightSemibold];
-    title.textAlignment=NSTextAlignmentCenter;
-    title.frame=CGRectMake(96,9,MAX(100,bounds.size.width-192),38);
-    [navigation addSubview:title];
-    UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(0,55,bounds.size.width,.5)];
-    divider.backgroundColor=UIColor.separatorColor;
-    [navigation addSubview:divider];
-    CGFloat scrollTop=top+56;
-    UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectMake(
-        0,scrollTop,bounds.size.width,MAX(40,bounds.size.height-scrollTop-bottom))];
-    scroll.backgroundColor=UIColor.clearColor;
-    scroll.showsVerticalScrollIndicator=YES;
-    scroll.alwaysBounceVertical=YES;
-    scroll.contentInset=UIEdgeInsetsMake(15,0,20,0);
-    scroll.scrollIndicatorInsets=UIEdgeInsetsMake(15,0,20,0);
-    scroll.keyboardDismissMode=UIScrollViewKeyboardDismissModeInteractive;
-    [screen addSubview:scroll];
-    self.settingsScroll=scroll;
-    UIStackView *stack=[self stack];
-    stack.spacing=11;
-    [scroll addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:18],
-        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-18],
-        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
-        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
-        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-36]
-    ]];
-    [self settingsPage:stack];
-    CGFloat offset=self.settingsScrollOffset;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if(self.settingsScroll!=scroll || !scroll.superview) return;
-        [scroll layoutIfNeeded];
-        CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height);
-        [scroll setContentOffset:CGPointMake(0,MIN(MAX(0,offset),maxY)) animated:NO];
-    });
+- (void)updateSettingsContent {
+    UIViewController *top=self.settingsNavigation.topViewController;
+    if([top isKindOfClass:FMSettingsSectionController.class])
+        [(FMSettingsSectionController*)top rebuild];
+}
+- (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)s {
+    if([category isEqualToString:@"appearance"]) {
+        [self section:@"显示方式" sub:nil in:s];
+        [self settingSwitch:s title:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO tag:16];
+        [self settingScaleControl:s];
+        [self spacer:s size:16];
+        [self diyPage:s];
+    } else if([category isEqualToString:@"behavior"]) {
+        [self section:@"悬浮控件" sub:nil in:s];
+        [self settingSwitch:s title:@"静止自动淡化" key:@"autoFade" defaultValue:YES tag:6];
+        [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
+        [self spacer:s size:14];
+        [self section:@"单任务切换" sub:nil in:s];
+        [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
+        [self settingSwitch:s title:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
+    } else if([category isEqualToString:@"apps"]) {
+        [self perAppPage:s];
+        [self spacer:s size:20];
+        [self managePage:s];
+    } else {
+        [self section:@"问题排查" sub:nil in:s];
+        [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:52 action:@selector(exportLogs)] height:52 to:s];
+        [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:52 action:@selector(clearLogs)] height:52 to:s];
+        UILabel *hint=[self label:@"仅记录菜单运行与切换事件，不采集应用页面内容。" size:12 weight:UIFontWeightRegular];
+        hint.textColor=UIColor.secondaryLabelColor;
+        [s addArrangedSubview:hint];
+    }
 }
 - (void)refreshSystemAppearance {
     if(!self.window) return;
@@ -866,8 +880,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.lastSystemStyle=style;
     self.window.overrideUserInterfaceStyle=style;
     self.window.rootViewController.overrideUserInterfaceStyle=style;
+    if(self.settingsWindow) {
+        self.settingsWindow.overrideUserInterfaceStyle=style;
+        [self updateSettingsContent];
+    } else [self draw];
     FMLog(@"system-appearance",style==UIUserInterfaceStyleDark?@"dark":@"light");
-    [self refreshUI];
 }
 - (void)scheduleAppearanceCheck {
     __weak typeof(self) weakSelf=self;
@@ -880,16 +897,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [manager scheduleAppearanceCheck];
     });
 }
-- (void)openSettings {
-    self.settingsScrollOffset=0;
-    self.page=@"settings";
-    FMLog(@"settings-open",@"full-screen");
-    [self renderSettingsScreen];
-}
-- (void)openDIY {self.page=@"settings";[self draw];}
-- (void)openPerApp {self.page=@"settings";[self draw];}
-- (void)openManage {self.page=@"settings";[self draw];}
-- (void)backToSettings {self.page=@"settings";[self draw];}
+- (void)openDIY { [self openSettings]; }
+- (void)openPerApp { [self openSettings]; }
+- (void)openManage { [self openSettings]; }
+- (void)backToSettings { [self openSettings]; }
 - (void)backToApps { [self closeSettings]; }
 - (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
     UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,280,48)];
@@ -1364,6 +1375,103 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self confirmTitle:[NSString stringWithFormat:@"切换到 %@？",app[@"title"]] action:^{
         [self launchPath:app[@"path"] uuid:app[@"uuid"]];
     }];
+}
+@end
+
+// Inset-grouped iOS settings home, separate from the in-Guest switcher.
+@implementation FMSettingsRootController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=@"悬浮菜单";
+    self.tableView.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    self.tableView.rowHeight=72;
+}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return section==0?3:1;
+}
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    return section==0?@"偏好设置":@"支持";
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)index {
+    UITableViewCell *cell=[tableView dequeueReusableCellWithIdentifier:@"section"];
+    if(!cell) cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                        reuseIdentifier:@"section"];
+    NSArray *names=@[@"显示与外观",@"交互与切换",@"应用管理",@"诊断与日志"];
+    NSArray *subtitles=@[@"模式、尺寸、Liquid Glass、主题",@"悬浮操作、触觉与确认",@"每 App 设置、收藏与排序",@"导出和清理运行日志"];
+    NSArray *symbols=@[@"paintpalette",@"hand.tap",@"square.stack.3d.up",@"waveform.path.ecg"];
+    NSInteger item=index.section==0?index.row:3;
+    cell.textLabel.text=names[item];
+    cell.textLabel.font=[UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    cell.detailTextLabel.text=subtitles[item];
+    cell.detailTextLabel.font=[UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+    cell.detailTextLabel.textColor=UIColor.secondaryLabelColor;
+    cell.imageView.image=[UIImage systemImageNamed:symbols[item]];
+    cell.imageView.tintColor=FMAccent();
+    cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    cell.selectionStyle=UITableViewCellSelectionStyleDefault;
+    return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)index {
+    [tableView deselectRowAtIndexPath:index animated:YES];
+    NSInteger item=index.section==0?index.row:3;
+    NSArray *keys=@[@"appearance",@"behavior",@"apps",@"diagnostics"];
+    FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:keys[item]];
+    [self.navigationController pushViewController:detail animated:YES];
+}
+@end
+
+@implementation FMSettingsSectionController
+- (instancetype)initWithSection:(NSString *)key {
+    if((self=[super initWithNibName:nil bundle:nil])) _sectionKey=[key copy];
+    return self;
+}
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    NSDictionary *titles=@{@"appearance":@"显示与外观",@"behavior":@"交互与切换",
+                           @"apps":@"应用管理",@"diagnostics":@"诊断与日志"};
+    self.title=titles[self.sectionKey]?:@"设置";
+    self.view.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    UIScrollView *scroll=[UIScrollView new];
+    scroll.translatesAutoresizingMaskIntoConstraints=NO;
+    scroll.backgroundColor=UIColor.clearColor;
+    scroll.alwaysBounceVertical=YES;
+    scroll.showsVerticalScrollIndicator=YES;
+    [self.view addSubview:scroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
+    ]];
+    self.contentScroll=scroll;
+    [self rebuild];
+}
+- (void)rebuild {
+    if(!self.isViewLoaded || !self.contentScroll) return;
+    UIScrollView *scroll=self.contentScroll;
+    CGFloat offset=scroll.contentOffset.y;
+    for(UIView *child in [scroll.subviews copy]) [child removeFromSuperview];
+    UIStackView *stack=[UIStackView new];
+    stack.axis=UILayoutConstraintAxisVertical;
+    stack.alignment=UIStackViewAlignmentFill;
+    stack.spacing=12;
+    stack.translatesAutoresizingMaskIntoConstraints=NO;
+    [scroll addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:18],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-18],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:20],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-32],
+        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-36]
+    ]];
+    [[FMManager shared] populateSettingsCategory:self.sectionKey stack:stack];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(self.contentScroll!=scroll || !scroll.window) return;
+        [scroll layoutIfNeeded];
+        CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height);
+        [scroll setContentOffset:CGPointMake(0,MIN(offset,maxY)) animated:NO];
+    });
 }
 @end
 
