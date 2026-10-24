@@ -1344,14 +1344,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         return;
     }
     NSUserDefaults *host=HostDefaults();
-    [host setBool:YES forKey:@"LCOpenSideStore"];
-    [host removeObjectForKey:@"selected"];
+    // The LC host recognizes this one-shot selected-app token and clears it
+    // during bootstrap. Never leave a persistent LCOpenSideStore=true behind.
+    [host setBool:NO forKey:@"LCOpenSideStore"];
+    [host setObject:@"builtinSideStore" forKey:@"selected"];
     [host removeObjectForKey:@"selectedContainer"];
     [host removeObjectForKey:@"launchAppUrlScheme"];
-    FMLog(@"sidestore-launch",@"built-in framework");
+    FMLog(@"sidestore-launch",@"one-shot builtinSideStore selected token");
     BOOL accepted=((BOOL(*)(id,SEL,NSUInteger))objc_msgSend)(utils,launch,0);
     if(!accepted) {
-        [host setBool:NO forKey:@"LCOpenSideStore"];
+        [host removeObjectForKey:@"selected"];
         FMLog(@"sidestore-failed",@"launcher rejected");
         [self showMessage:@"切换失败" details:@"LC 没有接受 SideStore 启动请求。"];
     }
