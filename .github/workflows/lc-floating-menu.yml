@@ -24,7 +24,7 @@ jobs:
           mkdir -p dist
           xcrun clang -arch arm64 -isysroot "$SDK" \
             -miphoneos-version-min=16.0 -fobjc-arc -O2 \
-            -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore \
+            -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore -framework CoreGraphics \
             -install_name "@rpath/LCFloatingMenu.dylib" \
             LCFloatingMenu/LCFloatingMenu.m -o dist/LCFloatingMenu.dylib
           file dist/LCFloatingMenu.dylib
