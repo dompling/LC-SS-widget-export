@@ -1063,7 +1063,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [s addArrangedSubview:l];
     UISlider *slider=[UISlider new];slider.minimumValue=min;slider.maximumValue=max;
     slider.value=FloatPref(key,def);slider.tag=tag;
-    slider.tintColor=RGBA(.29,.52,1,1);
+    slider.tintColor=FMAccent();
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
     [slider addTarget:self action:@selector(sliderFinished:)
         forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
@@ -1141,22 +1141,58 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSArray *colors=@[RGBA(.55,.77,.96,1),RGBA(.86,.87,.90,1),RGBA(.13,.18,.30,1),RGBA(.65,.31,.79,1)];
     UIStackView *themes=[UIStackView new];themes.axis=UILayoutConstraintAxisHorizontal;
     themes.distribution=UIStackViewDistributionFillEqually;themes.spacing=5;
-    NSInteger selected=[HostDefaults() integerForKey:Pref(@"theme")];
+    NSInteger selected=FMTheme();
     for(NSInteger i=0;i<4;i++) {
-        UIControl *tile=[[UIControl alloc] initWithFrame:CGRectMake(0,0,68,77)];
-        tile.layer.cornerRadius=15;tile.tag=30+i;
-        tile.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.28];
-        tile.layer.borderWidth=selected==i?1.5:.4;
+        UIControl *tile=[UIControl new];
+        tile.layer.cornerRadius=15;
+        tile.tag=30+i;
+        tile.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+        tile.layer.borderWidth=selected==i?2:1;
         tile.layer.borderColor=selected==i?FMAccent().CGColor:
-            [UIColor.whiteColor colorWithAlphaComponent:.26].CGColor;
-        UIView *swatch=[[UIView alloc] initWithFrame:CGRectMake(18,8,33,33)];
-        swatch.layer.cornerRadius=12;swatch.backgroundColor=colors[i];
-        swatch.layer.borderWidth=.6;
-        swatch.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.65].CGColor;
+            UIColor.separatorColor.CGColor;
+        tile.accessibilityLabel=[NSString stringWithFormat:@"%@主题",names[i]];
+        tile.accessibilityValue=selected==i?@"已选中":@"未选中";
+        tile.accessibilityTraits=UIAccessibilityTraitButton|
+            (selected==i?UIAccessibilityTraitSelected:0);
+        UIView *swatch=[UIView new];
+        swatch.translatesAutoresizingMaskIntoConstraints=NO;
+        swatch.userInteractionEnabled=NO;
+        swatch.layer.cornerRadius=12;
+        swatch.backgroundColor=colors[i];
+        swatch.layer.borderWidth=1;
+        swatch.layer.borderColor=UIColor.separatorColor.CGColor;
         [tile addSubview:swatch];
-        UILabel *name=[self label:names[i] size:9 weight:UIFontWeightMedium];
-        name.textAlignment=NSTextAlignmentCenter;name.frame=CGRectMake(0,49,68,16);
+        UILabel *name=[self label:names[i] size:10 weight:UIFontWeightSemibold];
+        name.translatesAutoresizingMaskIntoConstraints=NO;
+        name.userInteractionEnabled=NO;
+        name.numberOfLines=1;
+        name.adjustsFontSizeToFitWidth=YES;
+        name.minimumScaleFactor=.75;
+        name.textAlignment=NSTextAlignmentCenter;
         [tile addSubview:name];
+        UIImageView *check=[[UIImageView alloc] initWithImage:
+            [UIImage systemImageNamed:@"checkmark.circle.fill"]];
+        check.translatesAutoresizingMaskIntoConstraints=NO;
+        check.userInteractionEnabled=NO;
+        check.tintColor=FMAccent();
+        check.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+        check.layer.cornerRadius=9;
+        check.hidden=selected!=i;
+        [tile addSubview:check];
+        [NSLayoutConstraint activateConstraints:@[
+            [swatch.widthAnchor constraintEqualToConstant:33],
+            [swatch.heightAnchor constraintEqualToConstant:33],
+            [swatch.topAnchor constraintEqualToAnchor:tile.topAnchor constant:8],
+            [swatch.centerXAnchor constraintEqualToAnchor:tile.centerXAnchor],
+            [name.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:2],
+            [name.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-2],
+            [name.topAnchor constraintEqualToAnchor:tile.topAnchor constant:49],
+            [name.heightAnchor constraintEqualToConstant:18],
+            [check.widthAnchor constraintEqualToConstant:18],
+            [check.heightAnchor constraintEqualToConstant:18],
+            [check.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-2],
+            [check.topAnchor constraintEqualToAnchor:tile.topAnchor constant:2]
+        ]];
         [tile addTarget:self action:@selector(themeTapped:) forControlEvents:UIControlEventTouchUpInside];
         [themes addArrangedSubview:tile];
     }
@@ -1289,7 +1325,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
         [pin setImage:[UIImage systemImageNamed:favored?@"star.fill":@"star"
                               withConfiguration:starConfig] forState:UIControlStateNormal];
-        pin.tintColor=favored?UIColor.systemYellowColor:UIColor.secondaryLabelColor;
+        pin.tintColor=favored?(FMMenuDark()?RGBA(1,.77,.30,1):RGBA(.55,.35,.03,1)):
+                            UIColor.secondaryLabelColor;
         pin.accessibilityLabel=favored?@"取消收藏":@"添加到收藏";
         objc_setAssociatedObject(pin,@selector(pinApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [pin addTarget:self action:@selector(pinApp:) forControlEvents:UIControlEventTouchUpInside];
@@ -1302,7 +1339,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         UIImageView *lines=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal"]];
         lines.translatesAutoresizingMaskIntoConstraints=NO;
         lines.contentMode=UIViewContentModeScaleAspectFit;
-        lines.tintColor=UIColor.tertiaryLabelColor;
+        lines.tintColor=UIColor.secondaryLabelColor;
         [handle addSubview:lines];
         UILongPressGestureRecognizer *drag=[[UILongPressGestureRecognizer alloc]
             initWithTarget:self action:@selector(sortDrag:)];
@@ -1458,7 +1495,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);SetPref(@"preferDarkIcons",@NO);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"compactRestart",@NO);
-    [self draw];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIUserInterfaceStyle skin=FMMenuAppearance();
+        self.window.overrideUserInterfaceStyle=skin;
+        self.window.rootViewController.overrideUserInterfaceStyle=skin;
+        if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=skin;
+        [self draw];
+    });
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
     if(!path.length) {FMLog(@"switch-rejected",@"empty-target");return;}
@@ -1634,7 +1677,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     detail.numberOfLines=1;
     [row addSubview:detail];
     UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
-    arrow.tintColor=UIColor.tertiaryLabelColor;
+    arrow.tintColor=UIColor.secondaryLabelColor;
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:arrow];
     [NSLayoutConstraint activateConstraints:@[
