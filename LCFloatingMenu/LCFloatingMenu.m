@@ -159,12 +159,22 @@ static UIUserInterfaceStyle FMSystemAppearance(void) {
 static BOOL FMSystemDark(void) {
     return FMSystemAppearance()==UIUserInterfaceStyleDark;
 }
+static NSInteger FMTheme(void) {
+    NSInteger theme=[HostDefaults() integerForKey:Pref(@"theme")];
+    return theme>=0 && theme<=3?theme:0;
+}
+// Only menu-owned UI adopts the skin. Never override a Guest's appearance.
+static UIUserInterfaceStyle FMMenuAppearance(void) {
+    return FMTheme()==2?UIUserInterfaceStyleDark:FMSystemAppearance();
+}
+static BOOL FMMenuDark(void) { return FMMenuAppearance()==UIUserInterfaceStyleDark; }
 static UIColor *FMAccent(void) {
-    switch ([HostDefaults() integerForKey:Pref(@"theme")]) {
-        case 1: return RGBA(.80,.84,.91,1); // minimalist
-        case 2: return RGBA(.36,.52,1,1); // deep sapphire
-        case 3: return RGBA(.58,.36,.95,1); // aurora
-        default: return RGBA(.34,.69,1,1); // native glass
+    BOOL dark=FMMenuDark();
+    switch (FMTheme()) {
+        case 1: return dark?RGBA(.82,.87,.94,1):RGBA(.28,.34,.43,1);
+        case 2: return RGBA(.43,.71,1,1);
+        case 3: return dark?RGBA(.78,.60,1,1):RGBA(.43,.24,.69,1);
+        default:return dark?RGBA(.48,.76,1,1):RGBA(.14,.38,.71,1);
     }
 }
 static UIImage *FMGuestIcon(NSDictionary *app) {
@@ -328,7 +338,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.window.backgroundColor=UIColor.clearColor;
     self.window.windowLevel=UIWindowLevelNormal+75;
     self.lastSystemStyle=FMSystemAppearance();
-    self.window.overrideUserInterfaceStyle=self.lastSystemStyle;
+    self.window.overrideUserInterfaceStyle=FMMenuAppearance();
     UIViewController *vc=[UIViewController new];
     vc.view.backgroundColor=UIColor.clearColor;
     vc.view.userInteractionEnabled=YES;
@@ -364,15 +374,20 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(@available(iOS 26.0,*)) {
         // Use the SDK-native UIKit API instead of a dynamically allocated
         // effect with simulated gradient layers obscuring its output.
-        UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+        NSInteger theme=FMTheme();
+        UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:
+            theme==1?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
         glassEffect.interactive=!strong;
         CGFloat tint=Clamp(FloatPref(@"glassTint",.08),0,.30);
+        if(theme==1) tint=MIN(tint,.035);
+        else if(theme==2) tint=MAX(tint,.24);
+        else if(theme==3) tint=MAX(tint,.20);
         glassEffect.tintColor=[FMAccent() colorWithAlphaComponent:tint];
         effect=glassEffect;
         nativeGlass=YES;
     }
     if(!effect) {
-        BOOL dark=FMSystemDark();
+        BOOL dark=FMMenuDark();
         UIBlurEffectStyle style=strong?
             (dark?UIBlurEffectStyleSystemMaterialDark:UIBlurEffectStyleSystemMaterialLight):
             (dark?UIBlurEffectStyleSystemThinMaterialDark:UIBlurEffectStyleSystemThinMaterialLight);
@@ -387,7 +402,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         // Only older iOS receives the limited compatibility approximation.
         UIView *scrim=[[UIView alloc] initWithFrame:surface.bounds];
         scrim.backgroundColor=[UIColor.systemBackgroundColor colorWithAlphaComponent:
-            strong?(FMSystemDark()?.25:.34):.10];
+            strong?(FMMenuDark()?.25:.34):.10];
         scrim.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         scrim.userInteractionEnabled=NO;
         [surface addSubview:scrim];
@@ -414,7 +429,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [button addSubview:bead];
     UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,2.5,14)];
     line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
-    line.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:.85];
+    line.backgroundColor=FMMenuDark()?UIColor.whiteColor:RGBA(.17,.34,.55,1);
     line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
     [button addSubview:line];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
@@ -625,7 +640,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.dismissLayer=under;
     UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(0,0,pw,ph)];
     shadow.center=CGPointMake(centerX,centerY);
-    BOOL night=FMSystemDark();
+    BOOL night=FMMenuDark();
     UIColor *shadowTint=small?(night?RGBA(.15,.55,1,1):RGBA(.24,.51,.85,1)):
                               UIColor.blackColor;
     shadow.layer.shadowColor=shadowTint.CGColor;
@@ -742,9 +757,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             icon.userInteractionEnabled=NO;
             icon.layer.borderWidth=.55;
             icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
-                                    FMSystemDark()?.54:.82].CGColor;
+                                    FMMenuDark()?.54:.36].CGColor;
             icon.layer.shadowColor=UIColor.blackColor.CGColor;
-            icon.layer.shadowOpacity=FMSystemDark()?.22:.13;
+            icon.layer.shadowOpacity=FMMenuDark()?.22:.13;
             icon.layer.shadowRadius=4;
             [row addSubview:icon];
             [NSLayoutConstraint activateConstraints:@[
@@ -841,7 +856,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         // pill-shaped control panel inside it.
         UIView *separator=[[UIView alloc] initWithFrame:CGRectMake(13,0,
                                                footer.bounds.size.width-26,.8)];
-        separator.backgroundColor=FMSystemDark()?
+        separator.backgroundColor=FMMenuDark()?
              [UIColor.whiteColor colorWithAlphaComponent:.35]:
              [UIColor.blackColor colorWithAlphaComponent:.12];
         [footer addSubview:separator];
@@ -865,10 +880,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         tile.userInteractionEnabled=NO;
         tile.layer.borderWidth=.8;
         tile.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
-                                  FMSystemDark()?.55:.85].CGColor;
+                                  FMMenuDark()?.55:.28].CGColor;
         // The exact same optical tile size/radius rhythm as the Guest icons.
         tile.layer.shadowColor=UIColor.blackColor.CGColor;
-        tile.layer.shadowOpacity=FMSystemDark()?.20:.09;
+        tile.layer.shadowOpacity=FMMenuDark()?.20:.09;
         tile.layer.shadowRadius=3;
         [button addSubview:tile];
         UIImageSymbolConfiguration *conf=[UIImageSymbolConfiguration
@@ -878,7 +893,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         glyph.frame=CGRectInset(tile.bounds,12,12);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
-        glyph.tintColor=FMSystemDark()?RGBA(.38,.75,1,1):RGBA(.17,.39,.70,1);
+        glyph.tintColor=FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
@@ -910,7 +925,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     settings.frame=self.window.windowScene.coordinateSpace.bounds;
     settings.windowLevel=UIWindowLevelNormal+90;
     settings.backgroundColor=UIColor.systemGroupedBackgroundColor;
-    settings.overrideUserInterfaceStyle=FMSystemAppearance();
+    settings.overrideUserInterfaceStyle=FMMenuAppearance();
     FMSettingsRootController *home=[FMSettingsRootController new];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:home];
     nav.navigationBar.prefersLargeTitles=YES;
@@ -995,10 +1010,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIUserInterfaceStyle style=FMSystemAppearance();
     if(style==self.lastSystemStyle) return;
     self.lastSystemStyle=style;
-    self.window.overrideUserInterfaceStyle=style;
-    self.window.rootViewController.overrideUserInterfaceStyle=style;
+    UIUserInterfaceStyle skin=FMMenuAppearance();
+    self.window.overrideUserInterfaceStyle=skin;
+    self.window.rootViewController.overrideUserInterfaceStyle=skin;
     if(self.settingsWindow) {
-        self.settingsWindow.overrideUserInterfaceStyle=style;
+        self.settingsWindow.overrideUserInterfaceStyle=skin;
         [self updateSettingsContent];
     } else [self draw];
     FMLog(@"system-appearance",style==UIUserInterfaceStyleDark?@"dark":@"light");
@@ -1110,7 +1126,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(theme<0||theme>3) return;
     SetPref(@"theme",@(theme));
     FMLog(@"theme-updated",[NSString stringWithFormat:@"preset=%ld",(long)theme]);
-    [self draw];
+    // Don't remove the touched card before the UIControl event completes.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIUserInterfaceStyle skin=FMMenuAppearance();
+        self.window.overrideUserInterfaceStyle=skin;
+        self.window.rootViewController.overrideUserInterfaceStyle=skin;
+        if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=skin;
+        [self draw];
+    });
 }
 - (void)diyPage:(UIStackView*)s {
     [self section:@"主题样式" sub:nil in:s];
