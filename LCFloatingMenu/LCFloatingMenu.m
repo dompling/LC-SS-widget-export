@@ -1503,6 +1503,21 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self draw];
     });
 }
+// Non-invasive checkpoint: records routing identity only, not a UI snapshot.
+// Keeping it in host defaults avoids touching third-party Guest databases.
+static void FMRecordGuestCheckpoint(NSString *target, NSString *targetContainer) {
+    NSString *guest=GuestID();
+    if(!guest.length || !target.length) return;
+    NSDictionary *checkpoint=@{
+        @"sourceBundle":guest,
+        @"targetBundle":target,
+        @"targetContainer":targetContainer ?: @"",
+        @"timestamp":[NSDate date],
+        @"schema":@1
+    };
+    [HostDefaults() setObject:checkpoint forKey:@"LCFloatingMenu.LastSwitchCheckpoint"];
+    FMLog(@"checkpoint-written",[NSString stringWithFormat:@"source=%@ target=%@ containerSpecified=%d",guest,target,targetContainer.length>0]);
+}
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
     if(!path.length) {FMLog(@"switch-rejected",@"empty-target");return;}
     FMLog(@"switch-request",[path isEqualToString:@"ui"]?@"return-home":@"new-guest");
@@ -1513,6 +1528,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
         if(!exists) { FMLog(@"switch-rejected",@"guest-ineligible"); [self showMessage:@"不可安全切换" details:@"目标 App 不存在、已锁定、需要 JIT，或补丁需要在 LC 中重新签名。请先返回 LC 启动。"]; return; }
     }
+    // Record the intended transition before the classic LC process terminates.
+    FMRecordGuestCheckpoint(path,uuid);
     Class utils=NSClassFromString(@"LCSharedUtils");
     SEL sel=NSSelectorFromString(@"launchToGuestAppWithURL:");
     if(![utils respondsToSelector:sel]) {
