@@ -201,6 +201,10 @@ static UIColor *FMThemeColor(FMColorRole role) {
     return FMThemeColorFor(role,FMTheme(),FMMenuDark());
 }
 static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
+static BOOL FMClearGlassEnabled(void) {
+    if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
+    return NO;
+}
 static CGFloat FMGlassTintStrength(void) {
     static const CGFloat base[4]={.12,.08,.22,.20};
     return Clamp(base[FMTheme()]+FloatPref(@"glassTint",0),0,.40);
@@ -417,15 +421,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     surface.clipsToBounds=YES;
     UIVisualEffect *effect=nil;
     BOOL nativeGlass=NO;
+    BOOL clear=FMClearGlassEnabled();
     if(@available(iOS 26.0,*)) {
         // Use the SDK-native UIKit API instead of a dynamically allocated
         // effect with simulated gradient layers obscuring its output.
-        // Preserve native Regular glass while applying the selected theme tint.
+        // Clear applies to the entire drawer as well as the edge handle.
         UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:
-            (!strong && BoolPref(@"clearGlass",NO))?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
+            clear?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
         glassEffect.interactive=!strong;
         glassEffect.tintColor=[FMThemeColor(FMColorGlass)
-                               colorWithAlphaComponent:FMGlassTintStrength()];
+                               colorWithAlphaComponent:clear?MIN(.12,FMGlassTintStrength()):FMGlassTintStrength()];
         effect=glassEffect;
         nativeGlass=YES;
     }
@@ -435,6 +440,19 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             (dark?UIBlurEffectStyleSystemMaterialDark:UIBlurEffectStyleSystemMaterialLight):
             (dark?UIBlurEffectStyleSystemThinMaterialDark:UIBlurEffectStyleSystemThinMaterialLight);
         effect=[UIBlurEffect effectWithStyle:style];
+    }
+    if(nativeGlass && clear) {
+        // Clear alone cannot keep text legible over arbitrary Guest content.
+        // Place a translucent themed luminance backing BEHIND the material,
+        // never over its foreground. The native Clear optics remain visible.
+        UIView *backing=[[UIView alloc] initWithFrame:surface.bounds];
+        CGFloat opacity=FMMenuDark()?.68:.72;
+        if(UIAccessibilityDarkerSystemColorsEnabled()) opacity=MAX(opacity,.82);
+        if(UIAccessibilityIsReduceTransparencyEnabled()) opacity=.96;
+        backing.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:opacity];
+        backing.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        backing.userInteractionEnabled=NO;
+        [surface addSubview:backing];
     }
     UIVisualEffectView *material=[[UIVisualEffectView alloc] initWithEffect:effect];
     material.frame=surface.bounds;
@@ -472,7 +490,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [button addSubview:bead];
     UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,2.5,14)];
     line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
-    line.backgroundColor=FMAccent();
+    line.backgroundColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
     line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
     [FMGlassContent(bead) addSubview:line];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
@@ -599,7 +617,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,60)];
     row.backgroundColor=UIColor.clearColor;
     row.layer.cornerRadius=17;
-    row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.84];
+    row.backgroundColor=FMClearGlassEnabled()?UIColor.clearColor:
+        [FMThemeColor(FMColorRow) colorWithAlphaComponent:.84];
     UIView *icon=[self iconViewForApp:app size:46];
     icon.frame=CGRectMake(8,7,46,46);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
@@ -822,7 +841,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!apps.count) {
         UILabel *empty=[self label:@"暂无应用" size:13 weight:UIFontWeightMedium];
         empty.textAlignment=NSTextAlignmentCenter;
-        empty.textColor=FMThemeColor(FMColorSecondary);
+        empty.textColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMThemeColor(FMColorSecondary);
         [self addRow:empty height:68 to:stack];
     }
 }
@@ -914,7 +933,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             CGRectMake((hit.size.width-tileSize)*.5,(hit.size.height-tileSize)*.5,
                        tileSize,tileSize)];
         tile.layer.cornerRadius=tileSize*.24;
-        tile.backgroundColor=FMThemeColor(FMColorTool);
+        tile.backgroundColor=FMClearGlassEnabled()?
+            [FMThemeColor(FMColorTool) colorWithAlphaComponent:.12]:FMThemeColor(FMColorTool);
         tile.userInteractionEnabled=NO;
         tile.layer.borderWidth=.8;
         tile.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
@@ -931,7 +951,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         glyph.frame=CGRectInset(tile.bounds,12,12);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
-        glyph.tintColor=FMAccent();
+        glyph.tintColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
@@ -1278,7 +1298,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self spacer:s size:5];
     [self spacer:s size:10];
     [self section:@"玻璃与微珠" sub:nil in:s];
-    [self settingSwitch:s title:@"悬浮把手透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
+    [self settingSwitch:s title:@"全菜单透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
     [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
