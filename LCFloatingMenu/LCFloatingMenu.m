@@ -165,7 +165,8 @@ static NSInteger FMTheme(void) {
 }
 // Only menu-owned UI adopts the skin. Never override a Guest's appearance.
 static UIUserInterfaceStyle FMMenuAppearance(void) {
-    return FMTheme()==2?UIUserInterfaceStyleDark:FMSystemAppearance();
+    NSInteger mode=[HostDefaults() integerForKey:Pref(@"appearanceMode")];
+    return mode==1?UIUserInterfaceStyleLight:mode==2?UIUserInterfaceStyleDark:FMSystemAppearance();
 }
 static BOOL FMMenuDark(void) { return FMMenuAppearance()==UIUserInterfaceStyleDark; }
 static UIColor *FMAccent(void) {
@@ -374,15 +375,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(@available(iOS 26.0,*)) {
         // Use the SDK-native UIKit API instead of a dynamically allocated
         // effect with simulated gradient layers obscuring its output.
-        NSInteger theme=FMTheme();
+        // Glass material is independent from color themes.
         UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:
-            theme==1?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
+            BoolPref(@"clearGlass",NO)?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
         glassEffect.interactive=!strong;
-        CGFloat tint=Clamp(FloatPref(@"glassTint",.08),0,.30);
-        if(theme==1) tint=MIN(tint,.035);
-        else if(theme==2) tint=MAX(tint,.24);
-        else if(theme==3) tint=MAX(tint,.20);
-        glassEffect.tintColor=[FMAccent() colorWithAlphaComponent:tint];
+        CGFloat tint=Clamp(FloatPref(@"glassTint",0),0,.15);
+        if(tint>0) glassEffect.tintColor=[FMAccent() colorWithAlphaComponent:tint];
         effect=glassEffect;
         nativeGlass=YES;
     }
@@ -978,6 +976,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)s {
     if([category isEqualToString:@"appearance"]) {
+        [self section:@"日间与夜间" sub:@"仅调整悬浮菜单，不影响 Guest App。" in:s];
+        [self appearanceModeControl:s];
+        [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
         [self settingSwitch:s title:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO tag:16];
         [self settingScaleControl:s];
@@ -1121,6 +1122,41 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:44 action:@selector(exportLogs)] height:44 to:s];
     [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:44 action:@selector(clearLogs)] height:44 to:s];
 }
+- (void)appearanceModeTapped:(UIControl *)sender {
+    NSInteger mode=sender.tag-70;
+    if(mode<0 || mode>2) return;
+    SetPref(@"appearanceMode",@(mode));
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIUserInterfaceStyle style=FMMenuAppearance();
+        self.window.overrideUserInterfaceStyle=style;
+        self.window.rootViewController.overrideUserInterfaceStyle=style;
+        if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=style;
+        [self draw];
+        [self updateSettingsContent];
+    });
+}
+- (void)appearanceModeControl:(UIStackView *)stack {
+    UIStackView *row=[UIStackView new];
+    row.axis=UILayoutConstraintAxisHorizontal;
+    row.distribution=UIStackViewDistributionFillEqually;
+    row.spacing=8;
+    NSArray *titles=@[@"跟随系统",@"日间模式",@"夜间模式"];
+    NSInteger selected=[HostDefaults() integerForKey:Pref(@"appearanceMode")];
+    for(NSInteger i=0;i<3;i++) {
+        UIButton *button=[UIButton buttonWithType:UIButtonTypeSystem];
+        button.tag=70+i;
+        [button setTitle:titles[i] forState:UIControlStateNormal];
+        button.titleLabel.font=[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+        button.layer.cornerRadius=12;
+        button.layer.borderWidth=selected==i?1.5:.5;
+        button.layer.borderColor=selected==i?FMAccent().CGColor:UIColor.separatorColor.CGColor;
+        button.backgroundColor=selected==i?[FMAccent() colorWithAlphaComponent:.12]:UIColor.secondarySystemGroupedBackgroundColor;
+        button.accessibilityTraits=UIAccessibilityTraitButton|(selected==i?UIAccessibilityTraitSelected:0);
+        [button addTarget:self action:@selector(appearanceModeTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [row addArrangedSubview:button];
+    }
+    [self addRow:row height:44 to:stack];
+}
 - (void)themeTapped:(UIControl *)sender {
     NSInteger theme=sender.tag-30;
     if(theme<0||theme>3) return;
@@ -1136,7 +1172,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     });
 }
 - (void)diyPage:(UIStackView*)s {
-    [self section:@"主题样式" sub:nil in:s];
+    [self section:@"主题配色" sub:@"配色不再影响玻璃材质和日夜模式。" in:s];
     NSArray *names=@[@"默认液态",@"极简无界",@"深空晶体",@"极光彩色"];
     NSArray *colors=@[RGBA(.55,.77,.96,1),RGBA(.86,.87,.90,1),RGBA(.13,.18,.30,1),RGBA(.65,.31,.79,1)];
     UIStackView *themes=[UIStackView new];themes.axis=UILayoutConstraintAxisHorizontal;
@@ -1200,10 +1236,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self spacer:s size:5];
     [self spacer:s size:10];
     [self section:@"玻璃与微珠" sub:nil in:s];
+    [self settingSwitch:s title:@"原生透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
     [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
-    [self settingSlider:s title:@"玻璃着色" key:@"glassTint" min:0 max:.30 def:.08 tag:13];
+    [self settingSlider:s title:@"玻璃着色（0 为原生）" key:@"glassTint" min:0 max:.15 def:0 tag:13];
     [self settingSwitch:s title:@"优先深色应用图标" key:@"preferDarkIcons" defaultValue:NO tag:9];
     [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:40 action:@selector(resetStyle)] height:40 to:s];
 }
@@ -1416,11 +1453,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 15:key=[@"stealth." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
         case 17:key=@"compactRestart";break;
+        case 18:key=@"clearGlass";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
-    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==9||sw.tag==15) [self draw];
+    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==9||sw.tag==15||sw.tag==18) [self draw];
     if(sw.tag==17) FMLog(@"compact-toolbar",sw.on?@"four-actions":@"three-actions");
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
@@ -1491,7 +1529,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)resetStyle {
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbWidth",@(12));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
-    SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(.08));
+    SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
+    SetPref(@"appearanceMode",@(0));
     SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);SetPref(@"preferDarkIcons",@NO);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"compactRestart",@NO);
