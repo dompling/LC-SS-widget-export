@@ -13,6 +13,7 @@
 #import "LCSharedUtils.h"
 #import "utils.h"
 #import "UIKitPrivate+MultitaskSupport.h"
+#import "LCMultitaskGuard.h"
 
 @interface AppSceneViewController()
 @property int resizeDebounceToken;
@@ -40,6 +41,7 @@
     self.scaleRatio = 1.0;
     self.isAppTerminationCleanUpCalled = false;
     self.isNativeWindow = [NSUserDefaults.lcSharedDefaults integerForKey:@"LCMultitaskMode" ] == 1;
+    LCMGLogEvent(@"launch-request", bundleId, dataUUID, 0, self.isNativeWindow ? @"native-window" : @"embedded-window");
     
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -50,6 +52,7 @@
     NSError* error = nil;
     _extension = [NSExtension extensionWithIdentifier:LCUtils.liveProcessBundleIdentifier error:&error];
     if(error) {
+        LCMGLogEvent(@"extension-discovery-failed", bundleId, dataUUID, 0, error.localizedDescription);
         [delegate appSceneVC:self didInitializeWithError:error];
         return nil;
     }
@@ -94,10 +97,12 @@
     
     __weak typeof(self) weakSelf = self;
     [_extension setRequestCancellationBlock:^(NSUUID *uuid, NSError *error) {
+        LCMGLogEvent(@"extension-cancelled", weakSelf.bundleId, weakSelf.dataUUID, weakSelf.pid, error.localizedDescription);
         [weakSelf appTerminationCleanUp];
         [weakSelf.delegate appSceneVC:weakSelf didInitializeWithError:error];
     }];
     [_extension setRequestInterruptionBlock:^(NSUUID *uuid) {
+        LCMGLogEvent(@"extension-interrupted", weakSelf.bundleId, weakSelf.dataUUID, weakSelf.pid, nil);
         [weakSelf appTerminationCleanUp];
     }];
     [_extension beginExtensionRequestWithInputItems:@[item] completion:^(NSUUID *identifier) {
@@ -105,11 +110,13 @@
             [MultitaskManager registerMultitaskContainerWithContainer:self.dataUUID];
             self.identifier = identifier;
             self.pid = [self.extension pidForRequestIdentifier:self.identifier];
+            LCMGLogEvent(@"extension-started", self.bundleId, self.dataUUID, self.pid, nil);
             [delegate appSceneVC:self didInitializeWithError:nil];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self setUpAppPresenter];
             });
         } else {
+            LCMGLogEvent(@"extension-start-failed", self.bundleId, self.dataUUID, self.pid, @"No request identifier returned");
             NSError* error = [NSError errorWithDomain:@"LiveProcess" code:2 userInfo:@{NSLocalizedDescriptionKey: @"Failed to start app. Child process has unexpectedly crashed"}];
             [delegate appSceneVC:self didInitializeWithError:error];
         }
@@ -123,6 +130,7 @@
     FBProcessManager *manager = [PrivClass(FBProcessManager) sharedInstance];
     // At this point, the process is spawned and we're ready to create a scene to render in our app
     RBSProcessHandle* processHandle = [PrivClass(RBSProcessHandle) handleForPredicate:predicate error:nil];
+    LCMGLogEvent(processHandle ? @"process-handle-ready" : @"process-handle-missing", self.bundleId, self.dataUUID, self.pid, nil);
     [manager registerProcessForAuditToken:processHandle.auditToken];
     UIApplicationSceneSpecification *specification = [UIApplicationSceneSpecification specification];
     
@@ -219,6 +227,7 @@
         self.contentView = [[UIView alloc] init];
         [self.contentView addSubview:self.presenter.presentationView];
     }
+    LCMGLogEvent(self.contentView ? @"scene-content-created" : @"scene-content-missing", self.bundleId, self.dataUUID, self.pid, self.sceneID);
     [self.view addSubview:_contentView];
     
     // If we have a staging URL scheme, pass it now
@@ -230,6 +239,7 @@
     
     __weak typeof(self) weakSelf = self;
     [self.extension setRequestInterruptionBlock:^(NSUUID *uuid) {
+        LCMGLogEvent(@"scene-extension-interrupted", weakSelf.bundleId, weakSelf.dataUUID, weakSelf.pid, nil);
         [weakSelf appTerminationCleanUp];
     }];
     self.contentView.layer.anchorPoint = CGPointMake(0, 0);
@@ -239,6 +249,7 @@
 }
 
 - (void)terminate {
+    LCMGLogEvent(@"terminate-requested", self.bundleId, self.dataUUID, self.pid, self.isAppRunning ? @"running" : @"not-running");
     if(self.isAppRunning) {
         [self.extension _kill:SIGTERM];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -284,6 +295,10 @@
                 frame.size.width = size.height;
                 frame.size.height = size.width;
             }
+            if (!LCMGIsValidSceneFrame(frame)) {
+                LCMGLogEvent(@"invalid-requested-frame", self.bundleId, self.dataUUID, self.pid, NSStringFromCGRect(frame));
+                return; // Do not forward a NaN/zero scene size to UIKit.
+            }
             settings.frame = frame;
             if(block) {
                 block(settings);
@@ -321,6 +336,10 @@
     if(UIInterfaceOrientationIsLandscape(tempSettings.interfaceOrientation)) {
         frame = CGRectMake(frame.origin.x, frame.origin.y, frame.size.height, frame.size.width);
     }
+    if (!LCMGIsValidSceneFrame(frame)) {
+        LCMGLogEvent(@"invalid-resulting-frame", self.bundleId, self.dataUUID, self.pid, NSStringFromCGRect(frame));
+        return; // Keep the previous valid view frame; do not assign invalid geometry.
+    }
     
     if (self.contentView) {
         BOOL isiOS26 = NO;
@@ -343,6 +362,7 @@
         return;
     }
     _isAppTerminationCleanUpCalled = true;
+    LCMGLogEvent(@"termination-cleanup", self.bundleId, self.dataUUID, self.pid, self.sceneID);
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.sceneID) {
             [[PrivClass(FBSceneManager) sharedInstance] destroyScene:self.sceneID withTransitionContext:nil];
