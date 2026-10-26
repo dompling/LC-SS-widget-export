@@ -8,6 +8,10 @@ Diagnose LiveContainer multitask guest launch failures and unexpected LiveProces
 
 **This first implementation is host-side diagnostic instrumentation, not a standalone dylib.** A guest tweak is injected into the guest process and cannot reliably inspect the LC host's private Scene lifecycle. Once the actual failure point is known, we can evaluate an independent host-loaded dylib or keep a small source-level fix.
 
+## Initial implementation
+
+The host-side guard is wired into `AppSceneViewController.m`. On the iOS 18+ hosting-controller path it rejects non-finite or zero-sized resulting Scene frames, preserving the last valid view frame. During resize it avoids assigning invalid requested frames. This is a narrow experimental mitigation, not a confirmed crash fix.
+
 ## Initial diagnostic checkpoints
 
 - Guest launch and NSExtension discovery
