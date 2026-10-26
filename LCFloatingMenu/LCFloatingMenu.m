@@ -168,11 +168,6 @@ static UIUserInterfaceStyle FMSystemAppearance(void) {
 static BOOL FMSystemDark(void) {
     return FMSystemAppearance()==UIUserInterfaceStyleDark;
 }
-static NSInteger FMTheme(void) {
-    NSInteger theme=[HostDefaults() integerForKey:Pref(@"theme")];
-    return theme>=0 && theme<=3?theme:0;
-}
-// Only menu-owned UI adopts the skin. Never override a Guest's appearance.
 static UIUserInterfaceStyle FMMenuAppearance(void) {
     NSInteger mode=[HostDefaults() integerForKey:Pref(@"appearanceMode")];
     return mode==1?UIUserInterfaceStyleLight:mode==2?UIUserInterfaceStyleDark:FMSystemAppearance();
@@ -182,41 +177,60 @@ typedef NS_ENUM(NSUInteger, FMColorRole) {
     FMColorAccent, FMColorText, FMColorSecondary, FMColorBackground,
     FMColorSurface, FMColorGlass, FMColorRow, FMColorTool, FMColorBorder
 };
-// Each theme owns a complete light/dark pair. Appearance selects the variant;
-// it never replaces the selected theme with a shared neutral palette.
-static UIColor *FMThemeColorFor(FMColorRole role, NSInteger theme, BOOL dark) {
-    static const uint32_t palettes[4][2][9]={
-        { // Default Liquid: cool blue-white / midnight blue.
-            {0x245DAB,0x12263D,0x435970,0xEDF3F9,0xFFFFFF,0xDCEAF7,0xE4EEF8,0xD4E4F6,0x809AB8},
-            {0x8AC9FF,0xF0F7FF,0xB4C9DD,0x0C1523,0x172438,0x142A44,0x263D59,0x324C6A,0x6D8AA8}
-        },
-        { // Minimal: neutral graphite in both appearances.
-            {0x454B55,0x191B20,0x50555E,0xF2F2F4,0xFFFFFF,0xE9EAED,0xF6F6F7,0xDCDDE1,0x9A9DA5},
-            {0xE0E3E8,0xFAFAFC,0xC0C1C8,0x111114,0x202024,0x232329,0x303036,0x3A3A42,0x85858F}
-        },
-        { // Deep Space: pale steel blue / deep navy crystal.
-            {0x204F99,0x142540,0x435775,0xE7EEF8,0xF4F7FC,0xC9D9F0,0xD9E4F4,0xC3D5EF,0x708BAF},
-            {0x91BAFF,0xEEF3FF,0xAFBFDD,0x080D1A,0x121D34,0x0D1935,0x1C2B4B,0x283E63,0x637BA7}
-        },
-        { // Aurora: lavender / plum, retaining its purple identity at night.
-            {0x673AA1,0x301A49,0x685079,0xF5EFFA,0xFFFBFF,0xE9D9F5,0xF1E5FA,0xE1CDEF,0xA586B6},
-            {0xD5ACFF,0xFCF1FF,0xD3BBE1,0x190F25,0x2A193B,0x321C49,0x3C2852,0x503367,0x9978B4}
-        }
-    };
-    uint32_t rgb=palettes[MAX(0,MIN(3,theme))][dark?1:0][role];
-    return RGBA(((rgb>>16)&255)/255.0,((rgb>>8)&255)/255.0,(rgb&255)/255.0,1);
+static UIColor *FMFromHex(NSString *hex, unsigned fallback) {
+    unsigned rgb=fallback;
+    if([hex isKindOfClass:NSString.class] && hex.length==7 && [hex hasPrefix:@"#"]) {
+        unsigned value=0;
+        NSScanner *scanner=[NSScanner scannerWithString:[hex substringFromIndex:1]];
+        if([scanner scanHexInt:&value] && scanner.isAtEnd) rgb=value;
+    }
+    return RGBA(((rgb>>16)&255)/255.,((rgb>>8)&255)/255.,(rgb&255)/255.,1);
+}
+static NSString *FMHex(UIColor *color) {
+    CGFloat r=0,g=0,b=0,a=0;
+    if(![color getRed:&r green:&g blue:&b alpha:&a]) return nil;
+    return [NSString stringWithFormat:@"#%02X%02X%02X",
+        (unsigned)round(Clamp(r,0,1)*255),(unsigned)round(Clamp(g,0,1)*255),
+        (unsigned)round(Clamp(b,0,1)*255)];
+}
+static UIColor *FMMix(UIColor *a,UIColor *b,CGFloat ratio) {
+    CGFloat ar=0,ag=0,ab=0,alpha=0,br=0,bg=0,bb=0;
+    [a getRed:&ar green:&ag blue:&ab alpha:&alpha];
+    [b getRed:&br green:&bg blue:&bb alpha:&alpha];
+    ratio=Clamp(ratio,0,1);
+    return RGBA(ar+(br-ar)*ratio,ag+(bg-ag)*ratio,ab+(bb-ab)*ratio,1);
+}
+static UIColor *FMAccentFor(BOOL dark) {
+    return FMFromHex([HostDefaults() stringForKey:Pref(dark?@"accentDark":@"accentLight")],
+                     dark?0x8AC9FF:0x245DAB);
 }
 static UIColor *FMThemeColor(FMColorRole role) {
-    return FMThemeColorFor(role,FMTheme(),FMMenuDark());
+    BOOL dark=FMMenuDark();
+    UIColor *accent=FMAccentFor(dark);
+    UIColor *surface=FMFromHex(nil,dark?0x1A2537:0xFFFFFF);
+    switch(role) {
+        case FMColorAccent: return accent;
+        case FMColorText: return FMFromHex(nil,dark?0xF3F7FF:0x182638);
+        case FMColorSecondary: return FMFromHex(nil,dark?0xC3CEDE:0x4B5B6C);
+        case FMColorBackground: return FMMix(FMFromHex(nil,dark?0x0B1220:0xF7F9FD),accent,dark?.12:.085);
+        case FMColorSurface: return FMMix(surface,accent,dark?.21:.075);
+        case FMColorGlass: return FMMix(FMFromHex(nil,dark?0x22334A:0xF2F8FF),accent,.38);
+        case FMColorRow: return FMMix(surface,accent,dark?.36:.18);
+        case FMColorTool: return FMMix(surface,accent,dark?.43:.24);
+        case FMColorBorder: return FMMix(FMFromHex(nil,dark?0x6B829A:0x97A8B8),accent,.36);
+    }
+    return surface;
 }
 static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
+static CGFloat FMOrbScale(void) {
+    return Clamp(FloatPref(@"orbScale",Clamp(FloatPref(@"orbWidth",12)/12.,.70,1.90)),.70,1.90);
+}
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
     return NO;
 }
 static CGFloat FMGlassTintStrength(void) {
-    static const CGFloat base[4]={.12,.08,.22,.20};
-    return Clamp(base[FMTheme()]+FloatPref(@"glassTint",0),0,.40);
+    return Clamp(.16+FloatPref(@"glassTint",0),0,.40);
 }
 // Clear keeps the full system glass visible. The accent supplies the selected
 // theme's identity without placing an opaque sheet below the material.
@@ -252,7 +266,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     static NSCache *cache;
     static dispatch_once_t once;
     dispatch_once(&once,^{ cache=[NSCache new];cache.countLimit=90; });
-    NSString *cacheKey=[folder stringByAppendingFormat:@"|%d",BoolPref(@"preferDarkIcons",NO)];
+    NSString *cacheKey=folder;
     id saved=[cache objectForKey:cacheKey];
     if(saved) return saved==NSNull.null?nil:saved;
     NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[folder stringByAppendingPathComponent:@"Info.plist"]];
@@ -272,11 +286,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         if([name isKindOfClass:NSString.class] && [name length]) [names addObject:name];
     // LC already exports the real rendered icon to these cache files.
     // This is the exact same source LCAppInfo.iconIsDarkIcon: displays in LC.
-    NSString *cached=[folder stringByAppendingPathComponent:
-        BoolPref(@"preferDarkIcons",NO)?@"LCAppIconDark.png":@"LCAppIconLight.png"];
-    UIImage *result=[UIImage imageWithContentsOfFile:cached];
-    if(!result) result=[UIImage imageWithContentsOfFile:
+    UIImage *result=[UIImage imageWithContentsOfFile:
         [folder stringByAppendingPathComponent:@"LCAppIconLight.png"]];
+    if(!result) result=[UIImage imageWithContentsOfFile:
+        [folder stringByAppendingPathComponent:@"LCAppIconDark.png"]];
     NSBundle *bundle=[NSBundle bundleWithPath:folder];
     NSFileManager *fm=NSFileManager.defaultManager;
     for(NSString *name in result?@[]:names) {
@@ -332,6 +345,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) FMGlassWindow *window;
 @property(nonatomic,strong) UIButton *orb;
 @property(nonatomic,strong) UIView *panel;
+@property(nonatomic,weak) UIColorWell *lightColorWell;
+@property(nonatomic,weak) UIColorWell *darkColorWell;
 @property(nonatomic,strong) UIView *dismissLayer;
 @property(nonatomic,strong) NSMutableArray<UIView*> *manageRows;
 @property(nonatomic,weak) UIScrollView *settingsScroll;
@@ -355,6 +370,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)closeSettings;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
 - (void)updateSettingsContent;
+- (void)appendResetStyleRow:(UIStackView *)stack;
 @end
 @implementation FMManager
 + (instancetype)shared {
@@ -421,8 +437,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self draw];
     [self scheduleAppearanceCheck];
 }
-- (CGFloat)orbWidth { return Clamp(FloatPref(@"orbWidth",12),9,28); }
-- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:Clamp(FloatPref(@"orbHeight",38),26,48); }
+- (CGFloat)orbWidth { return 12*FMOrbScale(); }
+- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:38*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -503,7 +519,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     bead.userInteractionEnabled=NO;
     bead.tag=9202;
     [button addSubview:bead];
-    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,2.5,14)];
+    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,2.5*FMOrbScale(),14*FMOrbScale())];
     line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
     line.backgroundColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
     line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
@@ -1155,6 +1171,28 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     [self addRow:slider height:28 to:s];
 }
+- (void)orbScaleControl:(UIStackView *)stack {
+    UIStackView *heading=[UIStackView new];
+    heading.axis=UILayoutConstraintAxisHorizontal;
+    UILabel *name=[self label:@"微珠缩放" size:14 weight:UIFontWeightMedium];
+    UILabel *percent=[self label:[NSString stringWithFormat:@"%.0f%%",100*FMOrbScale()]
+        size:13 weight:UIFontWeightSemibold];
+    percent.textColor=FMThemeColor(FMColorSecondary);
+    percent.textAlignment=NSTextAlignmentRight;
+    [heading addArrangedSubview:name];
+    [heading addArrangedSubview:percent];
+    [percent.widthAnchor constraintEqualToConstant:65].active=YES;
+    [self addRow:heading height:29 to:stack];
+    UISlider *slider=[UISlider new];
+    slider.minimumValue=.70; slider.maximumValue=1.90;
+    slider.value=FMOrbScale();slider.tag=11;slider.tintColor=FMAccent();
+    slider.accessibilityLabel=@"微珠缩放";
+    objc_setAssociatedObject(slider,@selector(sliderChanged:),percent,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    [slider addTarget:self action:@selector(sliderFinished:)
+        forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
+    [self addRow:slider height:34 to:stack];
+}
 - (void)settingScaleControl:(UIStackView *)stack {
     UIStackView *heading=[UIStackView new];
     heading.axis=UILayoutConstraintAxisHorizontal;
@@ -1243,95 +1281,55 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     [self addRow:row height:44 to:stack];
 }
-- (void)themeTapped:(UIControl *)sender {
-    NSInteger theme=sender.tag-30;
-    if(theme<0||theme>3) return;
-    SetPref(@"theme",@(theme));
-    FMLog(@"theme-updated",[NSString stringWithFormat:@"selected=%ld stored=%ld clear=%d",
-        (long)theme,(long)FMTheme(),FMClearGlassEnabled()]);
-    // Rebuild the settings preview when the touch finishes. The hidden drawer
-    // is reconstructed by closeSettings, using the newly stored theme.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIUserInterfaceStyle skin=FMMenuAppearance();
-        self.window.overrideUserInterfaceStyle=skin;
-        self.window.rootViewController.overrideUserInterfaceStyle=skin;
-        if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=skin;
-        [self refreshUI];
-    });
+- (void)themeColorChanged:(UIColorWell *)well {
+    BOOL dark=well.tag==201;
+    NSString *hex=FMHex(well.selectedColor);
+    if(!hex) return;
+    SetPref(dark?@"accentDark":@"accentLight",hex);
+    // Native UIColorWell retains the picker while the user chooses colors.
+    // Refresh the settings surface only after it is dismissed.
+    FMLog(@"theme-color",[NSString stringWithFormat:@"%@=%@",dark?@"dark":@"light",hex]);
+}
+- (void)customThemeColorRow:(UIStackView *)stack title:(NSString *)title dark:(BOOL)dark {
+    UIView *row=[UIView new];
+    row.backgroundColor=FMThemeColor(FMColorSurface);
+    row.layer.cornerRadius=13;
+    UILabel *label=[self label:title size:14 weight:UIFontWeightMedium];
+    label.translatesAutoresizingMaskIntoConstraints=NO;
+    [row addSubview:label];
+    UIColorWell *well=[UIColorWell new];
+    well.translatesAutoresizingMaskIntoConstraints=NO;
+    well.title=title;
+    well.tag=dark?201:200;
+    well.supportsAlpha=NO;
+    well.selectedColor=FMAccentFor(dark);
+    [well addTarget:self action:@selector(themeColorChanged:)
+      forControlEvents:UIControlEventValueChanged];
+    [row addSubview:well];
+    [NSLayoutConstraint activateConstraints:@[
+        [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [well.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
+        [well.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [well.widthAnchor constraintEqualToConstant:64],
+        [well.heightAnchor constraintEqualToConstant:42],
+        [label.trailingAnchor constraintLessThanOrEqualToAnchor:well.leadingAnchor constant:-8]
+    ]];
+    if(dark) self.darkColorWell=well; else self.lightColorWell=well;
+    [self addRow:row height:54 to:stack];
 }
 - (void)diyPage:(UIStackView*)s {
-    [self section:@"主题配色" sub:nil in:s];
-    NSArray *names=@[@"默认液态",@"极简无界",@"深空晶体",@"极光彩色"];
-    UIStackView *themes=[UIStackView new];themes.axis=UILayoutConstraintAxisHorizontal;
-    themes.distribution=UIStackViewDistributionFillEqually;themes.spacing=5;
-    NSInteger selected=FMTheme();
-    for(NSInteger i=0;i<4;i++) {
-        UIControl *tile=[UIControl new];
-        tile.layer.cornerRadius=15;
-        tile.tag=30+i;
-        tile.backgroundColor=FMThemeColorFor(FMColorSurface,i,FMMenuDark());
-        tile.layer.borderWidth=selected==i?2:1;
-        tile.layer.borderColor=selected==i?
-            FMThemeColorFor(FMColorAccent,i,FMMenuDark()).CGColor:
-            FMThemeColor(FMColorBorder).CGColor;
-        tile.accessibilityLabel=[NSString stringWithFormat:@"%@主题",names[i]];
-        tile.accessibilityValue=selected==i?@"已选中":@"未选中";
-        tile.accessibilityTraits=UIAccessibilityTraitButton|
-            (selected==i?UIAccessibilityTraitSelected:0);
-        UIView *swatch=[UIView new];
-        swatch.translatesAutoresizingMaskIntoConstraints=NO;
-        swatch.userInteractionEnabled=NO;
-        swatch.layer.cornerRadius=12;
-        swatch.backgroundColor=FMThemeColorFor(FMColorGlass,i,FMMenuDark());
-        swatch.layer.borderWidth=1;
-        swatch.layer.borderColor=FMThemeColorFor(FMColorAccent,i,FMMenuDark()).CGColor;
-        [tile addSubview:swatch];
-        UILabel *name=[self label:names[i] size:10 weight:UIFontWeightSemibold];
-        name.textColor=FMThemeColorFor(FMColorText,i,FMMenuDark());
-        name.translatesAutoresizingMaskIntoConstraints=NO;
-        name.userInteractionEnabled=NO;
-        name.numberOfLines=1;
-        name.adjustsFontSizeToFitWidth=YES;
-        name.minimumScaleFactor=.75;
-        name.textAlignment=NSTextAlignmentCenter;
-        [tile addSubview:name];
-        UIImageView *check=[[UIImageView alloc] initWithImage:
-            [UIImage systemImageNamed:@"checkmark.circle.fill"]];
-        check.translatesAutoresizingMaskIntoConstraints=NO;
-        check.userInteractionEnabled=NO;
-        check.tintColor=FMThemeColorFor(FMColorAccent,i,FMMenuDark());
-        check.backgroundColor=FMThemeColorFor(FMColorSurface,i,FMMenuDark());
-        check.layer.cornerRadius=9;
-        check.hidden=selected!=i;
-        [tile addSubview:check];
-        [NSLayoutConstraint activateConstraints:@[
-            [swatch.widthAnchor constraintEqualToConstant:33],
-            [swatch.heightAnchor constraintEqualToConstant:33],
-            [swatch.topAnchor constraintEqualToAnchor:tile.topAnchor constant:8],
-            [swatch.centerXAnchor constraintEqualToAnchor:tile.centerXAnchor],
-            [name.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:2],
-            [name.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-2],
-            [name.topAnchor constraintEqualToAnchor:tile.topAnchor constant:49],
-            [name.heightAnchor constraintEqualToConstant:18],
-            [check.widthAnchor constraintEqualToConstant:18],
-            [check.heightAnchor constraintEqualToConstant:18],
-            [check.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-2],
-            [check.topAnchor constraintEqualToAnchor:tile.topAnchor constant:2]
-        ]];
-        [tile addTarget:self action:@selector(themeTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [themes addArrangedSubview:tile];
-    }
-    [self addRow:themes height:77 to:s];
-    [self spacer:s size:5];
-    [self spacer:s size:10];
+    [self section:@"自定义主题配色"
+        sub:@"日间与夜间分别选择颜色，菜单会自动生成配套颜色。" in:s];
+    [self customThemeColorRow:s title:@"日间主题色" dark:NO];
+    [self customThemeColorRow:s title:@"夜间主题色" dark:YES];
+    [self spacer:s size:12];
     [self section:@"玻璃与微珠" sub:nil in:s];
     [self settingSwitch:s title:@"全菜单透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
     [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
-    [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
+    [self orbScaleControl:s];
     [self settingSlider:s title:@"玻璃主题着色增强" key:@"glassTint" min:0 max:.15 def:0 tag:13];
-    [self settingSwitch:s title:@"优先深色应用图标" key:@"preferDarkIcons" defaultValue:NO tag:9];
-    [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:40 action:@selector(resetStyle)] height:40 to:s];
 }
 - (void)pinApp:(UIControl *)button {
     NSDictionary *app=objc_getAssociatedObject(button,@selector(pinApp:));
@@ -1538,7 +1536,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 6:key=@"autoFade";break;
         case 7:key=[@"override." stringByAppendingString:GuestID()];break;
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
-        case 9:key=@"preferDarkIcons";break;
         case 15:key=[@"stealth." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
         case 17:key=@"compactRestart";break;
@@ -1547,18 +1544,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         default:return;
     }
     SetPref(key,@(sw.isOn));
-    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==9||sw.tag==15||sw.tag==18) [self draw];
+    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==15||sw.tag==18) [self draw];
     if(sw.tag==17) FMLog(@"compact-toolbar",sw.on?@"four-actions":@"three-actions");
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
 - (void)sliderChanged:(UISlider*)slider {
     NSString *key=slider.tag==14?@"panelScale":slider.tag==10?@"idleAlpha":
-        slider.tag==11?@"orbWidth":
+        slider.tag==11?@"orbScale":
         slider.tag==13?@"glassTint":
         slider.tag==12?[@"appAlpha." stringByAppendingString:GuestID()]:nil;
     if(!key) return;
     SetPref(key,@(slider.value));
-    if(slider.tag==14) {
+    if(slider.tag==14 || slider.tag==11) {
         UILabel *value=objc_getAssociatedObject(slider,@selector(sliderChanged:));
         value.text=[NSString stringWithFormat:@"%.0f%%",round(slider.value*100)];
         slider.accessibilityValue=value.text;
@@ -1615,12 +1612,46 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!presenter.presentedViewController)
         [presenter presentViewController:alert animated:YES completion:nil];
 }
+- (void)appendResetStyleRow:(UIStackView *)stack {
+    UIView *row=[UIView new];
+    row.backgroundColor=FMThemeColor(FMColorSurface);
+    row.layer.cornerRadius=13;
+    UIControl *button=[[UIControl alloc] initWithFrame:CGRectMake(0,0,280,54)];
+    button.translatesAutoresizingMaskIntoConstraints=NO;
+    [row addSubview:button];
+    UIImageView *symbol=[[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"arrow.counterclockwise"]];
+    symbol.translatesAutoresizingMaskIntoConstraints=NO;
+    symbol.tintColor=FMAccent();
+    [button addSubview:symbol];
+    UILabel *label=[self label:@"恢复默认设置" size:14 weight:UIFontWeightMedium];
+    label.translatesAutoresizingMaskIntoConstraints=NO;
+    [button addSubview:label];
+    [NSLayoutConstraint activateConstraints:@[
+        [button.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [button.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [button.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [button.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        [symbol.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:15],
+        [symbol.centerYAnchor constraintEqualToAnchor:button.centerYAnchor],
+        [symbol.widthAnchor constraintEqualToConstant:20],
+        [symbol.heightAnchor constraintEqualToConstant:20],
+        [label.leadingAnchor constraintEqualToAnchor:symbol.trailingAnchor constant:12],
+        [label.centerYAnchor constraintEqualToAnchor:button.centerYAnchor]
+    ]];
+    button.accessibilityLabel=@"恢复默认设置";
+    [button addTarget:self action:@selector(resetStyle) forControlEvents:UIControlEventTouchUpInside];
+    [self addRow:row height:54 to:stack];
+}
 - (void)resetStyle {
-    SetPref(@"idleAlpha",@(.72));SetPref(@"orbWidth",@(12));
+    SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
     SetPref(@"appearanceMode",@(0));
-    SetPref(@"theme",@(0));SetPref(@"autoFade",@YES);SetPref(@"preferDarkIcons",@NO);
+    SetPref(@"autoFade",@YES);
+    for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth"]) {
+        [HostDefaults() removeObjectForKey:Pref(key)];
+    }
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"compactRestart",@NO);
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -1628,7 +1659,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         self.window.overrideUserInterfaceStyle=skin;
         self.window.rootViewController.overrideUserInterfaceStyle=skin;
         if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=skin;
-        [self draw];
+        [self refreshUI];
     });
 }
 - (void)launchPath:(NSString*)path uuid:(NSString*)uuid {
@@ -1880,6 +1911,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                                symbol:@"waveform.path.ecg" action:@selector(openDiagnostics)];
     [logs.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:logs];
+    UIView *space=[UIView new];[space.heightAnchor constraintEqualToConstant:18].active=YES;
+    [stack addArrangedSubview:space];
+    [manager appendResetStyleRow:stack];
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.contentScroll!=scroll || !scroll.window) return;
         [scroll layoutIfNeeded];
