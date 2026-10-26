@@ -152,8 +152,17 @@ static UIColor *TintFor(NSString *s) {
 static UIUserInterfaceStyle FMSystemAppearance(void) {
     UIUserInterfaceStyle style=UIScreen.mainScreen.traitCollection.userInterfaceStyle;
     if(style==UIUserInterfaceStyleLight || style==UIUserInterfaceStyleDark) return style;
-    // Do not fall back to UIWindowScene or Guest view traits; those can be
-    // overridden by the running Guest and are not reliable system preferences.
+    // UIScreen can report Unspecified on some iOS versions. Fall back to
+    // the foreground scene (not an individual Guest UIWindow or view).
+    if(@available(iOS 13.0,*)) {
+        for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if(![scene isKindOfClass:UIWindowScene.class] ||
+               scene.activationState!=UISceneActivationStateForegroundActive) continue;
+            UIUserInterfaceStyle sceneStyle=((UIWindowScene *)scene).traitCollection.userInterfaceStyle;
+            if(sceneStyle==UIUserInterfaceStyleLight || sceneStyle==UIUserInterfaceStyleDark)
+                return sceneStyle;
+        }
+    }
     return UIUserInterfaceStyleLight;
 }
 static BOOL FMSystemDark(void) {
@@ -208,6 +217,16 @@ static BOOL FMClearGlassEnabled(void) {
 static CGFloat FMGlassTintStrength(void) {
     static const CGFloat base[4]={.12,.08,.22,.20};
     return Clamp(base[FMTheme()]+FloatPref(@"glassTint",0),0,.40);
+}
+// Clear keeps the full system glass visible. The accent supplies the selected
+// theme's identity without placing an opaque sheet below the material.
+static CGFloat FMClearGlassTintStrength(void) {
+    return Clamp(.18+FloatPref(@"glassTint",0)*.65,.18,.29);
+}
+static CGFloat FMReadableRowAlpha(void) {
+    if(UIAccessibilityIsReduceTransparencyEnabled()) return .94;
+    if(UIAccessibilityDarkerSystemColorsEnabled()) return FMClearGlassEnabled()?.72:.90;
+    return FMClearGlassEnabled()?(FMMenuDark()?.55:.52):.84;
 }
 static void FMApplyNavigationTheme(UINavigationController *nav) {
     if(!nav) return;
@@ -429,8 +448,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:
             clear?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
         glassEffect.interactive=!strong;
-        glassEffect.tintColor=[FMThemeColor(FMColorGlass)
-                               colorWithAlphaComponent:clear?MIN(.12,FMGlassTintStrength()):FMGlassTintStrength()];
+        glassEffect.tintColor=[(clear?FMAccent():FMThemeColor(FMColorGlass))
+                               colorWithAlphaComponent:clear?FMClearGlassTintStrength():FMGlassTintStrength()];
         effect=glassEffect;
         nativeGlass=YES;
     }
@@ -441,15 +460,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             (dark?UIBlurEffectStyleSystemThinMaterialDark:UIBlurEffectStyleSystemThinMaterialLight);
         effect=[UIBlurEffect effectWithStyle:style];
     }
-    if(nativeGlass && clear) {
-        // Clear alone cannot keep text legible over arbitrary Guest content.
-        // Place a translucent themed luminance backing BEHIND the material,
-        // never over its foreground. The native Clear optics remain visible.
+    if(nativeGlass && clear && UIAccessibilityIsReduceTransparencyEnabled()) {
+        // Accessibility is the only case for a whole-surface backing.
+        // The normal Clear path must not sample a mostly opaque flat panel.
         UIView *backing=[[UIView alloc] initWithFrame:surface.bounds];
-        CGFloat opacity=FMMenuDark()?.68:.72;
-        if(UIAccessibilityDarkerSystemColorsEnabled()) opacity=MAX(opacity,.82);
-        if(UIAccessibilityIsReduceTransparencyEnabled()) opacity=.96;
-        backing.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:opacity];
+        backing.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:.94];
         backing.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         backing.userInteractionEnabled=NO;
         [surface addSubview:backing];
@@ -617,8 +632,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,60)];
     row.backgroundColor=UIColor.clearColor;
     row.layer.cornerRadius=17;
-    row.backgroundColor=FMClearGlassEnabled()?UIColor.clearColor:
-        [FMThemeColor(FMColorRow) colorWithAlphaComponent:.84];
+    // Localized contrast only under list text, not behind the entire glass.
+    row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:FMReadableRowAlpha()];
     UIView *icon=[self iconViewForApp:app size:46];
     icon.frame=CGRectMake(8,7,46,46);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
@@ -874,6 +889,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             UILabel *name=[self label:app[@"title"] size:11 weight:UIFontWeightSemibold];
             name.frame=CGRectMake(1,44,cell-2,16);name.textAlignment=NSTextAlignmentCenter;
             name.lineBreakMode=NSLineBreakByTruncatingTail;
+            if(FMClearGlassEnabled()) {
+                // Shield short captions while preserving clear corners and gaps.
+                name.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
+                name.layer.cornerRadius=6;
+                name.clipsToBounds=YES;
+            }
             [tile addSubview:name];
         }
         objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -934,7 +955,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                        tileSize,tileSize)];
         tile.layer.cornerRadius=tileSize*.24;
         tile.backgroundColor=FMClearGlassEnabled()?
-            [FMThemeColor(FMColorTool) colorWithAlphaComponent:.12]:FMThemeColor(FMColorTool);
+            [FMThemeColor(FMColorTool) colorWithAlphaComponent:
+                 UIAccessibilityIsReduceTransparencyEnabled()?.94:.48]:
+            FMThemeColor(FMColorTool);
         tile.userInteractionEnabled=NO;
         tile.layer.borderWidth=.8;
         tile.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
@@ -1212,7 +1235,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         button.layer.cornerRadius=12;
         button.layer.borderWidth=selected==i?1.5:.5;
         button.layer.borderColor=selected==i?FMAccent().CGColor:FMThemeColor(FMColorBorder).CGColor;
-        button.backgroundColor=selected==i?[FMAccent() colorWithAlphaComponent:.12]:FMThemeColor(FMColorSurface);
+        button.backgroundColor=selected==i?[FMAccent() colorWithAlphaComponent:.20]:FMThemeColor(FMColorSurface);
+        [button setTitleColor:FMThemeColor(FMColorText) forState:UIControlStateNormal];
         button.accessibilityTraits=UIAccessibilityTraitButton|(selected==i?UIAccessibilityTraitSelected:0);
         [button addTarget:self action:@selector(appearanceModeTapped:) forControlEvents:UIControlEventTouchUpInside];
         [row addArrangedSubview:button];
@@ -1223,14 +1247,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSInteger theme=sender.tag-30;
     if(theme<0||theme>3) return;
     SetPref(@"theme",@(theme));
-    FMLog(@"theme-updated",[NSString stringWithFormat:@"preset=%ld",(long)theme]);
-    // Don't remove the touched card before the UIControl event completes.
+    FMLog(@"theme-updated",[NSString stringWithFormat:@"selected=%ld stored=%ld clear=%d",
+        (long)theme,(long)FMTheme(),FMClearGlassEnabled()]);
+    // Rebuild the settings preview when the touch finishes. The hidden drawer
+    // is reconstructed by closeSettings, using the newly stored theme.
     dispatch_async(dispatch_get_main_queue(), ^{
         UIUserInterfaceStyle skin=FMMenuAppearance();
         self.window.overrideUserInterfaceStyle=skin;
         self.window.rootViewController.overrideUserInterfaceStyle=skin;
         if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=skin;
-        [self draw];
+        [self refreshUI];
     });
 }
 - (void)diyPage:(UIStackView*)s {
@@ -1245,7 +1271,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         tile.tag=30+i;
         tile.backgroundColor=FMThemeColorFor(FMColorSurface,i,FMMenuDark());
         tile.layer.borderWidth=selected==i?2:1;
-        tile.layer.borderColor=selected==i?FMAccent().CGColor:
+        tile.layer.borderColor=selected==i?
+            FMThemeColorFor(FMColorAccent,i,FMMenuDark()).CGColor:
             FMThemeColor(FMColorBorder).CGColor;
         tile.accessibilityLabel=[NSString stringWithFormat:@"%@主题",names[i]];
         tile.accessibilityValue=selected==i?@"已选中":@"未选中";
