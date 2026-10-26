@@ -173,10 +173,16 @@ static UIColor *FMAccent(void) {
     BOOL dark=FMMenuDark();
     switch (FMTheme()) {
         case 1: return dark?RGBA(.82,.87,.94,1):RGBA(.28,.34,.43,1);
-        case 2: return RGBA(.43,.71,1,1);
+        case 2: return dark?RGBA(.43,.71,1,1):RGBA(.12,.32,.64,1);
         case 3: return dark?RGBA(.78,.60,1,1):RGBA(.43,.24,.69,1);
         default:return dark?RGBA(.48,.76,1,1):RGBA(.14,.38,.71,1);
     }
+}
+static UIView *FMGlassContent(UIView *surface) {
+    for(UIView *child in surface.subviews)
+        if([child isKindOfClass:UIVisualEffectView.class])
+            return ((UIVisualEffectView *)child).contentView;
+    return surface;
 }
 static UIImage *FMGuestIcon(NSDictionary *app) {
     NSString *folder=app[@"folder"];
@@ -363,8 +369,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat bottom=MAX(24,self.window.safeAreaInsets.bottom+8);
     return CGRectMake(x,Clamp(b.size.height*self.orbY-h*.5,top,b.size.height-h-bottom),w,h);
 }
-// Native iOS 26 Liquid Glass. Keep all other blur/gloss simulation strictly
-// in the iOS < 26 fallback; decorative scrims must never cover UIGlassEffect.
+// One native glass shell owns the foreground via contentView. Rows and tools
+// use ordinary fills, avoiding nested refraction behind small text and symbols.
 - (UIView *)glass:(CGRect)frame radius:(CGFloat)radius strong:(BOOL)strong {
     UIView *surface=[[UIView alloc] initWithFrame:frame];
     surface.backgroundColor=UIColor.clearColor;
@@ -377,10 +383,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         // effect with simulated gradient layers obscuring its output.
         // Glass material is independent from color themes.
         UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:
-            BoolPref(@"clearGlass",NO)?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
+            (!strong && BoolPref(@"clearGlass",NO))?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
         glassEffect.interactive=!strong;
         CGFloat tint=Clamp(FloatPref(@"glassTint",0),0,.15);
-        if(tint>0) glassEffect.tintColor=[FMAccent() colorWithAlphaComponent:tint];
+        // Neutral tint preserves contrast without inheriting the selected color theme.
+        if(tint>0) glassEffect.tintColor=[(FMMenuDark()?UIColor.blackColor:UIColor.whiteColor)
+                                        colorWithAlphaComponent:tint];
         effect=glassEffect;
         nativeGlass=YES;
     }
@@ -394,7 +402,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIVisualEffectView *material=[[UIVisualEffectView alloc] initWithEffect:effect];
     material.frame=surface.bounds;
     material.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    material.userInteractionEnabled=NO;
+    material.userInteractionEnabled=YES;
     [surface addSubview:material];
     if(!nativeGlass) {
         // Only older iOS receives the limited compatibility approximation.
@@ -403,7 +411,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             strong?(FMMenuDark()?.25:.34):.10];
         scrim.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         scrim.userInteractionEnabled=NO;
-        [surface addSubview:scrim];
+        [material.contentView addSubview:scrim];
         surface.layer.borderWidth=.6;
         surface.layer.borderColor=[UIColor.separatorColor colorWithAlphaComponent:.32].CGColor;
     }
@@ -429,7 +437,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
     line.backgroundColor=FMMenuDark()?UIColor.whiteColor:RGBA(.17,.34,.55,1);
     line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
-    [button addSubview:line];
+    [FMGlassContent(bead) addSubview:line];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
@@ -536,7 +544,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     box.backgroundColor=[UIColor.secondarySystemFillColor colorWithAlphaComponent:.50];
     UIImage *real=FMGuestIcon(app);
     if(real) {
-        UIImageView *iv=[[UIImageView alloc] initWithImage:real];
+        UIImageView *iv=[[UIImageView alloc] initWithImage:
+                         [real imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]];
         iv.frame=box.bounds;iv.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         iv.contentMode=UIViewContentModeScaleAspectFill;
         [box addSubview:iv];
@@ -552,14 +561,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // Standard mode extends the drawer without changing its optical material.
     UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,60)];
     row.backgroundColor=UIColor.clearColor;
-    UIView *optics=[self glass:row.bounds radius:17 strong:NO];
-    optics.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    optics.userInteractionEnabled=NO;
-    [row addSubview:optics];
+    row.layer.cornerRadius=17;
+    row.backgroundColor=FMMenuDark()?RGBA(1,1,1,.08):RGBA(1,1,1,.32);
     UIView *icon=[self iconViewForApp:app size:46];
     icon.frame=CGRectMake(8,7,46,46);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
-    UILabel *title=[self label:app[@"title"] size:15 weight:UIFontWeightMedium];
+    UILabel *title=[self label:app[@"title"] size:15 weight:UIFontWeightSemibold];
     title.translatesAutoresizingMaskIntoConstraints=NO;
     title.numberOfLines=1;
     title.lineBreakMode=NSLineBreakByTruncatingTail;
@@ -567,7 +574,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIImageView *arrow=[[UIImageView alloc] initWithImage:
                         [UIImage systemImageNamed:@"chevron.right"]];
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
-    arrow.tintColor=UIColor.secondaryLabelColor;
+    arrow.tintColor=UIColor.labelColor;
     arrow.contentMode=UIViewContentModeScaleAspectFit;
     [row addSubview:arrow];
     [NSLayoutConstraint activateConstraints:@[
@@ -655,7 +662,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     scroll.alwaysBounceVertical=NO;
     scroll.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     scroll.contentInset=UIEdgeInsetsMake(0,0,4,0);
-    [glass addSubview:scroll];
+    [FMGlassContent(glass) addSubview:scroll];
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         if(!compact) [self buildAppHeader:glass];
@@ -802,23 +809,21 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         UIControl *tile=[[UIControl alloc] initWithFrame:
             CGRectMake(14+i*(cell+gap),compact?5:8,cell,compact?48:65)];
         tile.backgroundColor=UIColor.clearColor;
-        UIView *optics=[self glass:tile.bounds radius:14 strong:NO];
-        optics.userInteractionEnabled=NO;
-        [tile addSubview:optics];
+        // Favorites share the drawer material; no extra glass behind captions.
         CGFloat iconSize=compact?40:36;
         UIView *icon=[self iconViewForApp:app size:iconSize];
         icon.frame=CGRectMake((cell-iconSize)*.5,compact?4:4,iconSize,iconSize);
         icon.userInteractionEnabled=NO;
         [tile addSubview:icon];
         if(!compact) {
-            UILabel *name=[self label:app[@"title"] size:10 weight:UIFontWeightMedium];
+            UILabel *name=[self label:app[@"title"] size:11 weight:UIFontWeightSemibold];
             name.frame=CGRectMake(1,44,cell-2,16);name.textAlignment=NSTextAlignmentCenter;
             name.lineBreakMode=NSLineBreakByTruncatingTail;
             [tile addSubview:name];
         }
         objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
-        tile.accessibilityLabel=app[@"title"];[glass addSubview:tile];
+        tile.accessibilityLabel=app[@"title"];[FMGlassContent(glass) addSubview:tile];
     }
 }
 - (void)buildAppFooter:(UIView *)glass {
@@ -848,7 +853,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:13,
                        glass.bounds.size.height-height-7,w-(compact?6:26),height)];
     footer.backgroundColor=UIColor.clearColor;
-    [glass addSubview:footer];
+    [FMGlassContent(glass) addSubview:footer];
     if(compact) {
         // Keep one continuous drawer shell rather than nesting another
         // pill-shaped control panel inside it.
@@ -871,10 +876,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         button.accessibilityTraits=UIAccessibilityTraitButton;
         button.accessibilityHint=@"轻触执行";
         CGFloat tileSize=compact?50:44;
-        UIView *tile=[self glass:CGRectMake((hit.size.width-tileSize)*.5,
-                                          (hit.size.height-tileSize)*.5,
-                                          tileSize,tileSize)
-                            radius:tileSize*.24 strong:NO];
+        UIView *tile=[[UIView alloc] initWithFrame:
+            CGRectMake((hit.size.width-tileSize)*.5,(hit.size.height-tileSize)*.5,
+                       tileSize,tileSize)];
+        tile.layer.cornerRadius=tileSize*.24;
+        tile.backgroundColor=FMMenuDark()?RGBA(1,1,1,.12):RGBA(0,0,0,.07);
         tile.userInteractionEnabled=NO;
         tile.layer.borderWidth=.8;
         tile.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
@@ -891,7 +897,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         glyph.frame=CGRectInset(tile.bounds,12,12);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
-        glyph.tintColor=FMAccent();
+        glyph.tintColor=UIColor.labelColor;
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
@@ -1236,11 +1242,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self spacer:s size:5];
     [self spacer:s size:10];
     [self section:@"玻璃与微珠" sub:nil in:s];
-    [self settingSwitch:s title:@"原生透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
+    [self settingSwitch:s title:@"悬浮把手透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
     [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
-    [self settingSlider:s title:@"玻璃着色（0 为原生）" key:@"glassTint" min:0 max:.15 def:0 tag:13];
+    [self settingSlider:s title:@"玻璃中性着色（0 为原生）" key:@"glassTint" min:0 max:.15 def:0 tag:13];
     [self settingSwitch:s title:@"优先深色应用图标" key:@"preferDarkIcons" defaultValue:NO tag:9];
     [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:40 action:@selector(resetStyle)] height:40 to:s];
 }
