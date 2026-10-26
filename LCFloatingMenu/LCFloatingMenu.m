@@ -169,14 +169,53 @@ static UIUserInterfaceStyle FMMenuAppearance(void) {
     return mode==1?UIUserInterfaceStyleLight:mode==2?UIUserInterfaceStyleDark:FMSystemAppearance();
 }
 static BOOL FMMenuDark(void) { return FMMenuAppearance()==UIUserInterfaceStyleDark; }
-static UIColor *FMAccent(void) {
-    BOOL dark=FMMenuDark();
-    switch (FMTheme()) {
-        case 1: return dark?RGBA(.82,.87,.94,1):RGBA(.28,.34,.43,1);
-        case 2: return dark?RGBA(.43,.71,1,1):RGBA(.12,.32,.64,1);
-        case 3: return dark?RGBA(.78,.60,1,1):RGBA(.43,.24,.69,1);
-        default:return dark?RGBA(.48,.76,1,1):RGBA(.14,.38,.71,1);
-    }
+typedef NS_ENUM(NSUInteger, FMColorRole) {
+    FMColorAccent, FMColorText, FMColorSecondary, FMColorBackground,
+    FMColorSurface, FMColorGlass, FMColorRow, FMColorTool, FMColorBorder
+};
+// Each theme owns a complete light/dark pair. Appearance selects the variant;
+// it never replaces the selected theme with a shared neutral palette.
+static UIColor *FMThemeColorFor(FMColorRole role, NSInteger theme, BOOL dark) {
+    static const uint32_t palettes[4][2][9]={
+        { // Default Liquid: cool blue-white / midnight blue.
+            {0x245DAB,0x12263D,0x435970,0xEDF3F9,0xFFFFFF,0xDCEAF7,0xE4EEF8,0xD4E4F6,0x809AB8},
+            {0x8AC9FF,0xF0F7FF,0xB4C9DD,0x0C1523,0x172438,0x142A44,0x263D59,0x324C6A,0x6D8AA8}
+        },
+        { // Minimal: neutral graphite in both appearances.
+            {0x454B55,0x191B20,0x50555E,0xF2F2F4,0xFFFFFF,0xE9EAED,0xF6F6F7,0xDCDDE1,0x9A9DA5},
+            {0xE0E3E8,0xFAFAFC,0xC0C1C8,0x111114,0x202024,0x232329,0x303036,0x3A3A42,0x85858F}
+        },
+        { // Deep Space: pale steel blue / deep navy crystal.
+            {0x204F99,0x142540,0x435775,0xE7EEF8,0xF4F7FC,0xC9D9F0,0xD9E4F4,0xC3D5EF,0x708BAF},
+            {0x91BAFF,0xEEF3FF,0xAFBFDD,0x080D1A,0x121D34,0x0D1935,0x1C2B4B,0x283E63,0x637BA7}
+        },
+        { // Aurora: lavender / plum, retaining its purple identity at night.
+            {0x673AA1,0x301A49,0x685079,0xF5EFFA,0xFFFBFF,0xE9D9F5,0xF1E5FA,0xE1CDEF,0xA586B6},
+            {0xD5ACFF,0xFCF1FF,0xD3BBE1,0x190F25,0x2A193B,0x321C49,0x3C2852,0x503367,0x9978B4}
+        }
+    };
+    uint32_t rgb=palettes[MAX(0,MIN(3,theme))][dark?1:0][role];
+    return RGBA(((rgb>>16)&255)/255.0,((rgb>>8)&255)/255.0,(rgb&255)/255.0,1);
+}
+static UIColor *FMThemeColor(FMColorRole role) {
+    return FMThemeColorFor(role,FMTheme(),FMMenuDark());
+}
+static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
+static CGFloat FMGlassTintStrength(void) {
+    static const CGFloat base[4]={.12,.08,.22,.20};
+    return Clamp(base[FMTheme()]+FloatPref(@"glassTint",0),0,.40);
+}
+static void FMApplyNavigationTheme(UINavigationController *nav) {
+    if(!nav) return;
+    UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
+    [appearance configureWithDefaultBackground];
+    appearance.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:.92];
+    appearance.titleTextAttributes=@{NSForegroundColorAttributeName:FMThemeColor(FMColorText)};
+    appearance.largeTitleTextAttributes=appearance.titleTextAttributes;
+    nav.navigationBar.standardAppearance=appearance;
+    nav.navigationBar.scrollEdgeAppearance=appearance;
+    nav.navigationBar.compactAppearance=appearance;
+    nav.navigationBar.tintColor=FMAccent();
 }
 static UIView *FMGlassContent(UIView *surface) {
     for(UIView *child in surface.subviews)
@@ -381,14 +420,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(@available(iOS 26.0,*)) {
         // Use the SDK-native UIKit API instead of a dynamically allocated
         // effect with simulated gradient layers obscuring its output.
-        // Glass material is independent from color themes.
+        // Preserve native Regular glass while applying the selected theme tint.
         UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:
             (!strong && BoolPref(@"clearGlass",NO))?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
         glassEffect.interactive=!strong;
-        CGFloat tint=Clamp(FloatPref(@"glassTint",0),0,.15);
-        // Neutral tint preserves contrast without inheriting the selected color theme.
-        if(tint>0) glassEffect.tintColor=[(FMMenuDark()?UIColor.blackColor:UIColor.whiteColor)
-                                        colorWithAlphaComponent:tint];
+        glassEffect.tintColor=[FMThemeColor(FMColorGlass)
+                               colorWithAlphaComponent:FMGlassTintStrength()];
         effect=glassEffect;
         nativeGlass=YES;
     }
@@ -407,13 +444,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!nativeGlass) {
         // Only older iOS receives the limited compatibility approximation.
         UIView *scrim=[[UIView alloc] initWithFrame:surface.bounds];
-        scrim.backgroundColor=[UIColor.systemBackgroundColor colorWithAlphaComponent:
+        scrim.backgroundColor=[FMThemeColor(FMColorGlass) colorWithAlphaComponent:
             strong?(FMMenuDark()?.25:.34):.10];
         scrim.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         scrim.userInteractionEnabled=NO;
         [material.contentView addSubview:scrim];
         surface.layer.borderWidth=.6;
-        surface.layer.borderColor=[UIColor.separatorColor colorWithAlphaComponent:.32].CGColor;
+        surface.layer.borderColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.32].CGColor;
     }
     return surface;
 }
@@ -435,7 +472,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [button addSubview:bead];
     UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,2.5,14)];
     line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
-    line.backgroundColor=FMMenuDark()?UIColor.whiteColor:RGBA(.17,.34,.55,1);
+    line.backgroundColor=FMAccent();
     line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
     [FMGlassContent(bead) addSubview:line];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
@@ -518,14 +555,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight {
     UILabel *l=[UILabel new]; l.text=text; l.font=[UIFont systemFontOfSize:size weight:weight];
-    l.textColor=UIColor.labelColor; l.numberOfLines=0; return l;
+    l.textColor=FMThemeColor(FMColorText); l.numberOfLines=0; return l;
 }
 - (UIView *)rowForTitle:(NSString *)title icon:(NSString *)icon height:(CGFloat)height action:(SEL)action {
     UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,278,height)];
-    row.backgroundColor=[UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:.23];
+    row.backgroundColor=FMThemeColor(FMColorSurface);
     row.layer.cornerRadius=MIN(18,height*.38);
     row.layer.borderWidth=.4;
-    row.layer.borderColor=UIColor.separatorColor.CGColor;
+    row.layer.borderColor=FMThemeColor(FMColorBorder).CGColor;
     UIImageView *symbol=[[UIImageView alloc] initWithImage:
         [UIImage systemImageNamed:icon withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium]]];
     symbol.tintColor=FMAccent();
@@ -541,7 +578,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
     UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
     box.layer.cornerRadius=size*.22;box.clipsToBounds=YES;
-    box.backgroundColor=[UIColor.secondarySystemFillColor colorWithAlphaComponent:.50];
+    box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
     UIImage *real=FMGuestIcon(app);
     if(real) {
         UIImageView *iv=[[UIImageView alloc] initWithImage:
@@ -562,7 +599,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,60)];
     row.backgroundColor=UIColor.clearColor;
     row.layer.cornerRadius=17;
-    row.backgroundColor=FMMenuDark()?RGBA(1,1,1,.08):RGBA(1,1,1,.32);
+    row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.84];
     UIView *icon=[self iconViewForApp:app size:46];
     icon.frame=CGRectMake(8,7,46,46);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
@@ -574,7 +611,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIImageView *arrow=[[UIImageView alloc] initWithImage:
                         [UIImage systemImageNamed:@"chevron.right"]];
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
-    arrow.tintColor=UIColor.labelColor;
+    arrow.tintColor=FMThemeColor(FMColorText);
     arrow.contentMode=UIViewContentModeScaleAspectFit;
     [row addSubview:arrow];
     [NSLayoutConstraint activateConstraints:@[
@@ -646,8 +683,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(0,0,pw,ph)];
     shadow.center=CGPointMake(centerX,centerY);
     BOOL night=FMMenuDark();
-    UIColor *shadowTint=small?(night?RGBA(.15,.55,1,1):RGBA(.24,.51,.85,1)):
-                              UIColor.blackColor;
+    UIColor *shadowTint=small?FMAccent():UIColor.blackColor;
     shadow.layer.shadowColor=shadowTint.CGColor;
     shadow.layer.shadowOpacity=small?(night?.52:.24):.18;
     shadow.layer.shadowRadius=small?18:22;
@@ -720,7 +756,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)header:(UIStackView *)stack title:(NSString *)title sub:(NSString *)sub {
     UILabel *a=[self label:title size:22 weight:UIFontWeightBold]; [stack addArrangedSubview:a];
-    UILabel *b=[self label:sub size:12 weight:UIFontWeightRegular]; b.textColor=UIColor.secondaryLabelColor;
+    UILabel *b=[self label:sub size:12 weight:UIFontWeightRegular]; b.textColor=FMThemeColor(FMColorSecondary);
     [stack addArrangedSubview:b]; [self spacer:stack size:8];
 }
 - (NSArray<NSDictionary*> *)visibleApps {
@@ -786,7 +822,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!apps.count) {
         UILabel *empty=[self label:@"暂无应用" size:13 weight:UIFontWeightMedium];
         empty.textAlignment=NSTextAlignmentCenter;
-        empty.textColor=UIColor.secondaryLabelColor;
+        empty.textColor=FMThemeColor(FMColorSecondary);
         [self addRow:empty height:68 to:stack];
     }
 }
@@ -859,9 +895,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         // pill-shaped control panel inside it.
         UIView *separator=[[UIView alloc] initWithFrame:CGRectMake(13,0,
                                                footer.bounds.size.width-26,.8)];
-        separator.backgroundColor=FMMenuDark()?
-             [UIColor.whiteColor colorWithAlphaComponent:.35]:
-             [UIColor.blackColor colorWithAlphaComponent:.12];
+        separator.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
         [footer addSubview:separator];
     }
     CGFloat slot=compact?63:footer.bounds.size.width/items.count;
@@ -880,7 +914,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             CGRectMake((hit.size.width-tileSize)*.5,(hit.size.height-tileSize)*.5,
                        tileSize,tileSize)];
         tile.layer.cornerRadius=tileSize*.24;
-        tile.backgroundColor=FMMenuDark()?RGBA(1,1,1,.12):RGBA(0,0,0,.07);
+        tile.backgroundColor=FMThemeColor(FMColorTool);
         tile.userInteractionEnabled=NO;
         tile.layer.borderWidth=.8;
         tile.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
@@ -897,7 +931,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         glyph.frame=CGRectInset(tile.bounds,12,12);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
-        glyph.tintColor=UIColor.labelColor;
+        glyph.tintColor=FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
@@ -928,16 +962,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIWindow *settings=[[UIWindow alloc] initWithWindowScene:self.window.windowScene];
     settings.frame=self.window.windowScene.coordinateSpace.bounds;
     settings.windowLevel=UIWindowLevelNormal+90;
-    settings.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    settings.backgroundColor=FMThemeColor(FMColorBackground);
     settings.overrideUserInterfaceStyle=FMMenuAppearance();
     FMSettingsRootController *home=[FMSettingsRootController new];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:home];
     nav.navigationBar.prefersLargeTitles=YES;
-    UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
-    [appearance configureWithDefaultBackground];
-    nav.navigationBar.standardAppearance=appearance;
-    nav.navigationBar.scrollEdgeAppearance=appearance;
-    nav.navigationBar.compactAppearance=appearance;
+    FMApplyNavigationTheme(nav);
     home.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc]
         initWithTitle:@"完成" style:UIBarButtonItemStyleDone
         target:self action:@selector(closeSettings)];
@@ -974,11 +1004,17 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self draw];
 }
 - (void)updateSettingsContent {
-    UIViewController *top=self.settingsNavigation.topViewController;
-    if([top isKindOfClass:FMSettingsSectionController.class])
-        [(FMSettingsSectionController*)top rebuild];
-    else if([top isKindOfClass:FMSettingsRootController.class])
-        [(FMSettingsRootController*)top rebuild];
+    self.settingsWindow.backgroundColor=FMThemeColor(FMColorBackground);
+    FMApplyNavigationTheme(self.settingsNavigation);
+    // Refresh all loaded pages so Back never reveals the previous palette.
+    for(UIViewController *controller in self.settingsNavigation.viewControllers) {
+        if(!controller.isViewLoaded) continue;
+        controller.view.backgroundColor=FMThemeColor(FMColorBackground);
+        if([controller isKindOfClass:FMSettingsSectionController.class])
+            [(FMSettingsSectionController*)controller rebuild];
+        else if([controller isKindOfClass:FMSettingsRootController.class])
+            [(FMSettingsRootController*)controller rebuild];
+    }
 }
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)s {
     if([category isEqualToString:@"appearance"]) {
@@ -1008,7 +1044,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:52 action:@selector(exportLogs)] height:52 to:s];
         [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:52 action:@selector(clearLogs)] height:52 to:s];
         UILabel *hint=[self label:@"仅记录菜单运行与切换事件，不采集应用页面内容。" size:12 weight:UIFontWeightRegular];
-        hint.textColor=UIColor.secondaryLabelColor;
+        hint.textColor=FMThemeColor(FMColorSecondary);
         [s addArrangedSubview:hint];
     }
 }
@@ -1044,7 +1080,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)backToApps { [self closeSettings]; }
 - (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
     UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,280,51)];
-    row.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    row.backgroundColor=FMThemeColor(FMColorSurface);
     row.layer.cornerRadius=13;
     UILabel *l=[self label:title size:14 weight:UIFontWeightMedium];
     l.translatesAutoresizingMaskIntoConstraints=NO;
@@ -1084,7 +1120,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UILabel *percent=[self label:
         [NSString stringWithFormat:@"%.0f%%",100*Clamp(FloatPref(@"panelScale",1.0),.75,1.20)]
         size:13 weight:UIFontWeightSemibold];
-    percent.textColor=UIColor.secondaryLabelColor;
+    percent.textColor=FMThemeColor(FMColorSecondary);
     percent.textAlignment=NSTextAlignmentRight;
     [heading addArrangedSubview:name];
     [heading addArrangedSubview:percent];
@@ -1104,7 +1140,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [stack addArrangedSubview:heading];
     if(sub.length) {
         UILabel *description=[self label:sub size:11 weight:UIFontWeightRegular];
-        description.textColor=UIColor.secondaryLabelColor;
+        description.textColor=FMThemeColor(FMColorSecondary);
         [stack addArrangedSubview:description];
     }
 }
@@ -1155,8 +1191,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         button.titleLabel.font=[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
         button.layer.cornerRadius=12;
         button.layer.borderWidth=selected==i?1.5:.5;
-        button.layer.borderColor=selected==i?FMAccent().CGColor:UIColor.separatorColor.CGColor;
-        button.backgroundColor=selected==i?[FMAccent() colorWithAlphaComponent:.12]:UIColor.secondarySystemGroupedBackgroundColor;
+        button.layer.borderColor=selected==i?FMAccent().CGColor:FMThemeColor(FMColorBorder).CGColor;
+        button.backgroundColor=selected==i?[FMAccent() colorWithAlphaComponent:.12]:FMThemeColor(FMColorSurface);
         button.accessibilityTraits=UIAccessibilityTraitButton|(selected==i?UIAccessibilityTraitSelected:0);
         [button addTarget:self action:@selector(appearanceModeTapped:) forControlEvents:UIControlEventTouchUpInside];
         [row addArrangedSubview:button];
@@ -1178,9 +1214,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     });
 }
 - (void)diyPage:(UIStackView*)s {
-    [self section:@"主题配色" sub:@"配色不再影响玻璃材质和日夜模式。" in:s];
+    [self section:@"主题配色" sub:nil in:s];
     NSArray *names=@[@"默认液态",@"极简无界",@"深空晶体",@"极光彩色"];
-    NSArray *colors=@[RGBA(.55,.77,.96,1),RGBA(.86,.87,.90,1),RGBA(.13,.18,.30,1),RGBA(.65,.31,.79,1)];
     UIStackView *themes=[UIStackView new];themes.axis=UILayoutConstraintAxisHorizontal;
     themes.distribution=UIStackViewDistributionFillEqually;themes.spacing=5;
     NSInteger selected=FMTheme();
@@ -1188,10 +1223,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         UIControl *tile=[UIControl new];
         tile.layer.cornerRadius=15;
         tile.tag=30+i;
-        tile.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+        tile.backgroundColor=FMThemeColorFor(FMColorSurface,i,FMMenuDark());
         tile.layer.borderWidth=selected==i?2:1;
         tile.layer.borderColor=selected==i?FMAccent().CGColor:
-            UIColor.separatorColor.CGColor;
+            FMThemeColor(FMColorBorder).CGColor;
         tile.accessibilityLabel=[NSString stringWithFormat:@"%@主题",names[i]];
         tile.accessibilityValue=selected==i?@"已选中":@"未选中";
         tile.accessibilityTraits=UIAccessibilityTraitButton|
@@ -1200,11 +1235,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         swatch.translatesAutoresizingMaskIntoConstraints=NO;
         swatch.userInteractionEnabled=NO;
         swatch.layer.cornerRadius=12;
-        swatch.backgroundColor=colors[i];
+        swatch.backgroundColor=FMThemeColorFor(FMColorGlass,i,FMMenuDark());
         swatch.layer.borderWidth=1;
-        swatch.layer.borderColor=UIColor.separatorColor.CGColor;
+        swatch.layer.borderColor=FMThemeColorFor(FMColorAccent,i,FMMenuDark()).CGColor;
         [tile addSubview:swatch];
         UILabel *name=[self label:names[i] size:10 weight:UIFontWeightSemibold];
+        name.textColor=FMThemeColorFor(FMColorText,i,FMMenuDark());
         name.translatesAutoresizingMaskIntoConstraints=NO;
         name.userInteractionEnabled=NO;
         name.numberOfLines=1;
@@ -1216,8 +1252,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [UIImage systemImageNamed:@"checkmark.circle.fill"]];
         check.translatesAutoresizingMaskIntoConstraints=NO;
         check.userInteractionEnabled=NO;
-        check.tintColor=FMAccent();
-        check.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+        check.tintColor=FMThemeColorFor(FMColorAccent,i,FMMenuDark());
+        check.backgroundColor=FMThemeColorFor(FMColorSurface,i,FMMenuDark());
         check.layer.cornerRadius=9;
         check.hidden=selected!=i;
         [tile addSubview:check];
@@ -1246,7 +1282,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self settingSlider:s title:@"微珠宽度" key:@"orbWidth" min:9 max:28 def:12 tag:11];
-    [self settingSlider:s title:@"玻璃中性着色（0 为原生）" key:@"glassTint" min:0 max:.15 def:0 tag:13];
+    [self settingSlider:s title:@"玻璃主题着色增强" key:@"glassTint" min:0 max:.15 def:0 tag:13];
     [self settingSwitch:s title:@"优先深色应用图标" key:@"preferDarkIcons" defaultValue:NO tag:9];
     [self addRow:[self rowForTitle:@"恢复默认样式" icon:@"arrow.counterclockwise" height:40 action:@selector(resetStyle)] height:40 to:s];
 }
@@ -1342,7 +1378,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     group.alignment=UIStackViewAlignmentFill;
     group.distribution=UIStackViewDistributionFill;
     group.spacing=0;
-    group.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    group.backgroundColor=FMThemeColor(FMColorSurface);
     group.layer.cornerRadius=18;
     group.clipsToBounds=YES;
     [stack addArrangedSubview:group];
@@ -1369,7 +1405,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [pin setImage:[UIImage systemImageNamed:favored?@"star.fill":@"star"
                               withConfiguration:starConfig] forState:UIControlStateNormal];
         pin.tintColor=favored?(FMMenuDark()?RGBA(1,.77,.30,1):RGBA(.55,.35,.03,1)):
-                            UIColor.secondaryLabelColor;
+                            FMThemeColor(FMColorSecondary);
         pin.accessibilityLabel=favored?@"取消收藏":@"添加到收藏";
         objc_setAssociatedObject(pin,@selector(pinApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [pin addTarget:self action:@selector(pinApp:) forControlEvents:UIControlEventTouchUpInside];
@@ -1382,7 +1418,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         UIImageView *lines=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal"]];
         lines.translatesAutoresizingMaskIntoConstraints=NO;
         lines.contentMode=UIViewContentModeScaleAspectFit;
-        lines.tintColor=UIColor.secondaryLabelColor;
+        lines.tintColor=FMThemeColor(FMColorSecondary);
         [handle addSubview:lines];
         UILongPressGestureRecognizer *drag=[[UILongPressGestureRecognizer alloc]
             initWithTarget:self action:@selector(sortDrag:)];
@@ -1414,7 +1450,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         if(i+1<apps.count) {
             UIView *divider=[UIView new];
             divider.translatesAutoresizingMaskIntoConstraints=NO;
-            divider.backgroundColor=UIColor.separatorColor;
+            divider.backgroundColor=FMThemeColor(FMColorBorder);
             [row addSubview:divider];
             [NSLayoutConstraint activateConstraints:@[
                 [divider.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
@@ -1427,7 +1463,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     if(!apps.count) {
         UILabel *empty=[self label:@"暂无可管理的应用" size:14 weight:UIFontWeightRegular];
-        empty.textColor=UIColor.secondaryLabelColor;
+        empty.textColor=FMThemeColor(FMColorSecondary);
         empty.textAlignment=NSTextAlignmentCenter;
         [self addRow:empty height:64 to:group];
     }
@@ -1682,7 +1718,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title=@"悬浮菜单";
-    self.view.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=[UIScrollView new];
     scroll.translatesAutoresizingMaskIntoConstraints=NO;
     scroll.backgroundColor=UIColor.clearColor;
@@ -1702,7 +1738,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                      symbol:(NSString *)symbol action:(SEL)action {
     UIControl *row=[UIControl new];
     row.layer.cornerRadius=16;
-    row.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    row.backgroundColor=FMThemeColor(FMColorSurface);
     UIImageView *icon=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol]];
     icon.translatesAutoresizingMaskIntoConstraints=NO;
     icon.tintColor=FMAccent();
@@ -1711,18 +1747,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UILabel *title=[UILabel new];
     title.translatesAutoresizingMaskIntoConstraints=NO;
     title.text=name;
-    title.textColor=UIColor.labelColor;
+    title.textColor=FMThemeColor(FMColorText);
     title.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     [row addSubview:title];
     UILabel *detail=[UILabel new];
     detail.translatesAutoresizingMaskIntoConstraints=NO;
     detail.text=subtitle;
-    detail.textColor=UIColor.secondaryLabelColor;
+    detail.textColor=FMThemeColor(FMColorSecondary);
     detail.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
     detail.numberOfLines=1;
     [row addSubview:detail];
     UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
-    arrow.tintColor=UIColor.secondaryLabelColor;
+    arrow.tintColor=FMThemeColor(FMColorSecondary);
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:arrow];
     [NSLayoutConstraint activateConstraints:@[
@@ -1756,6 +1792,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)rebuild {
     if(!self.isViewLoaded || !self.contentScroll) return;
+    self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=self.contentScroll;
     CGFloat oldOffset=scroll.contentOffset.y;
     for(UIView *view in [scroll.subviews copy])
@@ -1785,7 +1822,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [stack addArrangedSubview:secondGap];
     UILabel *section=[UILabel new];
     section.text=@"管理与支持";
-    section.textColor=UIColor.secondaryLabelColor;
+    section.textColor=FMThemeColor(FMColorSecondary);
     section.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
     [stack addArrangedSubview:section];
     UIControl *apps=[self navigationRow:@"应用管理" subtitle:@"每 App 设置、收藏与排序"
@@ -1815,7 +1852,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSDictionary *titles=@{@"appearance":@"显示与外观",@"behavior":@"交互与切换",
                            @"apps":@"应用管理",@"diagnostics":@"诊断与日志"};
     self.title=titles[self.sectionKey]?:@"设置";
-    self.view.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=[UIScrollView new];
     scroll.translatesAutoresizingMaskIntoConstraints=NO;
     scroll.backgroundColor=UIColor.clearColor;
@@ -1833,6 +1870,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)rebuild {
     if(!self.isViewLoaded || !self.contentScroll) return;
+    self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=self.contentScroll;
     CGFloat offset=scroll.contentOffset.y;
     for(UIView *child in [scroll.subviews copy])
