@@ -333,6 +333,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,weak) UIScrollView *appsScroll;
 @property(nonatomic,assign) BOOL appsScrollRestorePending;
 @property(nonatomic,assign) BOOL appsRefreshScheduled;
+@property(nonatomic,assign) BOOL morphOpening;
+@property(nonatomic,assign) NSUInteger morphGeneration;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
@@ -691,7 +693,51 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(BoolPref(@"haptic",YES)) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     }
-    [self draw];
+    if(opening) {
+        self.morphOpening=YES;
+        [self draw];
+        self.morphOpening=NO;
+        if(self.panel && self.orb && !UIAccessibilityIsReduceMotionEnabled()) {
+            UIView *drawer=self.panel;
+            UIButton *bead=self.orb;
+            CGPoint destination=drawer.center;
+            CGAffineTransform finalTransform=drawer.transform;
+            NSUInteger generation=++self.morphGeneration;
+            CGFloat sx=MAX(.08,bead.bounds.size.width/MAX(1,drawer.bounds.size.width));
+            CGFloat sy=MAX(.10,bead.bounds.size.height/MAX(1,drawer.bounds.size.height));
+            drawer.center=bead.center;
+            drawer.transform=CGAffineTransformMakeScale(sx,sy);
+            drawer.userInteractionEnabled=NO;
+            bead.alpha=0;
+            [UIView animateWithDuration:.42 delay:0 usingSpringWithDamping:.82
+                initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
+                animations:^{
+                    drawer.center=destination;
+                    drawer.transform=finalTransform;
+                } completion:^(BOOL done) {
+                    if(self.panel==drawer && generation==self.morphGeneration) {
+                        drawer.userInteractionEnabled=YES;
+                        bead.alpha=1;
+                    }
+                }];
+        }
+    } else if(self.panel && self.orb && !UIAccessibilityIsReduceMotionEnabled()) {
+        UIView *drawer=self.panel;
+        CGPoint destination=self.orb.center;
+        CGFloat sx=MAX(.08,self.orb.bounds.size.width/MAX(1,drawer.bounds.size.width));
+        CGFloat sy=MAX(.10,self.orb.bounds.size.height/MAX(1,drawer.bounds.size.height));
+        NSUInteger generation=++self.morphGeneration;
+        drawer.userInteractionEnabled=NO;
+        self.dismissLayer.userInteractionEnabled=NO;
+        [UIView animateWithDuration:.27 delay:0 options:UIViewAnimationOptionCurveEaseInOut
+            animations:^{
+                drawer.center=destination;
+                drawer.transform=CGAffineTransformMakeScale(sx,sy);
+                drawer.alpha=.45;
+            } completion:^(BOOL done) {
+                if(generation==self.morphGeneration && self.panel==drawer) [self draw];
+            }];
+    } else [self draw];
 }
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight {
     UILabel *l=[UILabel new]; l.text=text; l.font=[UIFont systemFontOfSize:size weight:weight];
@@ -958,15 +1004,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // drawOrb uses the saved orbY/onLeft values on both open and close;
     // mutating its center here caused the handle to jump every time.
     shadow.alpha=1;
-    // Native glass can silently fail to render if its owning view starts
-    // at alpha=0. Animate scale only, leaving the effect continuously active.
-    shadow.transform=CGAffineTransformMakeScale(actualScale*.965,actualScale*.96);
-    NSTimeInterval duration=UIAccessibilityIsReduceMotionEnabled()?.10:.29;
-    [UIView animateWithDuration:duration delay:0
-        usingSpringWithDamping:.88 initialSpringVelocity:0
-        options:UIViewAnimationOptionCurveEaseOut animations:^{
-            shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
-        } completion:nil];
+    if(self.morphOpening || UIAccessibilityIsReduceMotionEnabled())
+        shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
+    else {
+        shadow.transform=CGAffineTransformMakeScale(actualScale*.965,actualScale*.96);
+        [UIView animateWithDuration:.29 delay:0 usingSpringWithDamping:.88
+            initialSpringVelocity:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+                shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
+            } completion:nil];
+    }
 }
 - (void)header:(UIStackView *)stack title:(NSString *)title sub:(NSString *)sub {
     UILabel *a=[self label:title size:22 weight:UIFontWeightBold]; [stack addArrangedSubview:a];
