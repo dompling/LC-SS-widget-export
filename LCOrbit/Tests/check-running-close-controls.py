@@ -12,8 +12,8 @@ assert "[close.widthAnchor constraintEqualToConstant:40]" in compact, "compact c
 assert "[row.trailingAnchor constraintEqualToAnchor:container.trailingAnchor]" in compact, "compact app row must fill actual scroll width"
 footer=src[src.index("- (void)buildAppFooter:(UIView *)glass {"):src.index("    CGFloat w=glass.bounds.size.width;",src.index("- (void)buildAppFooter:(UIView *)glass {"))]
 compact_footer=footer[footer.index("if(compact) {"):footer.index("} else {",footer.index("if(compact) {"))]
-assert "收起菜单" in compact_footer and "@selector(toggle)" in compact_footer, "compact footer must offer collapse"
-for forbidden in ["@selector(openSettings)", "@selector(goHome)", "@selector(restart)", "@selector(closeMultitaskGuest)"]:
+assert "返回主页" in compact_footer and "@selector(goHome)" in compact_footer, "compact footer must return home"
+for forbidden in ["@selector(openSettings)", "@selector(toggle)", "@selector(restart)", "@selector(closeMultitaskGuest)"]:
     assert forbidden not in compact_footer, "compact footer must not contain "+forbidden
 assert "NSUInteger compactActions=1;" in src, "compact footer height must reserve one control"
 assert "@selector(openSettings)" in footer, "normal footer must keep settings"
@@ -24,4 +24,4 @@ assert src.count("10+items.count*63+3") == 1, "compact footer sizing must match 
 assert "action:@selector(holdPanel:)" in src, "drawer long press opens settings"
 hold=src[src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"):src.index("- (void)draw {",src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"))]
 assert "[self openSettings];" in hold, "bead long press must open settings"
-print("Running-task close, compact geometry, and long-press settings: PASS")
+print("Running-task close, compact home button, geometry, and long-press settings: PASS")
