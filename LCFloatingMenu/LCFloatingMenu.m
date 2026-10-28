@@ -176,6 +176,39 @@ static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
 static CGFloat FMOrbScale(void) {
     return Clamp(FloatPref(@"orbScale",Clamp(FloatPref(@"orbWidth",12)/12.,.70,1.90)),.70,1.90);
 }
+// A mirrored, gently concave inner shoulder joins the side edge to the drawer.
+// The glass and its shadow use exactly the same path.
+static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact) {
+    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
+    CGFloat r=MIN(compact?21:26,MIN(w*.31,h*.17));
+    CGFloat shoulder=MIN(compact?10:14,r*.55);
+    CGFloat outer=MIN(13,r*.58);
+    UIBezierPath *path=[UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(w-outer,0)];
+    [path addQuadCurveToPoint:CGPointMake(w,outer) controlPoint:CGPointMake(w,0)];
+    [path addLineToPoint:CGPointMake(w,h-outer)];
+    [path addQuadCurveToPoint:CGPointMake(w-outer,h) controlPoint:CGPointMake(w,h)];
+    [path addLineToPoint:CGPointMake(r+shoulder,h)];
+    [path addCurveToPoint:CGPointMake(r*.65,h-r*.45)
+            controlPoint1:CGPointMake(r*.28,h)
+            controlPoint2:CGPointMake(r+shoulder,h-r*.32)];
+    [path addCurveToPoint:CGPointMake(0,h-r-shoulder)
+            controlPoint1:CGPointMake(0,h-r*.58)
+            controlPoint2:CGPointMake(0,h-r*.82)];
+    [path addLineToPoint:CGPointMake(0,r+shoulder)];
+    [path addCurveToPoint:CGPointMake(r*.65,r*.45)
+            controlPoint1:CGPointMake(0,r*.82)
+            controlPoint2:CGPointMake(0,r*.58)];
+    [path addCurveToPoint:CGPointMake(r+shoulder,0)
+            controlPoint1:CGPointMake(r+shoulder,r*.32)
+            controlPoint2:CGPointMake(r*.28,0)];
+    [path closePath];
+    if(dockLeft) {
+        CGAffineTransform flip=CGAffineTransformMake(-1,0,0,1,w,0);
+        [path applyTransform:flip];
+    }
+    return path;
+}
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
     return NO;
@@ -405,7 +438,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self scheduleAppearanceCheck];
 }
 - (CGFloat)orbWidth { return 12*FMOrbScale(); }
-- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:38*FMOrbScale(); }
+- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:52*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -576,16 +609,22 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self.overlayView addSubview:button];
     self.orb=button;
     if(!self.isOpen && BoolPref(@"autoFade",YES)) {
+        // Wait before gently docking the material, not the touch surface.
+        // The old 32% horizontal squeeze made the handle nearly invisible.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(3.0*NSEC_PER_SEC)),
                        dispatch_get_main_queue(),^{
-            if(self.orb==button && !self.isOpen && !UIAccessibilityIsReduceMotionEnabled()) {
-                [UIView animateWithDuration:.42 animations:^{
-                    BOOL stealth=BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
-                                 BoolPref([@"stealth." stringByAppendingString:GuestID()],NO);
-                    bead.transform=CGAffineTransformMakeScale(stealth?.18:.32,.88);
-                    line.alpha=stealth?.12:.4;
-                }];
-            }
+            if(self.orb!=button || self.isOpen) return;
+            BOOL stealth=BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
+                         BoolPref([@"stealth." stringByAppendingString:GuestID()],NO);
+            CGFloat delta=self.left?-1.25:1.25;
+            void (^docking)(void)=^{
+                bead.transform=CGAffineTransformMakeTranslation(delta,0);
+                bead.alpha=stealth?.64:.86;
+                line.alpha=stealth?.52:.82;
+            };
+            if(UIAccessibilityIsReduceMotionEnabled()) docking();
+            else [UIView animateWithDuration:.40 delay:0
+                options:UIViewAnimationOptionCurveEaseInOut animations:docking completion:nil];
         });
     }
 }
@@ -797,7 +836,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
-    // Compact drawer has exactly one footer control: collapse.
+    // Compact drawer has exactly one footer control: LC home.
     NSUInteger compactActions=1;
     // One 63pt control, with 10pt above and 3pt below its hit area.
     // This keeps the 50pt tile visually 16.5pt above the rounded edge.
@@ -848,10 +887,17 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     shadow.layer.shadowOpacity=small?(night?.52:.24):.18;
     shadow.layer.shadowRadius=small?18:22;
     shadow.layer.shadowOffset=CGSizeMake(0,3);
-    // Avoid semicircular caps on the narrow compact drawer: 25pt corners
-    // leave a gentler, flatter top/bottom edge around the 50pt app tiles.
+    // Both layouts share the same inward-curved side-notch silhouette.
     CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
+    if(small) {
+        UIBezierPath *outline=FMSideNotchPath(glass.bounds,self.left,compact);
+        CAShapeLayer *clip=[CAShapeLayer layer];
+        clip.frame=glass.bounds;
+        clip.path=outline.CGPath;
+        glass.layer.mask=clip;
+        shadow.layer.shadowPath=outline.CGPath;
+    }
     [shadow addSubview:glass];
     // On iOS 26+ the UIKit glass material itself renders the edge and
     // depth. Do not obscure it with gradients, strokes or opaque washes.
@@ -1308,7 +1354,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [self spacer:s size:14];
         }
         [self section:@"悬浮控件" sub:nil in:s];
-        [self settingSwitch:s title:@"静止自动淡化" key:@"autoFade" defaultValue:YES tag:6];
+        [self settingSwitch:s title:@"闲置贴边待命" key:@"autoFade" defaultValue:YES tag:6];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
@@ -1535,7 +1581,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self settingScaleControl:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
-    [self settingSwitch:s title:@"静止自动淡化" key:@"autoFade" defaultValue:YES tag:6];
+    [self settingSwitch:s title:@"闲置贴边待命" key:@"autoFade" defaultValue:YES tag:6];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
     [self spacer:s size:10];
