@@ -6,6 +6,10 @@ assert "isRunningGuest:" in row and "closeTaskFromButton:" in row, "normal list 
 assert "isRunningGuest:" in compact and "closeTaskFromButton:" in compact, "compact tiles must overlay per-running-app close button"
 assert "@selector(closeTaskFromButton:)" in row and "@selector(closeTaskFromButton:)" in compact, "separate close action required"
 assert "closeGuest:app error:&error" in src, "close must target exact app, not current running window"
+assert "close.frame=CGRectMake(41,0,44,44)" not in compact, "compact close button must not be outside clipped viewport"
+assert "[close.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-2]" in compact, "compact close button must anchor to viewport"
+assert "[close.widthAnchor constraintEqualToConstant:40]" in compact, "compact close touch target must be at least 40pt"
+assert "[row.trailingAnchor constraintEqualToAnchor:container.trailingAnchor]" in compact, "compact app row must fill actual scroll width"
 footer=src[src.index("- (void)buildAppFooter:(UIView *)glass {"):src.index("    CGFloat w=glass.bounds.size.width;",src.index("- (void)buildAppFooter:(UIView *)glass {"))]
 compact_footer=footer[footer.index("if(compact) {"):footer.index("} else {",footer.index("if(compact) {"))]
 assert "收起菜单" in compact_footer and "@selector(toggle)" in compact_footer, "compact footer must offer collapse"
