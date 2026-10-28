@@ -23,20 +23,21 @@ jobs:
           for package in release-packages/v*/LCFloatingMenu.dylib; do
             test -f "$package" || continue
             version="$(basename "$(dirname "$package")")"
+            tag="fm-$version"
             [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
             name="LCFloatingMenu-${version}.dylib"
             temp="$(mktemp -d)"
             cp "$package" "$temp/$name"
             cp "$package" "$temp/LCFloatingMenu-latest.dylib"
-            if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              echo "Release $version already exists; stopping instead of overwriting assets."
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $tag already exists; stopping instead of overwriting assets."
               exit 1
             fi
             sha256sum "$package" > "$temp/SHA256SUMS"
-            gh release create "$version" "$temp/$name" "$temp/LCFloatingMenu-latest.dylib" "$temp/SHA256SUMS" \
+            gh release create "$tag" "$temp/$name" "$temp/LCFloatingMenu-latest.dylib" "$temp/SHA256SUMS" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "LCFloatingMenu $version" \
               --notes "Locally built and verified iOS arm64 dylib. Import and sign in LiveContainer. Versioned and latest assets are identical." \
-              --latest
+              --latest=false
           done
