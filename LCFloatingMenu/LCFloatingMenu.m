@@ -28,7 +28,7 @@
 #define FM_BUILD_COMMIT @"unknown"
 #endif
 static NSString *const FMRepositoryURL=@"https://github.com/dompling/LC-SS-widget-export";
-static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/commits/lcss-original";
+static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/fm-latest";
 static NSString *FMCommitSummary(void) {
     NSString *hash=FM_BUILD_COMMIT;
     if(hash.length!=40) return @"未标记构建";
@@ -794,8 +794,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
-    // Host UI has Settings and Collapse, not Home/Restart.
-    NSUInteger compactActions=hostUI?([LCOrbitMultitask isEnabled]?4:2):(3+(BoolPref(@"compactRestart",NO)?1:0));
+    // Compact drawer has exactly one footer control: collapse.
+    NSUInteger compactActions=1;
     CGFloat footerHeight=compact?(16+compactActions*63+12):74;
     CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12):
         MIN(475,147+65*MIN(appCount,5)+footerHeight)):610;
@@ -1051,22 +1051,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)buildAppFooter:(UIView *)glass {
     BOOL compact=BoolPref(@"compactMode",NO);
     NSMutableArray<NSArray*> *items=[NSMutableArray array];
-    if([LCOrbitMultitask isEnabled]) {
-        [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LC，保留运行任务"]];
-        [items addObject:@[@"xmark.circle",NSStringFromSelector(@selector(closeMultitaskGuest)),@"关闭当前任务"]];
-    }
-    // The narrow drawer defaults to three actions, like the reference;
-    // restarting can be explicitly opted in under Interaction & Switching.
     if(compact) {
-        if(!FMHostUI())
-            [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LiveContainer"]];
-        [items addObjectsFromArray:@[
-            @[@"gearshape.fill",NSStringFromSelector(@selector(openSettings)),@"设置"],
-            @[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起菜单"]
-        ]];
-        if(!FMHostUI() && BoolPref(@"compactRestart",NO))
-            [items insertObject:@[@"arrow.clockwise",NSStringFromSelector(@selector(restart)),@"重新启动"] atIndex:0];
+        // Compact mode keeps only the drawer collapse control in its footer.
+        // Per-running-app close badges in the icon list are unaffected.
+        [items addObject:@[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起菜单"]];
     } else {
+        if([LCOrbitMultitask isEnabled]) {
+            [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LC，保留运行任务"]];
+            [items addObject:@[@"xmark.circle",NSStringFromSelector(@selector(closeMultitaskGuest)),@"关闭当前任务"]];
+        }
         if(!FMHostUI()) {
             if(BoolPref(@"showRestart",YES))
                 [items addObject:@[@"arrow.clockwise",NSStringFromSelector(@selector(restart)),@"重新启动"]];
@@ -1294,7 +1287,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self section:@"应用切换" sub:nil in:s];
         [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         [self settingSwitch:s title:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
-        [self settingSwitch:s title:@"精简抽屉显示重启按钮" key:@"compactRestart" defaultValue:NO tag:17];
     } else if([category isEqualToString:@"apps"]) {
         [self perAppPage:s];
         [self spacer:s size:20];
@@ -1843,14 +1835,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
         case 15:key=[@"stealth." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
-        case 17:key=@"compactRestart";break;
         case 18:key=@"clearGlass";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
     if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==15||sw.tag==18) [self draw];
-    if(sw.tag==17) FMLog(@"compact-toolbar",sw.on?@"four-actions":@"three-actions");
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
 - (void)sliderChanged:(UISlider*)slider {
@@ -1955,7 +1945,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [HostDefaults() removeObjectForKey:Pref(key)];
     }
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
-    SetPref(@"compactRestart",@NO);
+    
     dispatch_async(dispatch_get_main_queue(), ^{
         UIUserInterfaceStyle skin=FMMenuOverride();
         self.overlayView.overrideUserInterfaceStyle=skin;
@@ -2203,7 +2193,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)checkForUpdates {
     if(self.checkingUpdate) return;
     self.checkingUpdate=YES;
-    self.updateStatusLabel.text=@"正在查询 GitHub…";
+    self.updateStatusLabel.text=@"正在检查最新发布版…";
     NSMutableURLRequest *request=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:FMUpdateAPI]];
     request.timeoutInterval=12;
     [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
@@ -2215,7 +2205,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             typeof(self) strongSelf=weakSelf;
             if(!strongSelf) return;
             strongSelf.checkingUpdate=NO;
-            strongSelf.updateStatusLabel.text=@"检查 GitHub 源码更新";
+            strongSelf.updateStatusLabel.text=@"检查微珠最新发布版";
             if(error) {
                 [strongSelf presentUpdateResult:@"检查更新失败"
                     message:error.localizedDescription?:@"无法连接 GitHub，请检查网络。"
@@ -2223,9 +2213,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                 return;
             }
             NSInteger status=[(NSHTTPURLResponse *)response statusCode];
-            if(status==401 || status==404) {
-                [strongSelf presentUpdateResult:@"仓库无法访问"
-                    message:@"GitHub 没有返回公开的 lcss-original 分支。请确认仓库已设为 Public，或在浏览器中检查状态。"
+            if(status==404) {
+                [strongSelf presentUpdateResult:@"暂无微珠最新版"
+                    message:@"fm-latest Release 尚未发布成功，请前往 GitHub 查看构建状态。"
                     showRepository:YES];
                 return;
             }
@@ -2236,24 +2226,39 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                 return;
             }
             NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
-            NSString *latest=[json isKindOfClass:NSDictionary.class]?json[@"sha"]:nil;
-            if(![latest isKindOfClass:NSString.class] || latest.length!=40) {
-                [strongSelf presentUpdateResult:@"更新信息无效"
-                    message:@"GitHub 没有返回有效的提交版本。" showRepository:YES];
+            NSString *body=[json isKindOfClass:NSDictionary.class]?json[@"body"]:nil;
+            NSArray *assets=[json isKindOfClass:NSDictionary.class]?json[@"assets"]:nil;
+            NSString *latestCommit=nil,*latestVersion=nil,*latestBuild=nil;
+            if([body isKindOfClass:NSString.class]) for(NSString *line in [body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+                if([line hasPrefix:@"FM_COMMIT="]) latestCommit=[line substringFromIndex:10];
+                else if([line hasPrefix:@"FM_VERSION="]) latestVersion=[line substringFromIndex:11];
+                else if([line hasPrefix:@"FM_BUILD="]) latestBuild=[line substringFromIndex:9];
+            }
+            BOOL hasBinary=NO;
+            if([assets isKindOfClass:NSArray.class]) for(id item in assets) {
+                if([item isKindOfClass:NSDictionary.class] &&
+                   [item[@"name"] isEqual:@"LCFloatingMenu-latest.dylib"]) {hasBinary=YES;break;}
+            }
+            if(latestCommit.length!=40 || !hasBinary) {
+                [strongSelf presentUpdateResult:@"发布信息尚不完整"
+                    message:@"最新 Release 缺少有效构建标识或 dylib 下载文件。"
+                    showRepository:YES];
                 return;
             }
             NSString *installed=FM_BUILD_COMMIT;
+            NSString *version=latestVersion.length?latestVersion:@"未知";
+            NSString *build=latestBuild.length?latestBuild:@"?";
             if(installed.length!=40) {
-                [strongSelf presentUpdateResult:@"构建版本未标记"
-                    message:@"当前 dylib 没有可比较的 Git Commit，请前往仓库查看源码更新。"
+                [strongSelf presentUpdateResult:@"当前构建未标记版本"
+                    message:[NSString stringWithFormat:@"GitHub 最新版 v%@（Build %@），请到仓库下载。",version,build]
                     showRepository:YES];
-            } else if([installed caseInsensitiveCompare:latest]==NSOrderedSame) {
-                [strongSelf presentUpdateResult:@"已是最新源码版本"
-                    message:[NSString stringWithFormat:@"v%@（%@）与公开分支 lcss-original 的提交一致。",FM_MENU_VERSION,FMCommitSummary()]
+            } else if([installed caseInsensitiveCompare:latestCommit]==NSOrderedSame) {
+                [strongSelf presentUpdateResult:@"已是最新发布版"
+                    message:[NSString stringWithFormat:@"当前版本 v%@（%@）与最新微珠构建一致。",FM_MENU_VERSION,FMCommitSummary()]
                     showRepository:NO];
             } else {
-                [strongSelf presentUpdateResult:@"检测到源码更新"
-                    message:[NSString stringWithFormat:@"当前构建 %@，GitHub 当前 %@。此功能检查源码提交，不代表有可下载的新 dylib；需重新编译并签名安装。",FMCommitSummary(),[latest substringToIndex:7]]
+                [strongSelf presentUpdateResult:@"发现新构建"
+                    message:[NSString stringWithFormat:@"当前 v%@（%@），最新发布 v%@（Build %@，%@）。前往 GitHub 下载 dylib 并重新签名安装。",FM_MENU_VERSION,FMCommitSummary(),version,build,[latestCommit substringToIndex:7]]
                     showRepository:YES];
             }
         });
@@ -2345,7 +2350,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [versionRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
-        subtitle:self.checkingUpdate?@"正在查询 GitHub…":@"检查 GitHub 源码更新"
+        subtitle:self.checkingUpdate?@"正在检查最新发布版…":@"检查微珠最新发布版"
         symbol:@"arrow.clockwise.circle" action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:checkRow];
