@@ -3,6 +3,13 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 OUT="${1:-$ROOT/dist/LCFloatingMenu.dylib}"
+# Embed the source commit so Settings can compare against GitHub accurately.
+BUILD_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+case "$BUILD_COMMIT" in
+    *[!0-9a-f]*|"") BUILD_COMMIT="unknown" ;;
+esac
+BUILD_COMMIT_FLAG="-DFM_BUILD_COMMIT=@\\\"$BUILD_COMMIT\\\""
+
 # Exercise production scanning, menu selection, favorite persistence and the
 # complete plugin-management flow. A failed regression stops this build.
 sh "$ROOT/LCOrbit/Tests/run-core-lifecycle-tests.sh"
@@ -24,7 +31,7 @@ sh "$ROOT/LCOrbit/Tests/run-multitask-menu-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-host-settings-tests.sh"
 python3 "$ROOT/LCOrbit/Tests/check-host-gestures.py"
 mkdir -p "$(dirname "$OUT")"
-xcrun clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.0 -fobjc-arc -O2 \
+xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.0 -fobjc-arc -O2 \
     -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore \
     -framework CoreGraphics -install_name '@rpath/LCFloatingMenu.dylib' \
     "$ROOT/LCOrbit/Core/LCOrbitCore.m" \
