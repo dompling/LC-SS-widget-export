@@ -11,7 +11,11 @@ on:
       - '.github/workflows/lc-floating-menu.yml'
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: floating-menu-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -20,16 +24,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Compile iOS arm64 dylib
-        # UIGlassEffect is discovered at runtime; the source targets iOS 16 SDK symbols only.
         shell: bash
         run: |
           set -euo pipefail
           LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
           LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib
-      - name: Upload dylib
+      - name: Upload downloadable build artifact
         uses: actions/upload-artifact@v4
         with:
           name: LCFloatingMenu-dylib
           path: dist/LCFloatingMenu.dylib
           if-no-files-found: error
           retention-days: 14
+      - name: Publish versioned release and independent latest dylib
+        if: github.ref == 'refs/heads/lcss-original'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^#define FM_MENU_VERSION @"\([^"]*\)".*$/\1/p' LCFloatingMenu/LCFloatingMenu.m | head -n 1)"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid FM_MENU_VERSION: $VERSION"; exit 1; }
+          TAG="fm-v${VERSION}-build${GITHUB_RUN_NUMBER}"
+          LATEST_TAG="fm-latest"
+          mkdir -p dist/release
+          VERSION_FILE="dist/release/LCFloatingMenu-v${VERSION}-build${GITHUB_RUN_NUMBER}.dylib"
+          LATEST_FILE="dist/release/LCFloatingMenu-latest.dylib"
+          cp dist/LCFloatingMenu.dylib "$VERSION_FILE"
+          cp dist/LCFloatingMenu.dylib "$LATEST_FILE"
+          shasum -a 256 "$VERSION_FILE"
+          cat > dist/release/latest-info.txt <<EOF
+          FM_VERSION=${VERSION}
+          FM_BUILD=${GITHUB_RUN_NUMBER}
+          FM_COMMIT=${GITHUB_SHA}
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$VERSION_FILE" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$VERSION_FILE" \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "LCFloatingMenu v${VERSION} (Build ${GITHUB_RUN_NUMBER})" \
+              --notes "GitHub Actions verified iOS arm64 dylib. Commit: ${GITHUB_SHA}. Import and re-sign in LC Tweaks." \
+              --latest=false
+          fi
+          if gh release view "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$LATEST_TAG" "$LATEST_FILE" dist/release/latest-info.txt \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "LCFloatingMenu latest (v${VERSION}, Build ${GITHUB_RUN_NUMBER})" \
+              --notes-file dist/release/latest-info.txt --prerelease --latest=false
+          else
+            gh release create "$LATEST_TAG" "$LATEST_FILE" dist/release/latest-info.txt \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "LCFloatingMenu latest (v${VERSION}, Build ${GITHUB_RUN_NUMBER})" \
+              --notes-file dist/release/latest-info.txt --prerelease --latest=false
+          fi
+          echo "Versioned: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+          echo "Latest binary: https://github.com/${GITHUB_REPOSITORY}/releases/download/fm-latest/LCFloatingMenu-latest.dylib"
