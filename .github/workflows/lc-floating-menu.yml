@@ -1,0 +1,46 @@
+name: Build LCFloatingMenu dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [lcss-original, lcfloatingmenu-ci-fix]
+    paths:
+      - 'LCFloatingMenu/**'
+      - 'LCOrbit/**'
+      - '.github/workflows/lc-floating-menu.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile iOS arm64 dylib
+        # UIGlassEffect is discovered at runtime; the source targets iOS 16 SDK symbols only.
+        shell: bash
+        run: |
+          set -euo pipefail
+          LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
+          LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: LCFloatingMenu-dylib
+          path: dist/LCFloatingMenu.dylib
+          if-no-files-found: error
+      - name: Release standalone dylib without replacing LC+SS latest
+        if: github.ref == 'refs/heads/lcss-original'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="lc-floating-menu-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" dist/LCFloatingMenu.dylib \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "LCFloatingMenu ${GITHUB_RUN_NUMBER} - Liquid Glass" \
+            --notes "Standalone iOS arm64 dylib. Import and sign in LC Tweaks. Independent prerelease; does not replace the combined IPA." \
+            --prerelease
