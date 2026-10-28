@@ -271,7 +271,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)rebuild;
 @end
 
-@interface FMManager : NSObject
+@interface FMManager : NSObject <UIScrollViewDelegate>
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) UIView *overlayView;
 @property(nonatomic,strong) LCOrbitContext *orbitContext;
@@ -284,6 +284,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,weak) UIScrollView *settingsScroll;
 @property(nonatomic,weak) UIScrollView *appsScroll;
 @property(nonatomic,assign) BOOL appsScrollRestorePending;
+@property(nonatomic,assign) BOOL appsRefreshScheduled;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
@@ -312,6 +313,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)observeAppearanceInScene:(UIWindowScene *)scene;
 - (void)queueAppearanceRefresh;
 - (void)refreshUI;
+- (void)refreshAppsContent;
+- (void)requestAppsRefresh;
+- (void)persistAppsScroll;
+- (void)loadAppsScroll;
 - (void)closeSettings;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
 - (void)updateSettingsContent;
@@ -462,19 +467,47 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     return surface;
 }
+- (void)captureAppsScroll {
+    if(!self.appsScroll || self.appsScrollRestorePending) return;
+    CGFloat y=self.appsScroll.contentOffset.y;
+    if(isfinite(y)) self.appsScrollOffset=MAX(0,y);
+}
+- (void)persistAppsScroll {
+    [self captureAppsScroll];
+    CGFloat y=self.appsScrollOffset;
+    if(!isfinite(y)) return;
+    // The LCOrbit JSON settings live under LC_HOME_PATH and can be read by the
+    // next Guest process. Persist only at gesture/transition boundaries.
+    id old=[HostDefaults() objectForKey:Pref(@"appsScrollOffset")];
+    if(![old isKindOfClass:NSNumber.class] || fabs([old doubleValue]-y)>.5) {
+        SetPref(@"appsScrollOffset",@(y));
+        FMLog(@"apps-scroll-saved",[NSString stringWithFormat:@"offset=%.1f",y]);
+    }
+}
+- (void)loadAppsScroll {
+    id saved=[HostDefaults() objectForKey:Pref(@"appsScrollOffset")];
+    if([saved isKindOfClass:NSNumber.class] && isfinite([saved doubleValue])) {
+        self.appsScrollOffset=MAX(0,[saved doubleValue]);
+        FMLog(@"apps-scroll-loaded",[NSString stringWithFormat:@"offset=%.1f",self.appsScrollOffset]);
+    }
+}
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    if(scrollView!=self.appsScroll || self.appsScrollRestorePending) return;
+    CGFloat y=scrollView.contentOffset.y;
+    if(isfinite(y)) self.appsScrollOffset=MAX(0,y);
+}
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+    if(scrollView==self.appsScroll && !decelerate) [self persistAppsScroll];
+}
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+    if(scrollView==self.appsScroll) [self persistAppsScroll];
+}
 - (void)removePanel {
     // Closing a running task refreshes this panel. Both the compact icon list
     // and the normal app rows must retain their shared scroll position.
-    if(self.appsScroll) {
-        // A fresh scroll view starts at zero until its deferred restore runs.
-        // Never mistake that temporary value for the user's last position.
-        if(!self.appsScrollRestorePending) {
-            CGFloat offset=self.appsScroll.contentOffset.y;
-            if(isfinite(offset)) self.appsScrollOffset=MAX(0,offset);
-        }
-        self.appsScroll=nil;
-        self.appsScrollRestorePending=NO;
-    }
+    [self captureAppsScroll];
+    self.appsScroll=nil;
+    self.appsScrollRestorePending=NO;
     [self.panel removeFromSuperview]; self.panel=nil;
     [self.dismissLayer removeFromSuperview]; self.dismissLayer=nil;
 }
@@ -532,7 +565,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
     if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
         initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    if(!self.isOpen) self.isOpen=YES;
+    if(!self.isOpen) {
+        [self loadAppsScroll];
+        self.isOpen=YES;
+    }
     self.page=@"apps";self.apps=InstalledApps();
     [self draw];
 }
@@ -574,7 +610,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)toggle {
-    self.isOpen=!self.isOpen; self.page=@"apps";
+    BOOL opening=!self.isOpen;
+    if(opening) [self loadAppsScroll];
+    else [self persistAppsScroll];
+    self.isOpen=opening; self.page=@"apps";
     if(self.isOpen) self.apps=InstalledApps();
     FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
     [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
@@ -798,6 +837,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     ]];
     if(small) {
         self.appsScroll=scroll;
+        scroll.delegate=self;
         self.appsScrollRestorePending=YES;
         [self appPage:stack];
         CGFloat offset=self.appsScrollOffset;
@@ -1071,6 +1111,43 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(self.settingsWindow) [self updateSettingsContent];
     else [self draw];
 }
+// A task closing changes only the running badges/actions, not the drawer's
+// glass, layout, handle, or scroll view. Update those rows in-place instead
+// of tearing down the entire overlay (which caused a visible glass flash).
+- (void)refreshAppsContent {
+    if(!self.isOpen || !self.panel || !self.appsScroll ||
+       ![self.page isEqualToString:@"apps"]) return;
+    UIScrollView *scroll=self.appsScroll;
+    UIStackView *stack=nil;
+    for(UIView *view in scroll.subviews)
+        if([view isKindOfClass:UIStackView.class]) {stack=(UIStackView *)view;break;}
+    if(!stack) { [self draw];return; }
+    [self captureAppsScroll];
+    CGFloat saved=self.appsScrollOffset;
+    self.appsScrollRestorePending=YES;
+    for(UIView *row in [stack.arrangedSubviews copy]) {
+        [stack removeArrangedSubview:row];
+        [row removeFromSuperview];
+    }
+    [self appPage:stack];
+    [scroll layoutIfNeeded];
+    CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height+
+                          scroll.adjustedContentInset.bottom);
+    [scroll setContentOffset:CGPointMake(0,MIN(MAX(0,saved),maxY)) animated:NO];
+    self.appsScrollRestorePending=NO;
+}
+- (void)requestAppsRefresh {
+    // didActivateWindow and forgetWindow may notify during one close. Merge
+    // their updates into a single frame, preserving the native glass shell.
+    if(self.appsRefreshScheduled) return;
+    self.appsRefreshScheduled=YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.appsRefreshScheduled=NO;
+        if(self.isOpen && self.panel && self.appsScroll &&
+           [LCOrbitMultitask shouldShowFloatingMenu]) [self refreshAppsContent];
+        else if(![LCOrbitMultitask shouldShowFloatingMenu]) [self draw];
+    });
+}
 - (void)openSettings {
     [self openSettingsInScene:self.window.windowScene?:[self foregroundScene]];
 }
@@ -1079,6 +1156,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!self.orbitContext) self.orbitContext=[LCOrbitCore sharedCore].context;
     // The Guest is still running, but its window must not receive any taps
     // while native navigation is open. This is a separate opaque UIWindow.
+    [self persistAppsScroll];
     self.page=@"settings";
     self.isOpen=NO;
     [self removePanel];
@@ -1294,11 +1372,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.settingsNavigation=nil;
     self.settingsScreen=nil;
     self.settingsScroll=nil;
-    // Scene replacement may happen while the drawer is visible.
-    if(self.appsScroll && !self.appsScrollRestorePending) {
-        CGFloat offset=self.appsScroll.contentOffset.y;
-        if(isfinite(offset)) self.appsScrollOffset=MAX(0,offset);
-    }
+    // The next scene/process may create a new manager instance.
+    if(self.appsScroll) [self persistAppsScroll];
     self.appsScroll=nil;
     self.appsScrollRestorePending=NO;
     self.previousKeyWindow=nil;
@@ -1861,6 +1936,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     });
 }
 - (void)launchApp:(NSDictionary *)app {
+    // Persist before launch: classic switching may destroy this Guest process.
+    [self persistAppsScroll];
     FMLog(@"switch-request",FMAppKey(app));
     [self.orbitContext.events publish:@"orbit.guest.switchRequested"
         payload:@{@"target":FMAppKey(app),@"guestID":GuestID()}];
@@ -1881,10 +1958,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!self.window || self.settingsWindow) return;
     if([LCOrbitMultitask usesSystemMenu]) { [self draw];return; }
     self.apps=InstalledApps();self.page=@"apps";
-    if(expanded) self.isOpen=YES;
-    [self draw];
+    if(expanded && !self.isOpen) {
+        [self loadAppsScroll];
+        self.isOpen=YES;
+    }
+    if(self.isOpen && self.appsScroll && self.panel) [self requestAppsRefresh];
+    else [self draw];
 }
 - (void)launchPath:(NSString *)path uuid:(NSString *)uuid {
+    [self persistAppsScroll];
     FMLog(@"switch-request",[path isEqualToString:@"ui"]?@"return-home":@"new-guest");
     if(![path isEqualToString:@"ui"] &&
        ![LCOrbitGuestService isEligibleGuestPath:path uuid:uuid]) {
@@ -1927,6 +2009,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 - (void)openBuiltinSideStore {
+    [self persistAppsScroll];
     NSError *error=nil;
     if(![LCOrbitGuestService launchBuiltInSideStoreWithError:&error]) {
         FMLog(@"sidestore-failed",error.domain?:@"unknown");
@@ -1944,11 +2027,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self confirmTitle:@"返回 LiveContainer？" action:^{[self launchPath:@"ui" uuid:nil];}];
 }
 - (void)closeTaskFromButton:(UIControl *)sender {
-    // closeGuest may synchronously notify observers that rebuild the drawer.
-    // Capture before that happens, regardless of compact/normal button layout.
-    if(self.appsScroll && !self.appsScrollRestorePending &&
-       isfinite(self.appsScroll.contentOffset.y))
-        self.appsScrollOffset=MAX(0,self.appsScroll.contentOffset.y);
+    // The task may disappear synchronously; save the scroll before notifying
+    // its window manager, irrespective of compact/normal button layout.
+    [self persistAppsScroll];
     NSDictionary *app=objc_getAssociatedObject(sender,@selector(closeTaskFromButton:));
     if(!app || ![LCOrbitMultitask isRunningGuest:app]) {
         FMLog(@"task-close-rejected",@"not-running-or-stale");
@@ -2243,7 +2324,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             }];
         self.configurationObserver=[NSNotificationCenter.defaultCenter addObserverForName:LCOrbitMultitaskConfigurationChangedNotification
             object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
-                [manager refreshUI];
+                if(manager.isOpen && !manager.settingsWindow &&
+                   [LCOrbitMultitask shouldShowFloatingMenu]) [manager requestAppsRefresh];
+                else [manager refreshUI];
             }];
         self.configurationFailureObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitConfigurationWriteFailed"
             object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
@@ -2267,7 +2350,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if([event isEqualToString:UIApplicationDidEnterBackgroundNotification] ||
        [event isEqualToString:UIApplicationWillResignActiveNotification] ||
        [event isEqualToString:UISceneWillDeactivateNotification]) {
-        if(!scene || scene==manager.window.windowScene) [manager cancelAppearanceCheck];
+        if(!scene || scene==manager.window.windowScene) {
+            if(manager.appsScroll) [manager persistAppsScroll];
+            [manager cancelAppearanceCheck];
+        }
         return;
     }
     if([event isEqualToString:UISceneDidDisconnectNotification]) {
