@@ -29,7 +29,7 @@
 #endif
 static NSString *const FMRepositoryURL=@"https://github.com/dompling/LC-SS-widget-export";
 static NSString *const FMReleasesURL=@"https://github.com/dompling/LC-SS-widget-export/releases";
-static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/latest";
+static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases?per_page=100";
 static NSString *FMCommitSummary(void) {
     NSString *hash=FM_BUILD_COMMIT;
     if(hash.length!=40) return @"未标记构建";
@@ -2229,14 +2229,27 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                     showReleases:YES];
                 return;
             }
-            NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
-            NSString *tag=[json isKindOfClass:NSDictionary.class]?json[@"tag_name"]:nil;
-            if(![tag isKindOfClass:NSString.class] || ![tag hasPrefix:@"v"]) {
-                [strongSelf presentUpdateResult:@"版本信息无效"
-                    message:@"无法读取最新正式 Release 的版本标签。" showReleases:YES];
+            NSArray *releases=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+            NSDictionary *selected=nil;
+            NSString *latest=nil;
+            if([releases isKindOfClass:NSArray.class]) for(id candidate in releases) {
+                if(![candidate isKindOfClass:NSDictionary.class] ||
+                   [candidate[@"draft"] boolValue] || [candidate[@"prerelease"] boolValue]) continue;
+                NSString *tag=candidate[@"tag_name"];
+                if(![tag isKindOfClass:NSString.class] || ![tag hasPrefix:@"fm-v"]) continue;
+                NSString *version=[tag substringFromIndex:4];
+                if(!version.length) continue;
+                if(!latest || [version compare:latest options:NSNumericSearch]==NSOrderedDescending) {
+                    latest=version;selected=candidate;
+                }
+            }
+            if(!selected) {
+                [strongSelf presentUpdateResult:@"未找到微珠正式版"
+                    message:@"仓库中还没有可读取的 fm-v* 正式 Release。请登录 GitHub 查看发布状态。"
+                    showReleases:YES];
                 return;
             }
-            NSString *latest=[tag substringFromIndex:1];
+            NSString *tag=selected[@"tag_name"];
             NSString *installed=FM_MENU_VERSION;
             NSComparisonResult comparison=[installed compare:latest options:NSNumericSearch];
             if(comparison==NSOrderedAscending) {
