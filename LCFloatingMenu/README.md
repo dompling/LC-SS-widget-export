@@ -6,9 +6,9 @@
 Standalone iOS 16+ arm64 tweak for classic single-task Guests and the opted-in LC host UI. Host injection also supports the optional fullscreen multitask switcher described below. Maintained on `lcss-original`.
 
 ## Features
-- A slim draggable frosted-glass edge capsule, soft highlight and spring animations.
+- A slim draggable frosted-glass side-notch tab, soft highlight and drawer animations.
 - Expandable translucent app switcher: return to LiveContainer, restart, switch to another LC guest.
-- Built-in settings, DIY capsule shape, tint, size and opacity controls, haptic and confirmation toggles.
+- Built-in settings, tab tint, size and opacity controls, haptic and confirmation toggles.
 - Diagnostics: loading, overlay lifecycle, allowed/rejected switching, error categories. Share a `.json` file using the iOS share sheet; clear logs with confirmation. Size is limited to 256 KiB per file with a single rotated backup (approx. 512 KiB total).
 - Per-app override of confirmation and collapsed opacity, saved in LCOrbit/config.json with legacy preference migration.
 - Classic Guest switching restarts the LC guest process. The host's optional fullscreen multitask mode starts LC LiveProcess guests and switches existing tasks without terminating them.
@@ -16,10 +16,14 @@ Standalone iOS 16+ arm64 tweak for classic single-task Guests and the opted-in L
 ## 侧边刘海抽屉（2026-10-28）
 
 - 精简与正常模式共用贴边轮廓：上下反向凹角连接屏幕边缘，内侧圆润，玻璃与阴影沿同一路径裁切，并保留细轮廓高光。左右吸附互为镜像，75%–120% 缩放后仍贴边。
-- 收起态使用独立的连续弧线，默认 16×64pt，上下向屏幕边缘外展；中间为 4×26pt 圆头胶囊线，端部圆角随尺寸缩放。闲置淡出保留两端轮廓，不再向屏幕外移动小条。
+- 收起态使用独立的连续弧线，默认 16×64pt，上下向屏幕边缘外展；中间为 4×26pt 圆头胶囊线，端部圆角随尺寸缩放。圆形微珠、闲置贴边待命及其极细提示子选项已移除；旧配置中的相应键不再影响显示。收起透明度仍可设置。
 - 展开从吸附侧水平滑出，约 0.36 秒并带轻微弹簧缓动；收起约 0.24 秒退回原侧。内容保持正常比例，展开后隐藏独立小条，收起后恢复原位置。
 - 精简模式保留单列 App 图标及返回首页，正常模式保留名称、收藏和底部操作。上下凹角预留空间，列表单独滚动；减少动态效果开启时直接切换状态。
 - 已完成轮廓几何测试、完整构建回归和 iOS 26.5 UIKit 模拟器检查（左右吸附、浅深色、缩放、长列表、快速收起重开）。真实 LC/Guest 背景上的玻璃与触感仍需安装后确认。
+
+本轮交互修正：精简模式的运行 App 在图标右上角显示小叉号，保持各行等高，图标中心仍用于切换；正常模式关闭按钮位于独立右侧区域，按实际缩放保留至少 44×44pt。列表和底栏关闭任务均直接执行，不再弹出二次确认；点击时仍校验具体目标任务，不会改关其他 App。短窗口会压缩留白、隐藏顶部快捷区并适当缩放，保证应用列表和底栏不重叠；横屏按左右安全区避让。取消拖动恢复原吸附位置，减少动态效果也适用于松手吸附。
+
+任务变化会同步更新顶部快捷入口与列表；收藏管理中的「未显示的收藏」允许移除旧 App 记录，不会根据不完整扫描自动删除配置。同步插件后启动 App 的请求绑定原场景、模块和多任务模式，状态变化后取消，不会静默改为经典启动。
 
 ## Download
 - GitHub Actions: `Build LCFloatingMenu dylib` -> artifact `LCFloatingMenu-dylib`.
@@ -158,10 +162,10 @@ JSON 仅存放插件自身配置，不包含 LC 证书、系统多任务偏好�
 
 ## Gemini-design UI overhaul
 
-- Edge microbead: default 12 x 38 pt, snap-to-edge, enlarged touch target, 3-second ultra-thin idle fade and long-press shortcuts.
+- Edge microbead: default 12 x 38 pt, snap-to-edge, enlarged touch target, configurable collapsed opacity and long-press shortcuts.
 - **Final drawer design:** Compact mode is one continuous ~108pt-wide Liquid Glass side drawer. Real Guest app icons (50pt) form a single centered vertical row, separated from a **fixed, vertical** action area by one fine hairline. Home, Settings, Collapse use matching 50pt glass icon tiles; Restart is optional. Only the app icon region scrolls. Standard mode uses the **same optical glass, cool edge highlight and matching tile rhythm** in a ~310pt-wide list, with app labels and a compact horizontal icon footer. Both retain a 75%-120% size control and screen bounds protection.
 - Genuine LC app icons: first LCAppIconLight.png / LCAppIconDark.png in Guest bundle; fallback to CFBundleIcons assets or neutral icon (never fake initials).
-- Settings center: preview, auto fade, haptics, DIY workshop, manager, per-App controls and diagnostics export.
+- Settings center: preview, haptics, DIY workshop, manager, per-App controls and diagnostics export.
 - DIY workshop: Liquid / Minimal / Deep Crystal / Aurora themes, visual preview, opacity, bead size, color tint and icon theme controls.
 - Menu management: favorite toggles and long-press drag handles to reorder app entries.
 - Per-App override: explicit inheritance switch, collapsed opacity, double-tap-to-open and safe extra-thin edge display.

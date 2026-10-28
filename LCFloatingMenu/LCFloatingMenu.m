@@ -358,15 +358,24 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) LCOrbitContext *orbitContext;
 @property(nonatomic,strong) UIButton *orb;
 @property(nonatomic,strong) UIView *panel;
+@property(nonatomic,assign) CGFloat panelContentScale;
+@property(nonatomic,assign) CGFloat panelFooterHeight;
+@property(nonatomic,assign) BOOL panelShowsHeader;
 @property(nonatomic,weak) UIColorWell *lightColorWell;
 @property(nonatomic,weak) UIColorWell *darkColorWell;
 @property(nonatomic,strong) UIView *dismissLayer;
 @property(nonatomic,strong) NSMutableArray<UIView*> *manageRows;
 @property(nonatomic,weak) UIScrollView *settingsScroll;
 @property(nonatomic,weak) UIScrollView *appsScroll;
+@property(nonatomic,weak) UIView *appsHeaderGlass;
+@property(nonatomic,copy) NSArray<UIView *> *appsHeaderTiles;
 @property(nonatomic,assign) BOOL appsScrollRestorePending;
 @property(nonatomic,assign) BOOL appsRefreshScheduled;
 @property(nonatomic,assign) NSUInteger morphGeneration;
+@property(nonatomic,assign) NSUInteger launchGeneration;
+@property(nonatomic,assign) BOOL launchPending;
+@property(nonatomic,assign) BOOL launchMultitaskMode;
+@property(nonatomic,assign) BOOL launchSystemMenuMode;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
@@ -404,6 +413,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)updateSettingsContent;
 - (void)appendResetStyleRow:(UIStackView *)stack;
 - (void)launchApp:(NSDictionary *)app;
+- (void)invalidatePendingLaunch;
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
 - (void)openSettingsInScene:(UIWindowScene *)scene;
@@ -471,12 +481,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self draw];
     [self scheduleAppearanceCheck];
 }
-- (CGFloat)orbWidth { return (BoolPref(@"roundOrb",NO)?12:16)*FMOrbScale(); }
-- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:64*FMOrbScale(); }
+- (CGFloat)orbWidth { return 16*FMOrbScale(); }
+- (CGFloat)orbHeight { return 64*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
-    CGFloat x=self.left?0:b.size.width-w;
+    UIEdgeInsets safe=self.window.safeAreaInsets;
+    CGFloat x=self.left?safe.left:b.size.width-safe.right-w;
     CGFloat top=MAX(25,self.window.safeAreaInsets.top+6);
     CGFloat bottom=MAX(24,self.window.safeAreaInsets.bottom+8);
     CGFloat latest=b.size.height-h-bottom;
@@ -602,6 +613,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // and the normal app rows must retain their shared scroll position.
     [self captureAppsScroll];
     self.morphGeneration++;
+    self.appsHeaderGlass=nil;
+    self.appsHeaderTiles=nil;
     self.appsScroll=nil;
     self.appsScrollRestorePending=NO;
     [self.panel removeFromSuperview]; self.panel=nil;
@@ -616,7 +629,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     button.layer.shadowOpacity=.24;button.layer.shadowRadius=6;
     button.layer.shadowOffset=CGSizeMake(0,1);
     UIView *bead=[self glass:button.bounds radius:f.size.width*.5 strong:NO];
-    if(!BoolPref(@"roundOrb",NO)) FMApplySideNotch(bead,button.layer,self.left,YES,YES);
+    FMApplySideNotch(bead,button.layer,self.left,YES,YES);
     bead.userInteractionEnabled=NO;
     bead.tag=9202;
     [button addSubview:bead];
@@ -649,24 +662,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [button addGestureRecognizer:pan];
     [self.overlayView addSubview:button];
     self.orb=button;
-    if(!self.isOpen && BoolPref(@"autoFade",YES)) {
-        // Wait before gently docking the material, not the touch surface.
-        // The old 32% horizontal squeeze made the handle nearly invisible.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(3.0*NSEC_PER_SEC)),
-                       dispatch_get_main_queue(),^{
-            if(self.orb!=button || self.isOpen) return;
-            BOOL stealth=BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
-                         BoolPref([@"stealth." stringByAppendingString:GuestID()],NO);
-            void (^docking)(void)=^{
-                // Keep both flares attached and readable during idle fade.
-                bead.alpha=stealth?.78:.94;
-                line.alpha=stealth?.52:.82;
-            };
-            if(UIAccessibilityIsReduceMotionEnabled()) docking();
-            else [UIView animateWithDuration:.40 delay:0
-                options:UIViewAnimationOptionCurveEaseInOut animations:docking completion:nil];
-        });
-    }
 }
 - (void)hold:(UILongPressGestureRecognizer *)gesture {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
@@ -710,18 +705,25 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(g.state==UIGestureRecognizerStateBegan || g.state==UIGestureRecognizerStateChanged) {
         CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
         CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
-        CGFloat minX=orbW*.35, maxX=MAX(minX,w-minX);
-        CGFloat minY=60+orbH/2, maxY=MAX(minY,h-36-orbH/2);
+        UIEdgeInsets safe=self.window.safeAreaInsets;
+        CGFloat minX=safe.left+orbW*.5, maxX=MAX(minX,w-safe.right-orbW*.5);
+        CGFloat minY=MAX(60,safe.top+6)+orbH/2;
+        CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
         self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
         if(g.state==UIGestureRecognizerStateChanged) self.orb.alpha=1;
     } else if(g.state==UIGestureRecognizerStateEnded) {
         self.left=self.orb.center.x < self.window.bounds.size.width*.5;
         self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
         SetPref(@"onLeft",@(self.left)); SetPref(@"orbY",@(self.orbY));
-        [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.74
+        if(UIAccessibilityIsReduceMotionEnabled()) {
+            self.orb.frame=[self orbFrame];
+            [self draw];
+        } else [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.74
              initialSpringVelocity:.35 options:UIViewAnimationOptionCurveEaseOut animations:^{
                 self.orb.frame=[self orbFrame];
              } completion:^(BOOL done){[self draw];}];
+    } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
+        [self draw];
     }
 }
 - (void)toggle {
@@ -743,7 +745,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             UIButton *bead=self.orb;
             CGPoint destination=drawer.center;
             NSUInteger generation=++self.morphGeneration;
-            CGFloat travel=CGRectGetWidth(drawer.frame)+1;
+            CGFloat travel=CGRectGetWidth(drawer.frame)+
+                (self.left?self.window.safeAreaInsets.left:self.window.safeAreaInsets.right)+1;
             drawer.center=CGPointMake(destination.x+(self.left?-travel:travel),destination.y);
             drawer.userInteractionEnabled=NO;
             bead.alpha=0;
@@ -831,16 +834,23 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     return box;
 }
+- (CGFloat)taskCloseSize {
+    return 44/MAX(.70,self.panelContentScale?:1);
+}
+- (CGFloat)appRowHeight {
+    return MAX(60,[self taskCloseSize]+8);
+}
 - (UIView *)appRow:(NSDictionary *)app {
     // Standard mode extends the drawer without changing its optical material.
-    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,60)];
+    CGFloat height=[self appRowHeight];
+    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,height)];
     row.backgroundColor=UIColor.clearColor;
     row.layer.cornerRadius=17;
     // Localized contrast only under list text, not behind the entire glass.
     row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
         FMHostUI()?(FMClearGlassEnabled()?.79:.88):FMReadableRowAlpha()];
     UIView *icon=[self iconViewForApp:app size:46];
-    icon.frame=CGRectMake(8,7,46,46);icon.userInteractionEnabled=NO;
+    icon.frame=CGRectMake(8,(height-46)*.5,46,46);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
     UILabel *title=[self label:FMAppCaption(app) size:15 weight:UIFontWeightSemibold];
     title.translatesAutoresizingMaskIntoConstraints=NO;
@@ -874,10 +884,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!running) return row;
     // Sibling controls keep close taps independent of the row's switch action.
     UIView *container=[[UIView alloc] initWithFrame:row.frame];
+    CGFloat closeSize=[self taskCloseSize];
+    row.frame=CGRectMake(0,0,container.bounds.size.width-closeSize-8,height);
     row.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [container addSubview:row];
     UIButton *close=[UIButton buttonWithType:UIButtonTypeCustom];
-    close.frame=CGRectMake(234,8,44,44);
+    close.frame=CGRectMake(container.bounds.size.width-closeSize-4,(height-closeSize)*.5,
+                           closeSize,closeSize);
     close.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin;
     UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold];
     [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:symbol] forState:UIControlStateNormal];
@@ -917,34 +930,51 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat shoulder=compact?22:28;
     // Compact drawer is 76pt before scaling; only the icon column scrolls.
     // Its invisible row hit target remains >= 44pt even at 75% scale.
-    CGFloat pw=MIN(small?(compact?76:310):346,bounds.size.width-24);
+    UIEdgeInsets safe=self.window.safeAreaInsets;
+    CGFloat usableWidth=bounds.size.width-safe.left-safe.right;
+    CGFloat pw=MIN(small?(compact?76:310):346,usableWidth-24);
+    if(pw<=0) return;
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
     // Compact drawer has exactly one footer control: LC home.
     NSUInteger compactActions=1;
-    // One 63pt control, with 10pt above and 3pt below its hit area.
-    // This keeps the 50pt tile visually 16.5pt above the rounded edge.
-    CGFloat footerHeight=compact?(10+compactActions*63+3):74;
+    CGFloat actualScale=small?MIN(Clamp(FloatPref(@"panelScale",1.0),.75,1.20),
+                                   (usableWidth-20)/pw):1;
+    if(!isfinite(actualScale) || actualScale<.70) return;
+    CGFloat footerHeight=0,top=0,bottom=0;
+    BOOL fits=NO;
+    // Fit complete controls before choosing panel height. A short scene trades
+    // the favorites strip and padding for a usable list, never overlapping it.
+    for(NSUInteger attempt=0;attempt<12;attempt++) {
+        self.panelContentScale=actualScale;
+        BOOL tight=available/actualScale<360;
+        self.panelShowsHeader=small && !compact && !tight;
+        footerHeight=compact?(tight?MAX(50,44/actualScale)+4:10+compactActions*63+3):
+                              (tight?MAX(60,44/actualScale)+8:74);
+        top=compact?shoulder+8:(self.panelShowsHeader?86+shoulder:shoulder+6);
+        bottom=footerHeight+6+shoulder;
+        CGFloat rowHeight=compact?63:[self appRowHeight];
+        if(!small || (top+bottom+rowHeight)*actualScale<=available) { fits=YES;break; }
+        if(actualScale<=.70) break;
+        actualScale=MAX(.70,actualScale*.95);
+    }
+    if(!fits) return;
+    self.panelFooterHeight=footerHeight;
     CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12+2*shoulder):
         MIN(531,147+65*MIN(appCount,5)+footerHeight+2*shoulder)):610;
+    if(small) target=MAX(target,top+bottom+(compact?63:[self appRowHeight]));
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
-    CGFloat ph=MIN(available,target);
+    CGFloat ph=MIN(available/actualScale,target);
     if(!isfinite(ph) || ph<=0 || !isfinite(pw) || pw<=0) return;
     if(hostUI && small) {
         FMLog(@"panel-layout",[NSString stringWithFormat:@"context=lc-host mode=%@ size=%.0fx%.0f safeBottom=%.0f actions=%lu apps=%lu",
             compact?@"compact":@"normal",pw,ph,safeBottom,
             (unsigned long)(compact?compactActions:2),(unsigned long)appCount]);
     }
-    CGFloat desiredScale=small?Clamp(FloatPref(@"panelScale",1.0),.75,1.20):1.0;
-    // Cap the visual bounds: transforms also affect UIKit hit testing.
-    CGFloat actualScale=MIN(desiredScale,MIN((bounds.size.width-20)/pw,
-                                               available/MAX(1,ph)));
-    if(!isfinite(actualScale) || actualScale<=0) return;
-    actualScale=MAX(.60,actualScale);
     CGFloat visualW=pw*actualScale, visualH=ph*actualScale;
-    CGFloat edgeInset=small?0:10;
+    CGFloat edgeInset=(self.left?safe.left:safe.right)+(small?0:10);
     CGFloat centerX=self.left?(edgeInset+visualW*.5):(bounds.size.width-edgeInset-visualW*.5);
     CGFloat topY=small?Clamp(CGRectGetMidY(self.orb.frame)-visualH*.48,
                           safeTop,bounds.size.height-safeBottom-visualH)
@@ -989,10 +1019,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [FMGlassContent(glass) addSubview:scroll];
     if(small) {
         // Only the central application list scrolls; header and footer never move.
-        if(!compact) [self buildAppHeader:glass];
-        CGFloat top=(compact?12:86)+shoulder, bottom=footerHeight+9+shoulder;
+        if(self.panelShowsHeader) [self buildAppHeader:glass];
         scroll.frame=CGRectMake(compact?3:13,top,pw-(compact?6:26),
-                                MAX(22,ph-top-bottom));
+                                ph-top-bottom);
         scroll.clipsToBounds=YES;
         [self buildAppFooter:glass];
     }
@@ -1067,6 +1096,21 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSArray *v=[HostDefaults() arrayForKey:Pref(@"favoritePaths")];
     return [v isKindOfClass:NSArray.class]?v:@[];
 }
+- (NSArray<NSString*> *)unavailableFavorites {
+    // Guest inventories can be partial. Expose absent identities for explicit
+    // removal without assuming that a missing entry has been uninstalled.
+    NSMutableArray *missing=[NSMutableArray array];
+    NSArray *apps=[self visibleApps];
+    for(NSString *key in [self favorites]) {
+        BOOL found=NO;
+        for(NSDictionary *app in apps)
+            if([key isEqualToString:FMAppKey(app)] || [key isEqualToString:app[@"path"]]) {
+                found=YES;break;
+            }
+        if(!found) [missing addObject:key];
+    }
+    return missing;
+}
 - (void)appPage:(UIStackView *)stack {
     NSArray<NSDictionary*> *apps=[self visibleApps];
     if(BoolPref(@"compactMode",NO)) {
@@ -1102,26 +1146,22 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [row addTarget:self action:@selector(switchFromRow:)
                 forControlEvents:UIControlEventTouchUpInside];
             if([LCOrbitMultitask isRunningGuest:app]) {
-                UIView *container=[[UIView alloc] initWithFrame:row.frame];
-                // The compact scroll viewport is only 70pt wide at its
-                // default 76pt drawer size. The old fixed x=41 close button
-                // extended past the clipped viewport, hiding its icon and
-                // most of its hit area. Anchor everything to actual bounds.
+                CGFloat closeSize=MIN(32,24/MAX(.70,self.panelContentScale?:1));
+                UIView *container=[[UIView alloc] initWithFrame:CGRectMake(0,0,70,63)];
+                // A bounded corner target preserves the icon's center for
+                // switching and keeps running/nonrunning rows equally tall.
                 row.translatesAutoresizingMaskIntoConstraints=NO;
                 [container addSubview:row];
                 [NSLayoutConstraint activateConstraints:@[
                     [row.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
                     [row.trailingAnchor constraintEqualToAnchor:container.trailingAnchor],
                     [row.topAnchor constraintEqualToAnchor:container.topAnchor],
-                    [row.bottomAnchor constraintEqualToAnchor:container.bottomAnchor]
+                    [row.heightAnchor constraintEqualToConstant:63]
                 ]];
                 UIButton *close=[UIButton buttonWithType:UIButtonTypeCustom];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
                 close.contentHorizontalAlignment=UIControlContentHorizontalAlignmentRight;
                 close.contentVerticalAlignment=UIControlContentVerticalAlignmentTop;
-                // Keep the 17pt glyph visibly inside the icon's top-right
-                // corner while retaining a 40pt unscaled touch target.
-                close.contentEdgeInsets=UIEdgeInsetsMake(3,0,0,6);
                 UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
                 [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:symbol] forState:UIControlStateNormal];
                 close.tintColor=UIColor.systemRedColor;
@@ -1132,15 +1172,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                 [NSLayoutConstraint activateConstraints:@[
                     [close.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-2],
                     [close.topAnchor constraintEqualToAnchor:container.topAnchor],
-                    [close.widthAnchor constraintEqualToConstant:40],
-                    [close.heightAnchor constraintEqualToConstant:40]
+                    [close.widthAnchor constraintEqualToConstant:closeSize],
+                    [close.heightAnchor constraintEqualToConstant:closeSize]
                 ]];
                 [self addRow:container height:63 to:stack];
             } else [self addRow:row height:63 to:stack];
         }
     } else {
         for(NSDictionary *app in apps)
-            [self addRow:[self appRow:app] height:60 to:stack];
+            [self addRow:[self appRow:app] height:[self appRowHeight] to:stack];
     }
     if(!apps.count) {
         UILabel *empty=[self label:@"暂无应用" size:13 weight:UIFontWeightMedium];
@@ -1150,6 +1190,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)buildAppHeader:(UIView *)glass {
+    for(UIView *tile in self.appsHeaderTiles) [tile removeFromSuperview];
+    self.appsHeaderGlass=glass;
+    NSMutableArray<UIView *> *tiles=[NSMutableArray array];
     CGFloat w=glass.bounds.size.width, inner=w-28;
     // The expanded panel is intentionally icon-and-app-only: no title,
     // description, item count, or duplicate explanatory text.
@@ -1189,9 +1232,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
         tile.accessibilityLabel=FMAppCaption(app);
+        tile.accessibilityTraits=UIAccessibilityTraitButton;
         tile.enabled=![LCOrbitGuestService isCurrentGuest:app];
         [FMGlassContent(glass) addSubview:tile];
+        [tiles addObject:tile];
     }
+    self.appsHeaderTiles=tiles;
 }
 - (void)buildAppFooter:(UIView *)glass {
     BOOL compact=BoolPref(@"compactMode",NO);
@@ -1216,9 +1262,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         ]];
     }
     CGFloat w=glass.bounds.size.width;
-    CGFloat height=compact?(10+items.count*63+3):74;
+    CGFloat height=self.panelFooterHeight;
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:13,
-                       glass.bounds.size.height-height-7-(compact?22:28),w-(compact?6:26),height)];
+                       glass.bounds.size.height-height-6-(compact?22:28),w-(compact?6:26),height)];
     footer.backgroundColor=UIColor.clearColor;
     [FMGlassContent(glass) addSubview:footer];
     if(compact) {
@@ -1229,12 +1275,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         separator.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
         [footer addSubview:separator];
     }
-    CGFloat slot=compact?63:footer.bounds.size.width/items.count;
+    CGFloat slot=compact?height-4:footer.bounds.size.width/items.count;
     for(NSUInteger i=0;i<items.count;i++) {
         NSArray *spec=items[i];
         CGRect hit=compact?
-            CGRectMake(0,10+i*slot,footer.bounds.size.width,slot):
-            CGRectMake(i*slot,3,slot,65);
+            CGRectMake(0,4+i*slot,footer.bounds.size.width,slot):
+            CGRectMake(i*slot,4,slot,height-8);
         UIControl *button=[[UIControl alloc] initWithFrame:hit];
         button.backgroundColor=UIColor.clearColor;
         button.accessibilityLabel=spec[2];
@@ -1296,6 +1342,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [row removeFromSuperview];
     }
     [self appPage:stack];
+    if(self.appsHeaderGlass) [self buildAppHeader:self.appsHeaderGlass];
     [scroll layoutIfNeeded];
     CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height+
                           scroll.adjustedContentInset.bottom);
@@ -1426,7 +1473,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [self spacer:s size:14];
         }
         [self section:@"悬浮控件" sub:nil in:s];
-        [self settingSwitch:s title:@"闲置贴边待命" key:@"autoFade" defaultValue:YES tag:6];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
@@ -1520,6 +1566,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     });
 }
 - (void)detachFromScene {
+    [self invalidatePendingLaunch];
     [self cancelAppearanceCheck];
     if(@available(iOS 17.0,*)) {
         if(self.appearanceScene && self.appearanceRegistration)
@@ -1653,7 +1700,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self settingScaleControl:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
-    [self settingSwitch:s title:@"闲置贴边待命" key:@"autoFade" defaultValue:YES tag:6];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
     [self spacer:s size:10];
@@ -1747,7 +1793,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self spacer:s size:12];
     [self section:@"玻璃与微珠" sub:nil in:s];
     [self settingSwitch:s title:@"全菜单透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
-    [self settingSwitch:s title:@"圆形微珠" key:@"roundOrb" defaultValue:NO tag:5];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self orbScaleControl:s];
     [self settingSlider:s title:@"玻璃主题着色增强" key:@"glassTint" min:0 max:.15 def:0 tag:13];
@@ -1768,7 +1813,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [pins addObject:path];
     }
     SetPref(@"favoritePaths",pins);
-    [self draw];
+    [self refreshUI];
+}
+- (void)removeFavorite:(UIControl *)button {
+    NSString *key=objc_getAssociatedObject(button,@selector(removeFavorite:));
+    if(!key.length) return;
+    NSMutableArray *pins=[[self favorites] mutableCopy];
+    if(![pins containsObject:key]) return;
+    [pins removeObject:key];
+    SetPref(@"favoritePaths",pins);
+    [self refreshUI];
 }
 - (void)promoteApp:(UIControl *)button {
     NSDictionary *app=objc_getAssociatedObject(button,@selector(promoteApp:));
@@ -1935,6 +1989,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         empty.textAlignment=NSTextAlignmentCenter;
         [self addRow:empty height:64 to:group];
     }
+    NSArray<NSString *> *missing=[self unavailableFavorites];
+    if(missing.count) {
+        [self spacer:stack size:12];
+        [self section:@"未显示的收藏"
+            sub:@"以下收藏未出现在当前应用列表中，仍保留原标识。轻触可取消收藏并释放名额。" in:stack];
+        for(NSString *key in missing) {
+            UIView *row=[self rowForTitle:key icon:@"star.slash" height:54 action:@selector(removeFavorite:)];
+            row.accessibilityLabel=[@"取消收藏 " stringByAppendingString:key];
+            objc_setAssociatedObject(row,@selector(removeFavorite:),key,OBJC_ASSOCIATION_COPY_NONATOMIC);
+            [self addRow:row height:54 to:stack];
+        }
+    }
 }
 - (void)perAppPage:(UIStackView*)s {
     [self section:FMHostUI()?@"LC 主界面独立设置":@"当前 App 独立设置" sub:GuestID() in:s];
@@ -1943,7 +2009,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self section:@"外观与位置" sub:nil in:s];
     [self settingSlider:s title:@"当前 App 微珠透明度" key:[@"appAlpha." stringByAppendingString:GuestID()] min:.20 max:1 def:FloatPref(@"idleAlpha",.72) tag:12];
     [self settingSwitch:s title:@"双击展开（游戏防误触）" key:[@"doubleTap." stringByAppendingString:GuestID()] defaultValue:NO tag:8];
-    [self settingSwitch:s title:@"极细边缘提示（保留触摸区）" key:[@"stealth." stringByAppendingString:GuestID()] defaultValue:NO tag:15];
     [self spacer:s size:4];
     [self section:@"单任务切换行为" sub:nil in:s];
     [self settingSwitch:s title:@"当前 App 切换前确认" key:AppPref() defaultValue:BoolPref(@"confirm",YES) tag:4];
@@ -1974,18 +2039,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 1:key=@"haptic";break;
         case 2:key=@"confirm";break;
         case 3:key=@"showRestart";break;
-        case 5:key=@"roundOrb";break;
-        case 6:key=@"autoFade";break;
         case 7:key=[@"override." stringByAppendingString:GuestID()];break;
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
-        case 15:key=[@"stealth." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
         case 18:key=@"clearGlass";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
-    if(sw.tag==3||sw.tag==5||sw.tag==6||sw.tag==7||sw.tag==8||sw.tag==15||sw.tag==18) [self draw];
+    if(sw.tag==3||sw.tag==7||sw.tag==8||sw.tag==18) [self draw];
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
 - (void)sliderChanged:(UISlider*)slider {
@@ -2083,9 +2145,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)resetStyle {
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
-    SetPref(@"roundOrb",@NO);SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
+    SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
     SetPref(@"appearanceMode",@(0));
-    SetPref(@"autoFade",@YES);
     for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth"]) {
         [HostDefaults() removeObjectForKey:Pref(key)];
     }
@@ -2098,21 +2159,58 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self refreshUI];
     });
 }
+- (void)invalidatePendingLaunch {
+    self.launchGeneration++;
+    self.launchPending=NO;
+}
 - (void)launchApp:(NSDictionary *)app {
+    UIWindowScene *scene=self.settingsWindow.windowScene?:self.window.windowScene;
+    LCOrbitContext *context=self.orbitContext;
+    if(self.launchPending || !context || !scene ||
+       ![[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"] ||
+       scene.activationState!=UISceneActivationStateForegroundActive ||
+       UIApplication.sharedApplication.applicationState!=UIApplicationStateActive) return;
+    // Reserve before sharing (and before publishing events that may reenter).
+    // A mode change must cancel this request rather than choose a new backend.
+    NSUInteger generation=++self.launchGeneration;
+    self.launchPending=YES;
+    BOOL multitask=[LCOrbitMultitask isEnabled],systemMenu=[LCOrbitMultitask usesSystemMenu];
+    self.launchMultitaskMode=multitask;
+    self.launchSystemMenuMode=systemMenu;
+    BOOL hostUI=FMHostUI();
+    NSString *guestID=[GuestID() copy]?:@"";
+    NSDictionary *target=[app copy];
     // Persist before launch: classic switching may destroy this Guest process.
     [self persistAppsScroll];
-    FMLog(@"switch-request",FMAppKey(app));
-    [self.orbitContext.events publish:@"orbit.guest.switchRequested"
-        payload:@{@"target":FMAppKey(app),@"guestID":GuestID()}];
+    FMLog(@"switch-request",FMAppKey(target));
+    [context.events publish:@"orbit.guest.switchRequested"
+        payload:@{@"target":FMAppKey(target),@"guestID":guestID}];
+    __weak typeof(self) weakSelf=self;
     FMSyncSharedTweaks(^{
-        NSError *error=nil;
-        if(![LCOrbitGuestService launchGuest:app error:&error]) {
-            FMLog(@"switch-rejected",error.localizedDescription);
-            [self showMessage:@"暂不可切换" details:error.localizedDescription];
+        typeof(self) manager=weakSelf;
+        if(!manager || manager.launchGeneration!=generation || !manager.launchPending) return;
+        UIWindowScene *currentScene=manager.settingsWindow.windowScene?:manager.window.windowScene;
+        if(manager.orbitContext!=context || currentScene!=scene ||
+           scene.activationState!=UISceneActivationStateForegroundActive ||
+           UIApplication.sharedApplication.applicationState!=UIApplicationStateActive ||
+           ![[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"] ||
+           [LCOrbitMultitask isEnabled]!=multitask || [LCOrbitMultitask usesSystemMenu]!=systemMenu ||
+           FMHostUI()!=hostUI || ![(GuestID()?:@"") isEqualToString:guestID]) {
+            [manager invalidatePendingLaunch];
+            FMLog(@"switch-cancelled",@"launch-context-changed");
             return;
         }
-        FMLog(@"switch-accepted",[LCOrbitMultitask isEnabled]?@"host-multitask":@"classic");
-        self.isOpen=NO;[self draw];
+        NSError *error=nil;
+        BOOL accepted=[LCOrbitGuestService launchGuest:target error:&error];
+        if(manager.launchGeneration!=generation) return;
+        manager.launchPending=NO;
+        if(!accepted) {
+            FMLog(@"switch-rejected",error.localizedDescription);
+            [manager showMessage:@"暂不可切换" details:error.localizedDescription];
+            return;
+        }
+        FMLog(@"switch-accepted",multitask?@"host-multitask":@"classic");
+        manager.isOpen=NO;[manager draw];
     });
 }
 - (void)showMultitaskMenuExpanded:(BOOL)expanded {
@@ -2207,36 +2305,34 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(FMHostUI()) { [self toggle]; return; }
     [self confirmTitle:@"返回 LiveContainer？" action:^{[self launchPath:@"ui" uuid:nil];}];
 }
-- (void)closeTaskFromButton:(UIControl *)sender {
-    // The task may disappear synchronously; save the scroll before notifying
-    // its window manager, irrespective of compact/normal button layout.
-    [self persistAppsScroll];
-    NSDictionary *app=objc_getAssociatedObject(sender,@selector(closeTaskFromButton:));
-    if(!app || ![LCOrbitMultitask isRunningGuest:app]) {
+- (void)closeApp:(NSDictionary *)app sender:(UIControl *)sender collapse:(BOOL)collapse {
+    NSDictionary *target=[app copy];
+    if(!target || ![LCOrbitMultitask isRunningGuest:target]) {
         FMLog(@"task-close-rejected",@"not-running-or-stale");
         [self showMessage:@"任务未运行" details:@"应用已退出或运行状态已变化，没有关闭其他任务。"];
         return;
     }
+    [self persistAppsScroll];
     NSError *error=nil;
-    if(![LCOrbitMultitask closeGuest:app error:&error]) {
+    if(![LCOrbitMultitask closeGuest:target error:&error]) {
         FMLog(@"task-close-rejected",error.localizedDescription?:@"unknown");
         [self showMessage:@"关闭任务失败" details:error.localizedDescription?:@"请稍后重试。"];
         return;
     }
     sender.enabled=NO;
-    FMLog(@"task-close-requested",FMAppKey(app));
+    FMLog(@"task-close-requested",FMAppKey(target));
+    if(collapse) { self.isOpen=NO;[self draw]; }
+}
+- (void)closeTaskFromButton:(UIControl *)sender {
+    NSDictionary *app=objc_getAssociatedObject(sender,@selector(closeTaskFromButton:));
+    [self closeApp:app sender:sender collapse:NO];
 }
 - (void)closeMultitaskGuest {
-    if(![LCOrbitMultitask activeWindow]) {
-        [self showMessage:@"没有当前任务" details:@"先从微珠打开或切回一个 App。"];return;
-    }
-    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"关闭当前任务？"
-        message:@"这会结束当前 App 的运行状态，其他任务继续保留。" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"关闭任务" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-        [LCOrbitMultitask closeCurrentGuest];self.isOpen=NO;[self draw];
-    }]];
-    [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+    for(NSDictionary *app in self.apps)
+        if([LCOrbitMultitask isCurrentGuest:app]) {
+            [self closeApp:app sender:nil collapse:YES];return;
+        }
+    [self showMessage:@"没有当前任务" details:@"先从微珠打开或切回一个 App。"];
 }
 - (void)restart {
     if(FMHostUI()) return;
@@ -2597,6 +2693,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @implementation LCFloatingMenuModule
 - (NSString *)moduleIdentifier { return @"FloatingMenu"; }
 - (void)orbitDidStartWithContext:(LCOrbitContext *)context {
+    [[FMManager shared] invalidatePendingLaunch];
     [FMManager shared].orbitContext=context;
     BOOL hostUI=FMHostUI();
     if(hostUI) {
@@ -2620,6 +2717,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             }];
         self.configurationObserver=[NSNotificationCenter.defaultCenter addObserverForName:LCOrbitMultitaskConfigurationChangedNotification
             object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+                if(manager.launchPending &&
+                   (manager.launchMultitaskMode!=[LCOrbitMultitask isEnabled] ||
+                    manager.launchSystemMenuMode!=[LCOrbitMultitask usesSystemMenu] ||
+                    ![[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"]))
+                    [manager invalidatePendingLaunch];
                 if(manager.isOpen && !manager.settingsWindow &&
                    [LCOrbitMultitask shouldShowFloatingMenu]) [manager requestAppsRefresh];
                 else [manager refreshUI];
@@ -2646,14 +2748,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if([event isEqualToString:UIApplicationDidEnterBackgroundNotification] ||
        [event isEqualToString:UIApplicationWillResignActiveNotification] ||
        [event isEqualToString:UISceneWillDeactivateNotification]) {
-        if(!scene || scene==manager.window.windowScene) {
+        if(!scene || scene==manager.window.windowScene || scene==manager.settingsWindow.windowScene) {
+            [manager invalidatePendingLaunch];
             if(manager.appsScroll) [manager persistAppsScroll];
             [manager cancelAppearanceCheck];
         }
         return;
     }
     if([event isEqualToString:UISceneDidDisconnectNotification]) {
-        if(scene && scene==manager.window.windowScene) [manager detachFromScene];
+        if(scene && (scene==manager.window.windowScene || scene==manager.settingsWindow.windowScene))
+            [manager detachFromScene];
         return;
     }
     if([event isEqualToString:UIApplicationDidReceiveMemoryWarningNotification]) return;

@@ -39,10 +39,12 @@ static void SetPref(NSString *key,id value) { [HostDefaults() setObject:value fo
 - (NSArray<NSString *> *)favorites;
 - (void)pinApp:(UIControl *)sender;
 - (void)draw;
+- (void)refreshUI;
 - (void)showMessage:(NSString *)title details:(NSString *)details;
 @end
 '''
 boundary='''\n- (void)draw {}
+- (void)refreshUI {}
 - (void)showMessage:(NSString *)title details:(NSString *)details { FavoriteTestNotice(); }
 @end
 '''

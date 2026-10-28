@@ -25,7 +25,9 @@ static NSUInteger Failures, Assertions, Notices;
 @property(nonatomic,copy) NSArray<NSDictionary *> *apps;
 - (NSArray<NSDictionary *> *)visibleApps;
 - (NSArray<NSString *> *)favorites;
+- (NSArray<NSString *> *)unavailableFavorites;
 - (void)pinApp:(id)sender;
+- (void)removeFavorite:(id)sender;
 @end
 NSUserDefaults *FavoriteTestDefaults(void) { return Defaults; }
 NSString *FavoriteTestGuestID(void) { return CurrentID ?: @"test.host"; }
@@ -109,6 +111,21 @@ int main(void) {
             [Defaults setObject:@[@"a",@"b",@"c",@"d"] forKey:@"test.favoritePaths"];
             Pin(menu,sharedJIT);
             Check(menu.favorites.count==4 && Notices==1,@"existing four-favorite limit stays enforced");
+            Check([menu.unavailableFavorites isEqualToArray:@[@"a",@"b",@"c",@"d"]],@"missing favorites remain explicitly removable by identity");
+            Check(menu.favorites.count==4,@"listing missing favorites never deletes saved preferences");
+            NSObject *remove=[NSObject new];
+            objc_setAssociatedObject(remove,@selector(removeFavorite:),@"b",OBJC_ASSOCIATION_COPY_NONATOMIC);
+            [menu removeFavorite:remove];
+            Check([menu.favorites isEqualToArray:@[@"a",@"c",@"d"]],@"explicit removal deletes only the selected missing identity");
+            Pin(menu,sharedJIT);
+            Check([menu.favorites containsObject:@"shared/SharedJIT.app"],@"removing a missing favorite frees a slot for a present app");
+            Check(menu.unavailableFavorites.count==3,@"present scoped favorite is excluded from missing identities");
+            [Defaults setObject:@[@"private/Same.app",@"shared/Same.app",@"PrivateJIT.app"] forKey:@"test.favoritePaths"];
+            menu.apps=@[privateSame,privateJIT];
+            Check([menu.unavailableFavorites isEqualToArray:@[@"shared/Same.app"]],@"partial inventory exposes absent scope without merging namesakes or legacy keys");
+            Check(menu.favorites.count==3,@"partial inventory preserves potentially valid favorites");
+            menu.apps=[LCOrbitGuestService installedApps];
+            Check(menu.unavailableFavorites.count==0,@"reappearing favorite needs no preference repair");
             CurrentID=@"test.PrivateJIT.app";
             Check(Find(menu.visibleApps,NO,@"PrivateJIT.app")!=nil,@"current JIT app stays in management list");
             [Defaults setObject:@[] forKey:@"test.favoritePaths"];

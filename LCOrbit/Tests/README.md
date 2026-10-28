@@ -46,3 +46,15 @@ The previously shipped `b50cb10` fails the JIT/favorite assertions. The `b15793c
 - `run-dock-visibility-tests.sh`: preserve original native hidden/touch state, suppress only bead-owned presentation and restore exactly once.
 
 System/native LC backend preferences must never be written by plugin activation or recovery. System-mode task tracking may update identity for recovery gestures but must not change native geometry or other task visibility. Bead fullscreen remains opt-in and requires LC's virtual backend selected by the user.
+
+## UIKit drawer regression app
+
+Run `python3 LCOrbit/Tests/run-drawer-uikit-tests.py` on macOS with Xcode and an installed iOS Simulator runtime. The runner selects a booted available simulator, or boots an available iPhone if none is running. Use `--device NAME_OR_UDID` (or `ORBIT_SIMULATOR_DEVICE`) to select a device and `--output-dir PATH` to retain separate before/after evidence. `--source-root PATH` compiles another checkout while retaining this test harness.
+
+The runner builds and signs a dedicated local fixture app, links the actual `LCFloatingMenu.m` and Core sources, installs only `local.orbit.DrawerRegression`, and executes the production menu on the simulator main thread. It resets only that fixture application's sandbox. It never launches or closes real guests: installed app inventory, current/running task state, task-close boundary and alert presentation are fixture methods. Task-close cases assert immediate execution without a confirmation alert and reject stale targets before the task boundary is invoked.
+
+The JSON report and PNG snapshots are retained under `.omx/artifacts/drawer-uikit/` by default. Nonzero exit status means a failed assertion, build failure, missing simulator or a missing app report. Cases cover normal/compact 320/375pt host-height layout, normal close targets and compact upper-right badges with reachable icon centers at 75/100/120% scales, horizontal safe insets, header refresh/repetition, immediate list/footer closure and stale-target rejection, cancelled pan position/persistence, and removed round-orb/idle-fade behavior with legacy keys enabled.
+
+These are **real UIKit simulator tests with synthetic host-window geometry and task fixtures**. They verify coordinate conversion, view layout, control routing and production action handling, but do not prove LC's actual SwiftUI tab-bar placement, physical sensor occlusion, remote scene integration or real task process termination. PNGs use UIKit layer rendering; they show synthetic layout, not hardware screenshots. The simulator suite remains an explicit check because some build machines have no iOS Simulator runtime.
+
+Reduce Motion docking is reported separately as a production source contract: the docking method must consult `UIAccessibilityIsReduceMotionEnabled()`. This check does not claim to toggle the simulator accessibility C function or verify animation timing.
