@@ -1079,9 +1079,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL compact=BoolPref(@"compactMode",NO);
     NSMutableArray<NSArray*> *items=[NSMutableArray array];
     if(compact) {
-        // Compact mode keeps only the drawer collapse control in its footer.
+        // Compact mode exposes only the return-home control in its footer.
         // Per-running-app close badges in the icon list are unaffected.
-        [items addObject:@[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起菜单"]];
+        [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回主页"]];
     } else {
         if([LCOrbitMultitask isEnabled]) {
             [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LC，保留运行任务"]];
