@@ -282,6 +282,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) UIView *dismissLayer;
 @property(nonatomic,strong) NSMutableArray<UIView*> *manageRows;
 @property(nonatomic,weak) UIScrollView *settingsScroll;
+@property(nonatomic,weak) UIScrollView *appsScroll;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
@@ -294,6 +295,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,assign) BOOL appearancePollScheduled;
 @property(nonatomic,assign) NSUInteger appearancePollGeneration;
 @property(nonatomic,assign) CGFloat settingsScrollOffset;
+@property(nonatomic,assign) CGFloat appsScrollOffset;
 @property(nonatomic,assign) CGFloat orbY;
 @property(nonatomic,assign) BOOL left;
 @property(nonatomic,assign) BOOL isOpen;
@@ -460,6 +462,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return surface;
 }
 - (void)removePanel {
+    // Closing a running task refreshes this panel. Both the compact icon list
+    // and the normal app rows must retain their shared scroll position.
+    if(self.appsScroll) {
+        CGFloat offset=self.appsScroll.contentOffset.y;
+        if(isfinite(offset)) self.appsScrollOffset=MAX(0,offset);
+        self.appsScroll=nil;
+    }
     [self.panel removeFromSuperview]; self.panel=nil;
     [self.dismissLayer removeFromSuperview]; self.dismissLayer=nil;
 }
@@ -517,7 +526,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
     if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
         initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    if(!self.isOpen) self.isOpen=YES;
+    if(!self.isOpen) {
+        self.isOpen=YES;
+        self.appsScrollOffset=0; // A fresh open starts at the beginning.
+    }
     self.page=@"apps";self.apps=InstalledApps();
     [self draw];
 }
@@ -560,7 +572,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)toggle {
     self.isOpen=!self.isOpen; self.page=@"apps";
-    if(self.isOpen) self.apps=InstalledApps();
+    if(self.isOpen) {
+        self.appsScrollOffset=0; // Do not carry a previous opening's offset.
+        self.apps=InstalledApps();
+    }
     FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
     [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
@@ -781,8 +796,19 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
         [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
     ]];
-    if(small) [self appPage:stack];
-    else {
+    if(small) {
+        self.appsScroll=scroll;
+        [self appPage:stack];
+        CGFloat offset=self.appsScrollOffset;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if(self.appsScroll!=scroll || !scroll.superview) return;
+            [scroll.superview layoutIfNeeded];
+            [scroll layoutIfNeeded];
+            CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height+
+                                  scroll.adjustedContentInset.bottom);
+            [scroll setContentOffset:CGPointMake(0,MIN(MAX(0,offset),maxY)) animated:NO];
+        });
+    } else {
         self.settingsScroll=scroll;
         [self settingsPage:stack];
         CGFloat offset=self.settingsScrollOffset;
@@ -1105,6 +1131,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     self.page=@"apps";
     self.isOpen=visible;
+    self.appsScrollOffset=0;
     self.apps=InstalledApps();
     FMLog(@"settings-close",FMHostUI()?@"lc-host-foreground":@"guest-foreground");
     [self draw];
@@ -1266,6 +1293,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.settingsNavigation=nil;
     self.settingsScreen=nil;
     self.settingsScroll=nil;
+    self.appsScroll=nil;
+    self.appsScrollOffset=0;
     self.previousKeyWindow=nil;
     settings.hidden=YES;
     settings.rootViewController=nil;
@@ -1909,6 +1938,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self confirmTitle:@"返回 LiveContainer？" action:^{[self launchPath:@"ui" uuid:nil];}];
 }
 - (void)closeTaskFromButton:(UIControl *)sender {
+    // closeGuest may synchronously notify observers that rebuild the drawer.
+    // Capture before that happens, regardless of compact/normal button layout.
+    if(self.appsScroll && isfinite(self.appsScroll.contentOffset.y))
+        self.appsScrollOffset=MAX(0,self.appsScroll.contentOffset.y);
     NSDictionary *app=objc_getAssociatedObject(sender,@selector(closeTaskFromButton:));
     if(!app || ![LCOrbitMultitask isRunningGuest:app]) {
         FMLog(@"task-close-rejected",@"not-running-or-stale");
