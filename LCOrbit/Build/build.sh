@@ -8,7 +8,7 @@ BUILD_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
 case "$BUILD_COMMIT" in
     *[!0-9a-f]*|"") BUILD_COMMIT="unknown" ;;
 esac
-BUILD_COMMIT_FLAG="-DFM_BUILD_COMMIT=@\\\"$BUILD_COMMIT\\\""
+BUILD_COMMIT_FLAG="-DFM_BUILD_COMMIT=@\"$BUILD_COMMIT\""
 
 # Exercise production scanning, menu selection, favorite persistence and the
 # complete plugin-management flow. A failed regression stops this build.
