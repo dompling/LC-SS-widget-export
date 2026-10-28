@@ -985,13 +985,25 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                 forControlEvents:UIControlEventTouchUpInside];
             if([LCOrbitMultitask isRunningGuest:app]) {
                 UIView *container=[[UIView alloc] initWithFrame:row.frame];
-                row.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+                // The compact scroll viewport is only 70pt wide at its
+                // default 76pt drawer size. The old fixed x=41 close button
+                // extended past the clipped viewport, hiding its icon and
+                // most of its hit area. Anchor everything to actual bounds.
+                row.translatesAutoresizingMaskIntoConstraints=NO;
                 [container addSubview:row];
+                [NSLayoutConstraint activateConstraints:@[
+                    [row.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
+                    [row.trailingAnchor constraintEqualToAnchor:container.trailingAnchor],
+                    [row.topAnchor constraintEqualToAnchor:container.topAnchor],
+                    [row.bottomAnchor constraintEqualToAnchor:container.bottomAnchor]
+                ]];
                 UIButton *close=[UIButton buttonWithType:UIButtonTypeCustom];
-                close.frame=CGRectMake(41,0,44,44);
-                close.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin;
+                close.translatesAutoresizingMaskIntoConstraints=NO;
                 close.contentHorizontalAlignment=UIControlContentHorizontalAlignmentRight;
                 close.contentVerticalAlignment=UIControlContentVerticalAlignmentTop;
+                // Keep the 17pt glyph visibly inside the icon's top-right
+                // corner while retaining a 40pt unscaled touch target.
+                close.contentEdgeInsets=UIEdgeInsetsMake(3,0,0,6);
                 UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
                 [close setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:symbol] forState:UIControlStateNormal];
                 close.tintColor=UIColor.systemRedColor;
@@ -999,6 +1011,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                 objc_setAssociatedObject(close,@selector(closeTaskFromButton:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [close addTarget:self action:@selector(closeTaskFromButton:) forControlEvents:UIControlEventTouchUpInside];
                 [container addSubview:close];
+                [NSLayoutConstraint activateConstraints:@[
+                    [close.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-2],
+                    [close.topAnchor constraintEqualToAnchor:container.topAnchor],
+                    [close.widthAnchor constraintEqualToConstant:40],
+                    [close.heightAnchor constraintEqualToConstant:40]
+                ]];
                 [self addRow:container height:63 to:stack];
             } else [self addRow:row height:63 to:stack];
         }
