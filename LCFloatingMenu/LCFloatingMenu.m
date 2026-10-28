@@ -21,6 +21,20 @@
 #import <math.h>
 #import <stdlib.h>
 
+// Semantic version is maintained here; the exact source commit is embedded
+// automatically by LCOrbit/Build/build.sh for reliable update comparison.
+#define FM_MENU_VERSION @"1.0.0"
+#ifndef FM_BUILD_COMMIT
+#define FM_BUILD_COMMIT @"unknown"
+#endif
+static NSString *const FMRepositoryURL=@"https://github.com/dompling/LC-SS-widget-export";
+static NSString *const FMReleasesURL=@"https://github.com/dompling/LC-SS-widget-export/releases";
+static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/commits/lcss-original";
+static NSString *FMCommitSummary(void) {
+    NSString *hash=FM_BUILD_COMMIT;
+    if(hash.length!=40) return @"未标记构建";
+    return [hash substringToIndex:7];
+}
 static inline CGFloat Clamp(CGFloat x, CGFloat a, CGFloat b) { return fmax(a,fmin(b,x)); }
 static UIColor *RGBA(CGFloat r,CGFloat g,CGFloat b,CGFloat a) {
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
@@ -262,6 +276,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 
 @interface FMSettingsRootController : UIViewController
 @property(nonatomic,strong) UIScrollView *contentScroll;
+@property(nonatomic,weak) UILabel *updateStatusLabel;
+@property(nonatomic,assign) BOOL checkingUpdate;
 - (void)rebuild;
 @end
 @interface FMSettingsSectionController : UIViewController
@@ -2150,10 +2166,92 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [arrow.heightAnchor constraintEqualToConstant:15],
         [arrow.widthAnchor constraintEqualToConstant:10]
     ]];
-    [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    if(action) [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    else {arrow.hidden=YES;row.userInteractionEnabled=NO;}
+    if(action==@selector(checkForUpdates)) self.updateStatusLabel=detail;
     row.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",name,subtitle];
-    row.accessibilityTraits=UIAccessibilityTraitButton;
+    row.accessibilityTraits=action?UIAccessibilityTraitButton:UIAccessibilityTraitStaticText;
     return row;
+}
+- (void)openRepository {
+    NSURL *url=[NSURL URLWithString:FMRepositoryURL];
+    if(url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+}
+- (void)openReleases {
+    NSURL *url=[NSURL URLWithString:FMReleasesURL];
+    if(url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+}
+- (void)presentUpdateResult:(NSString *)title message:(NSString *)message showReleases:(BOOL)showReleases {
+    if(!self.view.window) return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:title
+        message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
+    if(showReleases) [alert addAction:[UIAlertAction actionWithTitle:@"查看 Releases"
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [self openReleases];
+        }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)checkForUpdates {
+    if(self.checkingUpdate) return;
+    self.checkingUpdate=YES;
+    self.updateStatusLabel.text=@"正在查询 GitHub…";
+    NSMutableURLRequest *request=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:FMUpdateAPI]];
+    request.timeoutInterval=12;
+    [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"LCFloatingMenu/1.0" forHTTPHeaderField:@"User-Agent"];
+    __weak typeof(self) weakSelf=self;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request
+        completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf=weakSelf;
+            if(!strongSelf) return;
+            strongSelf.checkingUpdate=NO;
+            strongSelf.updateStatusLabel.text=@"检查 lcss-original 最新提交";
+            if(error) {
+                [strongSelf presentUpdateResult:@"检查更新失败"
+                    message:error.localizedDescription?:@"无法连接 GitHub，请检查网络。"
+                    showReleases:YES];
+                return;
+            }
+            NSInteger status=[(NSHTTPURLResponse *)response statusCode];
+            if(status==401 || status==404) {
+                // This repository is private. Never claim "up to date" when
+                // the anonymous API cannot reveal its latest commit.
+                [strongSelf presentUpdateResult:@"无法自动检查私有仓库"
+                    message:@"GitHub 不允许匿名读取该仓库的最新提交。请使用已登录 GitHub 的浏览器查看 Releases；插件不会保存或索取访问令牌。"
+                    showReleases:YES];
+                return;
+            }
+            if(status!=200) {
+                [strongSelf presentUpdateResult:@"检查更新失败"
+                    message:[NSString stringWithFormat:@"GitHub 返回 HTTP %ld。请稍后重试或前往 Releases 查看。",(long)status]
+                    showReleases:YES];
+                return;
+            }
+            NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+            NSString *latest=[json isKindOfClass:NSDictionary.class]?json[@"sha"]:nil;
+            if(![latest isKindOfClass:NSString.class] || latest.length!=40) {
+                [strongSelf presentUpdateResult:@"版本信息无效"
+                    message:@"未能从 GitHub 读取有效的提交版本。" showReleases:YES];
+                return;
+            }
+            NSString *installed=FM_BUILD_COMMIT;
+            if(installed.length!=40) {
+                [strongSelf presentUpdateResult:@"当前构建未标记版本"
+                    message:@"当前动态库没有可比较的 Git Commit，请到 Releases 查看最新版本。"
+                    showReleases:YES];
+            } else if([installed caseInsensitiveCompare:latest]==NSOrderedSame) {
+                [strongSelf presentUpdateResult:@"已是最新源码版本"
+                    message:[NSString stringWithFormat:@"当前版本 v%@（%@），与远程 lcss-original 提交一致。",FM_MENU_VERSION,FMCommitSummary()]
+                    showReleases:NO];
+            } else {
+                [strongSelf presentUpdateResult:@"发现不同的远程提交"
+                    message:[NSString stringWithFormat:@"已安装 %@；GitHub 当前 %@。仓库代码有变化，请到 Releases 确认是否已有可用的新动态库。",FMCommitSummary(),[latest substringToIndex:7]]
+                    showReleases:YES];
+            }
+        });
+    }] resume];
 }
 - (void)openApps {
     FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:@"apps"];
@@ -2226,6 +2324,30 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     UIView *space=[UIView new];[space.heightAnchor constraintEqualToConstant:18].active=YES;
     [stack addArrangedSubview:space];
     [manager appendResetStyleRow:stack];
+    // Keep About/Updates at the very bottom, below Reset as requested.
+    UIView *aboutGap=[UIView new];
+    [aboutGap.heightAnchor constraintEqualToConstant:20].active=YES;
+    [stack addArrangedSubview:aboutGap];
+    UILabel *aboutTitle=[UILabel new];
+    aboutTitle.text=@"版本与更新";
+    aboutTitle.textColor=FMThemeColor(FMColorSecondary);
+    aboutTitle.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    [stack addArrangedSubview:aboutTitle];
+    NSString *version=[NSString stringWithFormat:@"v%@ · %@",FM_MENU_VERSION,FMCommitSummary()];
+    UIControl *versionRow=[self navigationRow:@"当前版本" subtitle:version
+        symbol:@"number.circle" action:NULL];
+    [versionRow.heightAnchor constraintEqualToConstant:65].active=YES;
+    [stack addArrangedSubview:versionRow];
+    UIControl *checkRow=[self navigationRow:@"检测更新"
+        subtitle:self.checkingUpdate?@"正在查询 GitHub…":@"检查 lcss-original 最新提交"
+        symbol:@"arrow.clockwise.circle" action:@selector(checkForUpdates)];
+    [checkRow.heightAnchor constraintEqualToConstant:65].active=YES;
+    [stack addArrangedSubview:checkRow];
+    UIControl *repository=[self navigationRow:@"GitHub 仓库"
+        subtitle:@"github.com/dompling/LC-SS-widget-export"
+        symbol:@"link" action:@selector(openRepository)];
+    [repository.heightAnchor constraintEqualToConstant:65].active=YES;
+    [stack addArrangedSubview:repository];
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.contentScroll!=scroll || !scroll.window) return;
         [scroll layoutIfNeeded];
