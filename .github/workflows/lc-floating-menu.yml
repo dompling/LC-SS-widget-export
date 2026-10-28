@@ -1,83 +1,109 @@
 name: Build LCFloatingMenu dylib
-run-name: FloatingMenu dylib build - ${{ github.ref_name }} - ${{ github.sha }}
+run-name: FloatingMenu release ${{ github.ref_name }}
 
+# Publishing is explicit: only push a semantic-version tag to build and ship.
+# Regular commits to lcss-original do not create releases.
 on:
-  workflow_dispatch:
   push:
-    branches: [lcss-original, lcfloatingmenu-ci-fix]
-    paths:
-      - 'LCFloatingMenu/**'
-      - 'LCOrbit/**'
-      - '.github/workflows/lc-floating-menu.yml'
+    tags:
+      - '*.*.*'
 
 permissions:
   contents: write
 
 concurrency:
-  group: floating-menu-release-${{ github.ref }}
+  group: floating-menu-tag-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  release:
     runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Compile iOS arm64 dylib
+      - name: Validate release tag matches source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$GITHUB_REF_NAME"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::Use a tag such as 1.0.1 (no v prefix or build suffix)."
+            exit 1
+          }
+          SOURCE_VERSION="$(sed -n 's/^#define FM_MENU_VERSION @"\([^"]*\)".*$/\1/p' LCFloatingMenu/LCFloatingMenu.m | head -n 1)"
+          [[ "$VERSION" == "$SOURCE_VERSION" ]] || {
+            echo "::error::Tag $VERSION does not match FM_MENU_VERSION $SOURCE_VERSION"
+            exit 1
+          }
+      - name: Compile and verify iOS arm64 dylib
         shell: bash
         run: |
           set -euo pipefail
           LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
           LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib
-      - name: Upload downloadable build artifact
+      - name: Upload GitHub Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: LCFloatingMenu-dylib
           path: dist/LCFloatingMenu.dylib
           if-no-files-found: error
           retention-days: 14
-      - name: Publish versioned release and independent latest dylib
-        if: github.ref == 'refs/heads/lcss-original'
+      - name: Publish version and refresh separate FloatingMenu latest
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION="$(sed -n 's/^#define FM_MENU_VERSION @"\([^"]*\)".*$/\1/p' LCFloatingMenu/LCFloatingMenu.m | head -n 1)"
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid FM_MENU_VERSION: $VERSION"; exit 1; }
-          TAG="fm-v${VERSION}-build${GITHUB_RUN_NUMBER}"
+          VERSION="$GITHUB_REF_NAME"
+          TAG="$VERSION"
           LATEST_TAG="fm-latest"
-          mkdir -p dist/release
-          VERSION_FILE="dist/release/LCFloatingMenu-v${VERSION}-build${GITHUB_RUN_NUMBER}.dylib"
-          LATEST_FILE="dist/release/LCFloatingMenu-latest.dylib"
-          cp dist/LCFloatingMenu.dylib "$VERSION_FILE"
-          cp dist/LCFloatingMenu.dylib "$LATEST_FILE"
-          shasum -a 256 "$VERSION_FILE"
-          cat > dist/release/latest-info.txt <<EOF
-          FM_VERSION=${VERSION}
-          FM_BUILD=${GITHUB_RUN_NUMBER}
-          FM_COMMIT=${GITHUB_SHA}
-          EOF
+          BINARY="dist/LCFloatingMenu.dylib"
+          test -s "$BINARY"
+          sha256sum "$BINARY" || shasum -a 256 "$BINARY"
+
+          # Keep the actual .dylib name unchanged in BOTH releases.
+          # A version tag is immutable; re-running updates its asset only.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$VERSION_FILE" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "$BINARY" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "$VERSION_FILE" \
-              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "LCFloatingMenu v${VERSION} (Build ${GITHUB_RUN_NUMBER})" \
-              --notes "GitHub Actions verified iOS arm64 dylib. Commit: ${GITHUB_SHA}. Import and re-sign in LC Tweaks." \
+            gh release create "$TAG" "$BINARY" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" \
+              --title "LCFloatingMenu $VERSION" \
+              --notes "Verified iOS arm64 dylib from tag $TAG (commit $GITHUB_SHA). Import and re-sign in LiveContainer." \
               --latest=false
           fi
+
+          cat > dist/latest-info.txt <<EOF
+          FM_VERSION=$VERSION
+          FM_COMMIT=$GITHUB_SHA
+          FM_TAG=$TAG
+          EOF
+
+          # Never overwrite a newer latest asset when rebuilding an old tag.
+          latest_body="$(gh release view "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null || true)"
+          latest_version="$(printf '%s\n' "$latest_body" | sed -n 's/^FM_VERSION=//p' | head -n 1)"
+          if [[ "$latest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            IFS=. read -r a b c <<< "$latest_version"
+            IFS=. read -r x y z <<< "$VERSION"
+            if (( 10#$a > 10#$x ||
+                  (10#$a == 10#$x && 10#$b > 10#$y) ||
+                  (10#$a == 10#$x && 10#$b == 10#$y && 10#$c > 10#$z) )); then
+              echo "The current FloatingMenu latest ($latest_version) is newer than $VERSION; keeping it."
+              exit 0
+            fi
+          fi
+
           if gh release view "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$LATEST_TAG" "$LATEST_FILE" dist/release/latest-info.txt \
+            gh release upload "$LATEST_TAG" "$BINARY" dist/latest-info.txt \
               --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "LCFloatingMenu latest (v${VERSION}, Build ${GITHUB_RUN_NUMBER})" \
-              --notes-file dist/release/latest-info.txt --prerelease --latest=false
+              --title "LCFloatingMenu latest ($VERSION)" \
+              --notes-file dist/latest-info.txt --prerelease --latest=false
           else
-            gh release create "$LATEST_TAG" "$LATEST_FILE" dist/release/latest-info.txt \
+            gh release create "$LATEST_TAG" "$BINARY" dist/latest-info.txt \
               --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "LCFloatingMenu latest (v${VERSION}, Build ${GITHUB_RUN_NUMBER})" \
-              --notes-file dist/release/latest-info.txt --prerelease --latest=false
+              --title "LCFloatingMenu latest ($VERSION)" \
+              --notes-file dist/latest-info.txt --prerelease --latest=false
           fi
-          echo "Versioned: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-          echo "Latest binary: https://github.com/${GITHUB_REPOSITORY}/releases/download/fm-latest/LCFloatingMenu-latest.dylib"
+          echo "Versioned: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/LCFloatingMenu.dylib"
+          echo "Latest: https://github.com/$GITHUB_REPOSITORY/releases/download/$LATEST_TAG/LCFloatingMenu.dylib"
