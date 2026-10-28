@@ -13,4 +13,11 @@ for forbidden in ["@selector(openSettings)", "@selector(goHome)", "@selector(res
     assert forbidden not in compact_footer, "compact footer must not contain "+forbidden
 assert "NSUInteger compactActions=1;" in src, "compact footer height must reserve one control"
 assert "@selector(openSettings)" in footer, "normal footer must keep settings"
-print("Running-task close controls and compact-only collapse: PASS")
+assert "self.orb.center=CGPointMake(Clamp(handleX" not in src, "compact open must not relocate the saved orb"
+assert "CGFloat radius=small?(compact?pw*.5:29):32;" in src, "compact capsule radius must match half its width"
+assert src.count("10+compactActions*63+3") == 1, "compact panel footer height must reserve the smaller inset"
+assert src.count("10+items.count*63+3") == 1, "compact footer sizing must match panel layout"
+assert "action:@selector(holdPanel:)" in src, "drawer long press opens settings"
+hold=src[src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"):src.index("- (void)draw {",src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"))]
+assert "[self openSettings];" in hold, "bead long press must open settings"
+print("Running-task close, compact geometry, and long-press settings: PASS")
