@@ -1081,7 +1081,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(compact) {
         // Compact mode exposes only the return-home control in its footer.
         // Per-running-app close badges in the icon list are unaffected.
-        [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回主页"]];
+        [items addObject:@[@"house.fill",NSStringFromSelector(@selector(compactReturnHome)),@"返回首页"]];
     } else {
         if([LCOrbitMultitask isEnabled]) {
             [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LC，保留运行任务"]];
@@ -2063,6 +2063,24 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         return;
     }
     FMLog(@"sidestore-launch",@"one-shot builtinSideStore selected token");
+}
+- (void)compactReturnHome {
+    // Compact mode has one explicit Home action. Never treat it as a
+    // collapse-only control or ask for the standard-mode confirmation.
+    [self persistAppsScroll];
+    FMLog(@"compact-home",FMHostUI()?@"host":@"guest");
+    if([LCOrbitMultitask isEnabled]) {
+        [LCOrbitMultitask showHome];
+        self.isOpen=NO;
+        [self draw];
+        return;
+    }
+    if(FMHostUI()) {
+        // The host already displays LC's home; dismiss the drawer.
+        if(self.isOpen) [self toggle];
+        return;
+    }
+    [self launchPath:@"ui" uuid:nil];
 }
 - (void)goHome {
     if([LCOrbitMultitask isEnabled]) {
