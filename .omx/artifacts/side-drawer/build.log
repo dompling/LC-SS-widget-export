@@ -1,0 +1,31 @@
+Core external configuration lifecycle: 8 assertions, 0 failures
+JSON preference behavior: 28 assertions, 0 failures
+JSON log behavior: 23 assertions, 0 failures
+Dock visibility ownership: 5 assertions, 0 failures
+Guest behavior tests: 79 assertions, 0 failures
+JIT/favorites behavior: 22 assertions, 0 failures
+Tweak center behavior: 69 assertions, 0 failures
+Multitask behavior tests: 62 assertions, 0 failures
+Side-notch geometry: 13620 assertions, 0 failures
+Running-task controls and side-notch drawer: PASS
+Multitask hook ABI tests: 7 assertions, 0 failures
+Native Dock surface policy: 8 assertions, 0 failures
+Native Dock surface lifecycle contract: PASS
+Multitask restore geometry: 4 assertions, 0 failures
+Multitask parent containment: 7 assertions, 0 failures
+Bootstrap behavior tests: 5 assertions, 0 failures
+Multitask scene geometry: 28 assertions, 0 failures
+Multitask menu routing: 11 assertions, 0 failures
+LC host recovery gesture policy: 11 assertions, 0 failures
+Gesture-based host settings recovery source check: PASS
+Gesture-based host settings recovery source check: PASS
+/Users/dompling/WebstormProjects/GIT/LC-SS-widget-export/LCFloatingMenu/LCFloatingMenu.m:1124:23: warning: 'contentEdgeInsets' is deprecated: first deprecated in iOS 15.0 - This property is ignored when using UIButtonConfiguration [-Wdeprecated-declarations]
+ 1124 |                 close.contentEdgeInsets=UIEdgeInsetsMake(3,0,0,6);
+      |                       ^
+/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/UIKit.framework/Headers/UIButton.h:162:35: note: 'contentEdgeInsets' has been explicitly marked deprecated here
+  162 | @property(nonatomic) UIEdgeInsets contentEdgeInsets API_DEPRECATED("This property is ignored when using UIButtonConfiguration", ios(2.0,15.0), tvos(2.0,15.0), visionos(1.0, 1.0)) UI_APPEARANCE_SELECTOR API_UNAVAILABLE(watchos); // default is UIEdgeInsetsZero. On tvOS 10 or later, default is nonzero except for custom buttons.
+      |                                   ^
+1 warning generated.
+/tmp/LCFloatingMenu-side-drawer.dylib: Mach-O 64-bit dynamically linked shared library arm64
+Non-fat file: /tmp/LCFloatingMenu-side-drawer.dylib is architecture: arm64
+LCOrbit Stage 1 static smoke checks: PASS

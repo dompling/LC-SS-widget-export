@@ -27,10 +27,13 @@ assert src.count("10+items.count*63+3") == 1, "compact footer sizing must match 
 assert "action:@selector(holdPanel:)" in src, "drawer long press opens settings"
 hold=src[src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"):src.index("- (void)draw {",src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"))]
 assert "[self openSettings];" in hold, "bead long press must open settings"
-assert "FMSideNotchPath(glass.bounds,self.left,compact)" in src, "both app drawer layouts use mirrored side notch"
+assert "FMApplySideNotch(glass,shadow.layer,self.left,compact,NO)" in src, "both app drawer layouts use mirrored side notch"
 assert "glass.layer.mask=clip" in src, "notch must clip native glass material"
 assert "bead.transform=CGAffineTransformMakeScale(stealth?.18:.32,.88)" not in src, "idle must not squash the glass handle"
 assert src.count('@"闲置贴边待命"')==2, "idle option must be renamed in both settings pages"
-assert "drawer.center=bead.center" in src and "drawer.center=destination" in src, "drawer opening must morph from fixed bead"
+assert "destination.x+(self.left?-travel:travel)" in src and "drawer.center=destination" in src, "drawer must slide from docking side"
+assert "drawer.transform=CGAffineTransformMakeScale(sx,sy)" not in src, "drawer must retain full-sized content during motion"
+assert "CGFloat edgeInset=small?0:10;" in src, "both app drawer modes must attach flush to screen edge"
+assert "button.userInteractionEnabled=!self.isOpen" in src, "hidden bead must not intercept drawer taps"
 assert "self.dismissLayer.userInteractionEnabled=NO" in src, "closing transition must not accept duplicate taps"
-print("Running-task controls and side-notch morph: PASS")
+print("Running-task controls and side-notch drawer: PASS")

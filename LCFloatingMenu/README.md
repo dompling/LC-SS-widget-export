@@ -13,6 +13,14 @@ Standalone iOS 16+ arm64 tweak for classic single-task Guests and the opted-in L
 - Per-app override of confirmation and collapsed opacity, saved in LCOrbit/config.json with legacy preference migration.
 - Classic Guest switching restarts the LC guest process. The host's optional fullscreen multitask mode starts LC LiveProcess guests and switches existing tasks without terminating them.
 
+## 侧边刘海抽屉（2026-10-28）
+
+- 精简与正常模式共用贴边轮廓：上下反向凹角连接屏幕边缘，内侧圆润，玻璃与阴影沿同一路径裁切，并保留细轮廓高光。左右吸附互为镜像，75%–120% 缩放后仍贴边。
+- 收起态使用独立的连续弧线，默认 16×64pt，上下向屏幕边缘外展；中间为 4×26pt 圆头胶囊线，端部圆角随尺寸缩放。闲置淡出保留两端轮廓，不再向屏幕外移动小条。
+- 展开从吸附侧水平滑出，约 0.36 秒并带轻微弹簧缓动；收起约 0.24 秒退回原侧。内容保持正常比例，展开后隐藏独立小条，收起后恢复原位置。
+- 精简模式保留单列 App 图标及返回首页，正常模式保留名称、收藏和底部操作。上下凹角预留空间，列表单独滚动；减少动态效果开启时直接切换状态。
+- 已完成轮廓几何测试、完整构建回归和 iOS 26.5 UIKit 模拟器检查（左右吸附、浅深色、缩放、长列表、快速收起重开）。真实 LC/Guest 背景上的玻璃与触感仍需安装后确认。
+
 ## Download
 - GitHub Actions: `Build LCFloatingMenu dylib` -> artifact `LCFloatingMenu-dylib`.
 - No dedicated FloatingMenu Release is published. Use the workflow artifact or locally compiled `dist/LCFloatingMenu.dylib`.

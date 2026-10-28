@@ -178,36 +178,69 @@ static CGFloat FMOrbScale(void) {
 }
 // A mirrored, gently concave inner shoulder joins the side edge to the drawer.
 // The glass and its shadow use exactly the same path.
-static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact) {
+static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact, BOOL collapsed) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat r=MIN(compact?21:26,MIN(w*.31,h*.17));
-    CGFloat shoulder=MIN(compact?10:14,r*.55);
-    CGFloat outer=MIN(13,r*.58);
+    CGFloat r=MIN(compact?22:28,MIN(w*.65,h*.17));
     UIBezierPath *path=[UIBezierPath bezierPath];
-    [path moveToPoint:CGPointMake(w-outer,0)];
-    [path addQuadCurveToPoint:CGPointMake(w,outer) controlPoint:CGPointMake(w,0)];
-    [path addLineToPoint:CGPointMake(w,h-outer)];
-    [path addQuadCurveToPoint:CGPointMake(w-outer,h) controlPoint:CGPointMake(w,h)];
-    [path addLineToPoint:CGPointMake(r+shoulder,h)];
-    [path addCurveToPoint:CGPointMake(r*.65,h-r*.45)
-            controlPoint1:CGPointMake(r*.28,h)
-            controlPoint2:CGPointMake(r+shoulder,h-r*.32)];
-    [path addCurveToPoint:CGPointMake(0,h-r-shoulder)
-            controlPoint1:CGPointMake(0,h-r*.58)
-            controlPoint2:CGPointMake(0,h-r*.82)];
-    [path addLineToPoint:CGPointMake(0,r+shoulder)];
-    [path addCurveToPoint:CGPointMake(r*.65,r*.45)
-            controlPoint1:CGPointMake(0,r*.82)
-            controlPoint2:CGPointMake(0,r*.58)];
-    [path addCurveToPoint:CGPointMake(r+shoulder,0)
-            controlPoint1:CGPointMake(r+shoulder,r*.32)
-            controlPoint2:CGPointMake(r*.28,0)];
+    if(collapsed) {
+        // One continuous reverse curve at each end keeps a narrow tab from
+        // reading as a rounded rectangle. The flares remain visible at all scales.
+        CGFloat flare=MIN(w*1.3,h*.32);
+        [path moveToPoint:CGPointMake(w,0)];
+        [path addCurveToPoint:CGPointMake(0,flare)
+                controlPoint1:CGPointMake(w,flare*.65)
+                controlPoint2:CGPointMake(0,flare*.35)];
+        [path addLineToPoint:CGPointMake(0,h-flare)];
+        [path addCurveToPoint:CGPointMake(w,h)
+                controlPoint1:CGPointMake(0,h-flare*.35)
+                controlPoint2:CGPointMake(w,h-flare*.65)];
+    } else {
+        // The screen edge is straight; two reverse curves join it to the body.
+        [path moveToPoint:CGPointMake(w,0)];
+        [path addCurveToPoint:CGPointMake(w-r,r)
+                controlPoint1:CGPointMake(w,r*.72)
+                controlPoint2:CGPointMake(w,r)];
+        CGFloat inner=MIN(r,w-r);
+        [path addLineToPoint:CGPointMake(inner,r)];
+        [path addCurveToPoint:CGPointMake(0,r*2)
+                controlPoint1:CGPointMake(0,r)
+                controlPoint2:CGPointMake(0,r*1.45)];
+        [path addLineToPoint:CGPointMake(0,h-r*2)];
+        [path addCurveToPoint:CGPointMake(inner,h-r)
+                controlPoint1:CGPointMake(0,h-r*1.45)
+                controlPoint2:CGPointMake(0,h-r)];
+        [path addLineToPoint:CGPointMake(w-r,h-r)];
+        [path addCurveToPoint:CGPointMake(w,h)
+                controlPoint1:CGPointMake(w,h-r)
+                controlPoint2:CGPointMake(w,h-r*.72)];
+    }
     [path closePath];
     if(dockLeft) {
         CGAffineTransform flip=CGAffineTransformMake(-1,0,0,1,w,0);
         [path applyTransform:flip];
     }
     return path;
+}
+static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL compact,BOOL collapsed) {
+    UIBezierPath *outline=FMSideNotchPath(glass.bounds,dockLeft,compact,collapsed);
+    CAShapeLayer *clip=[CAShapeLayer layer];
+    clip.frame=glass.bounds;
+    clip.path=outline.CGPath;
+    // Rounded-rectangle clipping would cut off the reverse shoulders.
+    glass.layer.cornerRadius=0;
+    glass.layer.borderWidth=0;
+    glass.layer.mask=clip;
+    shadow.shadowPath=outline.CGPath;
+    // Native glass shades a rectangular boundary. Trace only the custom
+    // contour so the reverse shoulders retain a quiet glass-edge highlight.
+    CAShapeLayer *rim=[CAShapeLayer layer];
+    rim.frame=glass.bounds;
+    rim.path=outline.CGPath;
+    rim.fillColor=UIColor.clearColor.CGColor;
+    rim.strokeColor=[UIColor.whiteColor colorWithAlphaComponent:
+        collapsed?(FMMenuDark()?.65:.80):(FMMenuDark()?.32:.58)].CGColor;
+    rim.lineWidth=collapsed?.9:.75;
+    [glass.layer addSublayer:rim];
 }
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
@@ -333,7 +366,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,weak) UIScrollView *appsScroll;
 @property(nonatomic,assign) BOOL appsScrollRestorePending;
 @property(nonatomic,assign) BOOL appsRefreshScheduled;
-@property(nonatomic,assign) BOOL morphOpening;
 @property(nonatomic,assign) NSUInteger morphGeneration;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
@@ -439,12 +471,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self draw];
     [self scheduleAppearanceCheck];
 }
-- (CGFloat)orbWidth { return 12*FMOrbScale(); }
-- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:52*FMOrbScale(); }
+- (CGFloat)orbWidth { return (BoolPref(@"roundOrb",NO)?12:16)*FMOrbScale(); }
+- (CGFloat)orbHeight { return BoolPref(@"roundOrb",NO)?self.orbWidth:64*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
-    CGFloat x=self.left?-w*.16:b.size.width-w*.84;
+    CGFloat x=self.left?0:b.size.width-w;
     CGFloat top=MAX(25,self.window.safeAreaInsets.top+6);
     CGFloat bottom=MAX(24,self.window.safeAreaInsets.bottom+8);
     CGFloat latest=b.size.height-h-bottom;
@@ -569,6 +601,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // Closing a running task refreshes this panel. Both the compact icon list
     // and the normal app rows must retain their shared scroll position.
     [self captureAppsScroll];
+    self.morphGeneration++;
     self.appsScroll=nil;
     self.appsScrollRestorePending=NO;
     [self.panel removeFromSuperview]; self.panel=nil;
@@ -583,18 +616,24 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     button.layer.shadowOpacity=.24;button.layer.shadowRadius=6;
     button.layer.shadowOffset=CGSizeMake(0,1);
     UIView *bead=[self glass:button.bounds radius:f.size.width*.5 strong:NO];
+    if(!BoolPref(@"roundOrb",NO)) FMApplySideNotch(bead,button.layer,self.left,YES,YES);
     bead.userInteractionEnabled=NO;
     bead.tag=9202;
     [button addSubview:bead];
-    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,2.5*FMOrbScale(),14*FMOrbScale())];
+    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,4*FMOrbScale(),
+        MIN(26*FMOrbScale(),f.size.height*.55))];
     line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
     line.backgroundColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
-    line.layer.cornerRadius=1.25;line.userInteractionEnabled=NO;
+    line.layer.cornerRadius=line.bounds.size.width*.5;
+    line.layer.cornerCurve=kCACornerCurveCircular;
+    line.userInteractionEnabled=NO;
     [FMGlassContent(bead) addSubview:line];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
-    button.alpha=self.isOpen?1:Clamp(alpha,.16,1);
+    button.alpha=self.isOpen?0:Clamp(alpha,.16,1);
+    button.userInteractionEnabled=!self.isOpen;
+    button.accessibilityElementsHidden=self.isOpen;
     button.accessibilityLabel=@"LC 悬浮菜单";
     button.accessibilityHint=@"轻触展开，拖动移动，长按进入菜单设置";
     button.accessibilityTraits=UIAccessibilityTraitButton;
@@ -618,10 +657,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             if(self.orb!=button || self.isOpen) return;
             BOOL stealth=BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
                          BoolPref([@"stealth." stringByAppendingString:GuestID()],NO);
-            CGFloat delta=self.left?-1.25:1.25;
             void (^docking)(void)=^{
-                bead.transform=CGAffineTransformMakeTranslation(delta,0);
-                bead.alpha=stealth?.64:.86;
+                // Keep both flares attached and readable during idle fade.
+                bead.alpha=stealth?.78:.94;
                 line.alpha=stealth?.52:.82;
             };
             if(UIAccessibilityIsReduceMotionEnabled()) docking();
@@ -659,6 +697,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self drawOrb];
     if(self.isOpen) {
         [self buildPanel];
+        // A transient scene with no panel space must keep a usable edge tab.
+        if(!self.panel) {
+            self.isOpen=NO;
+            [self drawOrb];
+        }
         [self.overlayView bringSubviewToFront:self.orb];
     }
 }
@@ -694,46 +737,41 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     }
     if(opening) {
-        self.morphOpening=YES;
         [self draw];
-        self.morphOpening=NO;
         if(self.panel && self.orb && !UIAccessibilityIsReduceMotionEnabled()) {
             UIView *drawer=self.panel;
             UIButton *bead=self.orb;
             CGPoint destination=drawer.center;
-            CGAffineTransform finalTransform=drawer.transform;
             NSUInteger generation=++self.morphGeneration;
-            CGFloat sx=MAX(.08,bead.bounds.size.width/MAX(1,drawer.bounds.size.width));
-            CGFloat sy=MAX(.10,bead.bounds.size.height/MAX(1,drawer.bounds.size.height));
-            drawer.center=bead.center;
-            drawer.transform=CGAffineTransformMakeScale(sx,sy);
+            CGFloat travel=CGRectGetWidth(drawer.frame)+1;
+            drawer.center=CGPointMake(destination.x+(self.left?-travel:travel),destination.y);
             drawer.userInteractionEnabled=NO;
             bead.alpha=0;
-            [UIView animateWithDuration:.42 delay:0 usingSpringWithDamping:.82
-                initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
+            self.dismissLayer.alpha=0;
+            [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.86
+                initialSpringVelocity:.3 options:UIViewAnimationOptionBeginFromCurrentState
                 animations:^{
                     drawer.center=destination;
-                    drawer.transform=finalTransform;
+                    self.dismissLayer.alpha=1;
                 } completion:^(BOOL done) {
                     if(self.panel==drawer && generation==self.morphGeneration) {
                         drawer.userInteractionEnabled=YES;
-                        bead.alpha=1;
                     }
                 }];
         }
     } else if(self.panel && self.orb && !UIAccessibilityIsReduceMotionEnabled()) {
         UIView *drawer=self.panel;
-        CGPoint destination=self.orb.center;
-        CGFloat sx=MAX(.08,self.orb.bounds.size.width/MAX(1,drawer.bounds.size.width));
-        CGFloat sy=MAX(.10,self.orb.bounds.size.height/MAX(1,drawer.bounds.size.height));
+        CGFloat travel=CGRectGetWidth(drawer.bounds)*drawer.transform.a+1;
+        CGPoint destination=CGPointMake(self.left?-travel*.5:self.window.bounds.size.width+travel*.5,
+                                       drawer.center.y);
         NSUInteger generation=++self.morphGeneration;
         drawer.userInteractionEnabled=NO;
         self.dismissLayer.userInteractionEnabled=NO;
-        [UIView animateWithDuration:.27 delay:0 options:UIViewAnimationOptionCurveEaseInOut
+        [UIView animateWithDuration:.24 delay:0 options:
+            UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut
             animations:^{
                 drawer.center=destination;
-                drawer.transform=CGAffineTransformMakeScale(sx,sy);
-                drawer.alpha=.45;
+                self.dismissLayer.alpha=0;
             } completion:^(BOOL done) {
                 if(generation==self.morphGeneration && self.panel==drawer) [self draw];
             }];
@@ -876,6 +914,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!isfinite(available) || available<96 || bounds.size.width<90) return;
     BOOL small=[self.page isEqualToString:@"apps"];
     BOOL compact=BoolPref(@"compactMode",NO);
+    CGFloat shoulder=compact?22:28;
     // Compact drawer is 76pt before scaling; only the icon column scrolls.
     // Its invisible row hit target remains >= 44pt even at 75% scale.
     CGFloat pw=MIN(small?(compact?76:310):346,bounds.size.width-24);
@@ -887,8 +926,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // One 63pt control, with 10pt above and 3pt below its hit area.
     // This keeps the 50pt tile visually 16.5pt above the rounded edge.
     CGFloat footerHeight=compact?(10+compactActions*63+3):74;
-    CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12):
-        MIN(475,147+65*MIN(appCount,5)+footerHeight)):610;
+    CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12+2*shoulder):
+        MIN(531,147+65*MIN(appCount,5)+footerHeight+2*shoulder)):610;
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
     CGFloat ph=MIN(available,target);
@@ -905,7 +944,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!isfinite(actualScale) || actualScale<=0) return;
     actualScale=MAX(.60,actualScale);
     CGFloat visualW=pw*actualScale, visualH=ph*actualScale;
-    CGFloat centerX=self.left?(10+visualW*.5):(bounds.size.width-10-visualW*.5);
+    CGFloat edgeInset=small?0:10;
+    CGFloat centerX=self.left?(edgeInset+visualW*.5):(bounds.size.width-edgeInset-visualW*.5);
     CGFloat topY=small?Clamp(CGRectGetMidY(self.orb.frame)-visualH*.48,
                           safeTop,bounds.size.height-safeBottom-visualH)
                    :safeTop+(available-visualH)*.5;
@@ -937,16 +977,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
     if(small) {
-        UIBezierPath *outline=FMSideNotchPath(glass.bounds,self.left,compact);
-        CAShapeLayer *clip=[CAShapeLayer layer];
-        clip.frame=glass.bounds;
-        clip.path=outline.CGPath;
-        glass.layer.mask=clip;
-        shadow.layer.shadowPath=outline.CGPath;
+        FMApplySideNotch(glass,shadow.layer,self.left,compact,NO);
     }
     [shadow addSubview:glass];
-    // On iOS 26+ the UIKit glass material itself renders the edge and
-    // depth. Do not obscure it with gradients, strokes or opaque washes.
+    // The native material supplies depth; the shared notch adds only its rim.
     UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:CGRectInset(glass.bounds,14,14)];
     scroll.showsVerticalScrollIndicator=NO;
     scroll.alwaysBounceVertical=NO;
@@ -956,7 +990,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         if(!compact) [self buildAppHeader:glass];
-        CGFloat top=compact?12:86, bottom=footerHeight+9;
+        CGFloat top=(compact?12:86)+shoulder, bottom=footerHeight+9+shoulder;
         scroll.frame=CGRectMake(compact?3:13,top,pw-(compact?6:26),
                                 MAX(22,ph-top-bottom));
         scroll.clipsToBounds=YES;
@@ -1004,15 +1038,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // drawOrb uses the saved orbY/onLeft values on both open and close;
     // mutating its center here caused the handle to jump every time.
     shadow.alpha=1;
-    if(self.morphOpening || UIAccessibilityIsReduceMotionEnabled())
-        shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
-    else {
-        shadow.transform=CGAffineTransformMakeScale(actualScale*.965,actualScale*.96);
-        [UIView animateWithDuration:.29 delay:0 usingSpringWithDamping:.88
-            initialSpringVelocity:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-                shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
-            } completion:nil];
-    }
+    shadow.transform=CGAffineTransformMakeScale(actualScale,actualScale);
 }
 - (void)header:(UIStackView *)stack title:(NSString *)title sub:(NSString *)sub {
     UILabel *a=[self label:title size:22 weight:UIFontWeightBold]; [stack addArrangedSubview:a];
@@ -1140,7 +1166,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         NSDictionary *app=pinned[i];
         BOOL compact=BoolPref(@"compactMode",NO);
         UIControl *tile=[[UIControl alloc] initWithFrame:
-            CGRectMake(14+i*(cell+gap),compact?5:8,cell,compact?48:65)];
+            CGRectMake(14+i*(cell+gap),(compact?5:8)+(compact?22:28),cell,compact?48:65)];
         tile.backgroundColor=UIColor.clearColor;
         // Favorites share the drawer material; no extra glass behind captions.
         CGFloat iconSize=compact?40:36;
@@ -1186,13 +1212,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
         [items addObjectsFromArray:@[
             @[@"gearshape.fill",NSStringFromSelector(@selector(openSettings)),@"设置"],
-            @[@"chevron.up",NSStringFromSelector(@selector(toggle)),@"收起菜单"]
+            @[self.left?@"chevron.compact.left":@"chevron.compact.right",NSStringFromSelector(@selector(toggle)),@"收起菜单"]
         ]];
     }
     CGFloat w=glass.bounds.size.width;
     CGFloat height=compact?(10+items.count*63+3):74;
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:13,
-                       glass.bounds.size.height-height-7,w-(compact?6:26),height)];
+                       glass.bounds.size.height-height-7-(compact?22:28),w-(compact?6:26),height)];
     footer.backgroundColor=UIColor.clearColor;
     [FMGlassContent(glass) addSubview:footer];
     if(compact) {
