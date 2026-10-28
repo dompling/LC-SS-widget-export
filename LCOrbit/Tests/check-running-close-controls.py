@@ -12,9 +12,12 @@ assert "[close.widthAnchor constraintEqualToConstant:40]" in compact, "compact c
 assert "[row.trailingAnchor constraintEqualToAnchor:container.trailingAnchor]" in compact, "compact app row must fill actual scroll width"
 footer=src[src.index("- (void)buildAppFooter:(UIView *)glass {"):src.index("    CGFloat w=glass.bounds.size.width;",src.index("- (void)buildAppFooter:(UIView *)glass {"))]
 compact_footer=footer[footer.index("if(compact) {"):footer.index("} else {",footer.index("if(compact) {"))]
-assert "返回主页" in compact_footer and "@selector(goHome)" in compact_footer, "compact footer must return home"
-for forbidden in ["@selector(openSettings)", "@selector(toggle)", "@selector(restart)", "@selector(closeMultitaskGuest)"]:
+assert "返回首页" in compact_footer and "@selector(compactReturnHome)" in compact_footer, "compact footer must use dedicated home action"
+for forbidden in ["@selector(openSettings)", "@selector(toggle)", "@selector(goHome)", "@selector(restart)", "@selector(closeMultitaskGuest)"]:
     assert forbidden not in compact_footer, "compact footer must not contain "+forbidden
+home=src[src.index("- (void)compactReturnHome {"):src.index("- (void)goHome {")]
+assert "[LCOrbitMultitask showHome]" in home and '[self launchPath:@"ui" uuid:nil]' in home, "compact Home must navigate to LC in both task modes"
+assert "confirmTitle:" not in home, "compact Home must not ask for confirmation"
 assert "NSUInteger compactActions=1;" in src, "compact footer height must reserve one control"
 assert "@selector(openSettings)" in footer, "normal footer must keep settings"
 assert "self.orb.center=CGPointMake(Clamp(handleX" not in src, "compact open must not relocate the saved orb"
