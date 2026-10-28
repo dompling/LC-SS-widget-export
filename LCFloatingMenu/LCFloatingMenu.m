@@ -23,7 +23,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.1"
+#define FM_MENU_VERSION @"1.0.2"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -848,8 +848,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     shadow.layer.shadowOpacity=small?(night?.52:.24):.18;
     shadow.layer.shadowRadius=small?18:22;
     shadow.layer.shadowOffset=CGSizeMake(0,3);
-    // A 76pt compact panel is a true capsule (38pt corner radius).
-    CGFloat radius=small?(compact?pw*.5:29):32;
+    // Avoid semicircular caps on the narrow compact drawer: 25pt corners
+    // leave a gentler, flatter top/bottom edge around the 50pt app tiles.
+    CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
     [shadow addSubview:glass];
     // On iOS 26+ the UIKit glass material itself renders the edge and
