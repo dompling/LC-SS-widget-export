@@ -427,16 +427,29 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL nativeGlass=NO;
     BOOL clear=FMClearGlassEnabled();
     if(@available(iOS 26.0,*)) {
-        // Use the SDK-native UIKit API instead of a dynamically allocated
-        // effect with simulated gradient layers obscuring its output.
-        // Clear applies to the entire drawer as well as the edge handle.
-        UIGlassEffect *glassEffect=[UIGlassEffect effectWithStyle:
-            clear?UIGlassEffectStyleClear:UIGlassEffectStyleRegular];
-        glassEffect.interactive=!strong;
-        glassEffect.tintColor=[(clear?FMAccent():FMThemeColor(FMColorGlass))
-                               colorWithAlphaComponent:clear?FMClearGlassTintStrength():FMGlassTintStrength()];
-        effect=glassEffect;
-        nativeGlass=YES;
+        // Resolve native UIKit glass at runtime: macOS 15 GitHub runners ship
+        // an older iOS SDK without UIGlassEffect declarations. This retains
+        // native glass on iOS 26+ without requiring its compile-time headers.
+        Class glassClass=NSClassFromString(@"UIGlassEffect");
+        SEL factory=NSSelectorFromString(@"effectWithStyle:");
+        if(glassClass && [glassClass respondsToSelector:factory]) {
+            // UIGlassEffectStyleRegular=0, UIGlassEffectStyleClear=1.
+            NSInteger style=clear?1:0;
+            id glassEffect=((id(*)(id,SEL,NSInteger))objc_msgSend)(glassClass,factory,style);
+            if([glassEffect isKindOfClass:UIVisualEffect.class]) {
+                SEL setInteractive=NSSelectorFromString(@"setInteractive:");
+                if([glassEffect respondsToSelector:setInteractive])
+                    ((void(*)(id,SEL,BOOL))objc_msgSend)(glassEffect,setInteractive,!strong);
+                SEL setTint=NSSelectorFromString(@"setTintColor:");
+                if([glassEffect respondsToSelector:setTint]) {
+                    UIColor *tint=[(clear?FMAccent():FMThemeColor(FMColorGlass))
+                        colorWithAlphaComponent:clear?FMClearGlassTintStrength():FMGlassTintStrength()];
+                    ((void(*)(id,SEL,id))objc_msgSend)(glassEffect,setTint,tint);
+                }
+                effect=(UIVisualEffect *)glassEffect;
+                nativeGlass=YES;
+            }
+        }
     }
     if(!effect) {
         BOOL dark=FMMenuDark();
