@@ -23,7 +23,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.0"
+#define FM_MENU_VERSION @"1.0.1"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -561,7 +561,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         FloatPref(@"idleAlpha",.72);
     button.alpha=self.isOpen?1:Clamp(alpha,.16,1);
     button.accessibilityLabel=@"LC 悬浮菜单";
-    button.accessibilityHint=@"轻触展开，拖动移动，长按显示快捷操作";
+    button.accessibilityHint=@"轻触展开，拖动移动，长按进入菜单设置";
     button.accessibilityTraits=UIAccessibilityTraitButton;
     if(BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
        BoolPref([@"doubleTap." stringByAppendingString:GuestID()],NO)) {
@@ -593,12 +593,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
     if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
         initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    if(!self.isOpen) {
-        [self loadAppsScroll];
-        self.isOpen=YES;
-    }
-    self.page=@"apps";self.apps=InstalledApps();
-    [self draw];
+    FMLog(@"settings-gesture",@"orb-long-press");
+    [self openSettings];
+}
+- (void)holdPanel:(UILongPressGestureRecognizer *)gesture {
+    if(gesture.state!=UIGestureRecognizerStateBegan) return;
+    if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
+        initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    FMLog(@"settings-gesture",@"panel-long-press");
+    [self openSettings];
 }
 - (void)draw {
     if(!self.window) return;
@@ -796,7 +799,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSUInteger appCount=[self visibleApps].count;
     // Compact drawer has exactly one footer control: collapse.
     NSUInteger compactActions=1;
-    CGFloat footerHeight=compact?(16+compactActions*63+12):74;
+    // One 63pt control, with 10pt above and 3pt below its hit area.
+    // This keeps the 50pt tile visually 16.5pt above the rounded edge.
+    CGFloat footerHeight=compact?(10+compactActions*63+3):74;
     CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12):
         MIN(475,147+65*MIN(appCount,5)+footerHeight)):610;
     if([self.page isEqualToString:@"manage"]) target=620;
@@ -827,13 +832,24 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.dismissLayer=under;
     UIView *shadow=[[UIView alloc] initWithFrame:CGRectMake(0,0,pw,ph)];
     shadow.center=CGPointMake(centerX,centerY);
+    if(small) {
+        // Long-press anywhere on the drawer to enter menu settings, without
+        // replacing normal taps on apps, task-close badges, or the footer.
+        UILongPressGestureRecognizer *settingsHold=
+            [[UILongPressGestureRecognizer alloc] initWithTarget:self
+                                                          action:@selector(holdPanel:)];
+        settingsHold.minimumPressDuration=.65;
+        [shadow addGestureRecognizer:settingsHold];
+        shadow.accessibilityHint=@"长按打开微珠菜单设置";
+    }
     BOOL night=FMMenuDark();
     UIColor *shadowTint=small?FMAccent():UIColor.blackColor;
     shadow.layer.shadowColor=shadowTint.CGColor;
     shadow.layer.shadowOpacity=small?(night?.52:.24):.18;
     shadow.layer.shadowRadius=small?18:22;
     shadow.layer.shadowOffset=CGSizeMake(0,3);
-    CGFloat radius=small?(compact?31:29):32;
+    // A 76pt compact panel is a true capsule (38pt corner radius).
+    CGFloat radius=small?(compact?pw*.5:29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
     [shadow addSubview:glass];
     // On iOS 26+ the UIKit glass material itself renders the edge and
@@ -891,17 +907,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     [self.overlayView addSubview:shadow];
     self.panel=shadow;
-    // Integrate the original edge bead as the drawer's outside pull handle.
-    // Preserve its existing drag, tap and accessibility gestures.
-    if(small && compact && self.orb) {
-        // Use the *scaled* visual perimeter rather than the untransformed
-        // shadow bounds to keep the pull-tab attached at every scale.
-        CGFloat edgeX=self.left?(centerX-visualW*.5):
-                                 (centerX+visualW*.5);
-        CGFloat handleX=self.left?edgeX-3:edgeX+3;
-        self.orb.center=CGPointMake(Clamp(handleX,6,bounds.size.width-6),
-                                     centerY+visualH*.04);
-    }
+    // Never reposition the bead when opening a compact drawer.
+    // drawOrb uses the saved orbY/onLeft values on both open and close;
+    // mutating its center here caused the handle to jump every time.
     shadow.alpha=1;
     // Native glass can silently fail to render if its owning view starts
     // at alpha=0. Animate scale only, leaving the effect continuously active.
@@ -1071,7 +1079,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         ]];
     }
     CGFloat w=glass.bounds.size.width;
-    CGFloat height=compact?(16+items.count*63+12):74;
+    CGFloat height=compact?(10+items.count*63+3):74;
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:13,
                        glass.bounds.size.height-height-7,w-(compact?6:26),height)];
     footer.backgroundColor=UIColor.clearColor;
