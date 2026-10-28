@@ -29,7 +29,7 @@
 #endif
 static NSString *const FMRepositoryURL=@"https://github.com/dompling/LC-SS-widget-export";
 static NSString *const FMReleasesURL=@"https://github.com/dompling/LC-SS-widget-export/releases";
-static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/commits/lcss-original";
+static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/latest";
 static NSString *FMCommitSummary(void) {
     NSString *hash=FM_BUILD_COMMIT;
     if(hash.length!=40) return @"未标记构建";
@@ -2207,7 +2207,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             typeof(self) strongSelf=weakSelf;
             if(!strongSelf) return;
             strongSelf.checkingUpdate=NO;
-            strongSelf.updateStatusLabel.text=@"检查 lcss-original 最新提交";
+            strongSelf.updateStatusLabel.text=@"检查最新正式 Release";
             if(error) {
                 [strongSelf presentUpdateResult:@"检查更新失败"
                     message:error.localizedDescription?:@"无法连接 GitHub，请检查网络。"
@@ -2219,7 +2219,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                 // This repository is private. Never claim "up to date" when
                 // the anonymous API cannot reveal its latest commit.
                 [strongSelf presentUpdateResult:@"无法自动检查私有仓库"
-                    message:@"GitHub 不允许匿名读取该仓库的最新提交。请使用已登录 GitHub 的浏览器查看 Releases；插件不会保存或索取访问令牌。"
+                    message:@"GitHub 不允许匿名读取该私有仓库的 Release。请使用已登录 GitHub 的浏览器查看 Releases；插件不会保存或索取访问令牌。"
                     showReleases:YES];
                 return;
             }
@@ -2230,24 +2230,26 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                 return;
             }
             NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
-            NSString *latest=[json isKindOfClass:NSDictionary.class]?json[@"sha"]:nil;
-            if(![latest isKindOfClass:NSString.class] || latest.length!=40) {
+            NSString *tag=[json isKindOfClass:NSDictionary.class]?json[@"tag_name"]:nil;
+            if(![tag isKindOfClass:NSString.class] || ![tag hasPrefix:@"v"]) {
                 [strongSelf presentUpdateResult:@"版本信息无效"
-                    message:@"未能从 GitHub 读取有效的提交版本。" showReleases:YES];
+                    message:@"无法读取最新正式 Release 的版本标签。" showReleases:YES];
                 return;
             }
-            NSString *installed=FM_BUILD_COMMIT;
-            if(installed.length!=40) {
-                [strongSelf presentUpdateResult:@"当前构建未标记版本"
-                    message:@"当前动态库没有可比较的 Git Commit，请到 Releases 查看最新版本。"
+            NSString *latest=[tag substringFromIndex:1];
+            NSString *installed=FM_MENU_VERSION;
+            NSComparisonResult comparison=[installed compare:latest options:NSNumericSearch];
+            if(comparison==NSOrderedAscending) {
+                [strongSelf presentUpdateResult:@"发现新版本"
+                    message:[NSString stringWithFormat:@"当前 v%@，最新正式版 %@。请前往 Releases 下载并在 LC 中替换、重签动态库。",installed,tag]
                     showReleases:YES];
-            } else if([installed caseInsensitiveCompare:latest]==NSOrderedSame) {
-                [strongSelf presentUpdateResult:@"已是最新源码版本"
-                    message:[NSString stringWithFormat:@"当前版本 v%@（%@），与远程 lcss-original 提交一致。",FM_MENU_VERSION,FMCommitSummary()]
+            } else if(comparison==NSOrderedSame) {
+                [strongSelf presentUpdateResult:@"已是最新正式版"
+                    message:[NSString stringWithFormat:@"当前版本 v%@，与最新正式 Release %@ 一致。",installed,tag]
                     showReleases:NO];
             } else {
-                [strongSelf presentUpdateResult:@"发现不同的远程提交"
-                    message:[NSString stringWithFormat:@"已安装 %@；GitHub 当前 %@。仓库代码有变化，请到 Releases 确认是否已有可用的新动态库。",FMCommitSummary(),[latest substringToIndex:7]]
+                [strongSelf presentUpdateResult:@"当前版本高于正式版"
+                    message:[NSString stringWithFormat:@"已安装 v%@，最新正式 Release 为 %@。",installed,tag]
                     showReleases:YES];
             }
         });
@@ -2339,7 +2341,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [versionRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
-        subtitle:self.checkingUpdate?@"正在查询 GitHub…":@"检查 lcss-original 最新提交"
+        subtitle:self.checkingUpdate?@"正在查询 GitHub…":@"检查最新正式 Release"
         symbol:@"arrow.clockwise.circle" action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:checkRow];
