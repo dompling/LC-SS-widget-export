@@ -1,27 +1,34 @@
 name: Build LCFloatingMenu dylib
-run-name: FloatingMenu release ${{ github.ref_name }}
+run-name: FloatingMenu ${{ github.ref_type == 'tag' && 'release' || 'build' }} - ${{ github.ref_name }}
 
-# Publishing is explicit: only push a semantic-version tag to build and ship.
-# Regular commits to lcss-original do not create releases.
+# Branch updates create a downloadable Actions artifact, never a Release.
+# A semantic-version tag is pushed only when a formal release is requested.
 on:
   push:
+    branches: [lcss-original]
     tags:
       - '*.*.*'
+    paths:
+      - 'LCFloatingMenu/**'
+      - 'LCOrbit/**'
+      - '.github/workflows/lc-floating-menu.yml'
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: floating-menu-tag-${{ github.ref_name }}
+  group: floating-menu-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Validate release tag matches source version
+      - name: Validate version tag matches source
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           set -euo pipefail
@@ -48,6 +55,19 @@ jobs:
           path: dist/LCFloatingMenu.dylib
           if-no-files-found: error
           retention-days: 14
+  publish:
+    # IMPORTANT: ordinary branch builds MUST NOT touch GitHub Releases.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build
+        uses: actions/download-artifact@v4
+        with:
+          name: LCFloatingMenu-dylib
+          path: dist
       - name: Publish version and refresh separate FloatingMenu latest
         shell: bash
         env:
