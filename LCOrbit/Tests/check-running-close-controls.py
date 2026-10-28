@@ -14,7 +14,7 @@ for forbidden in ["@selector(openSettings)", "@selector(goHome)", "@selector(res
 assert "NSUInteger compactActions=1;" in src, "compact footer height must reserve one control"
 assert "@selector(openSettings)" in footer, "normal footer must keep settings"
 assert "self.orb.center=CGPointMake(Clamp(handleX" not in src, "compact open must not relocate the saved orb"
-assert "CGFloat radius=small?(compact?pw*.5:29):32;" in src, "compact capsule radius must match half its width"
+assert "CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;" in src, "compact corners must be softer than capsule radius"
 assert src.count("10+compactActions*63+3") == 1, "compact panel footer height must reserve the smaller inset"
 assert src.count("10+items.count*63+3") == 1, "compact footer sizing must match panel layout"
 assert "action:@selector(holdPanel:)" in src, "drawer long press opens settings"
