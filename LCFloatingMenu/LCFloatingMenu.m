@@ -28,8 +28,7 @@
 #define FM_BUILD_COMMIT @"unknown"
 #endif
 static NSString *const FMRepositoryURL=@"https://github.com/dompling/LC-SS-widget-export";
-static NSString *const FMReleasesURL=@"https://github.com/dompling/LC-SS-widget-export/releases";
-static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases?per_page=100";
+static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/commits/lcss-original";
 static NSString *FMCommitSummary(void) {
     NSString *hash=FM_BUILD_COMMIT;
     if(hash.length!=40) return @"未标记构建";
@@ -2177,18 +2176,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     NSURL *url=[NSURL URLWithString:FMRepositoryURL];
     if(url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
 }
-- (void)openReleases {
-    NSURL *url=[NSURL URLWithString:FMReleasesURL];
-    if(url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
-}
-- (void)presentUpdateResult:(NSString *)title message:(NSString *)message showReleases:(BOOL)showReleases {
+- (void)presentUpdateResult:(NSString *)title message:(NSString *)message showRepository:(BOOL)showRepository {
     if(!self.view.window) return;
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:title
         message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
-    if(showReleases) [alert addAction:[UIAlertAction actionWithTitle:@"查看 Releases"
+    if(showRepository) [alert addAction:[UIAlertAction actionWithTitle:@"查看 GitHub"
         style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            [self openReleases];
+            [self openRepository];
         }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -2207,63 +2202,46 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             typeof(self) strongSelf=weakSelf;
             if(!strongSelf) return;
             strongSelf.checkingUpdate=NO;
-            strongSelf.updateStatusLabel.text=@"检查最新正式 Release";
+            strongSelf.updateStatusLabel.text=@"检查 GitHub 源码更新";
             if(error) {
                 [strongSelf presentUpdateResult:@"检查更新失败"
                     message:error.localizedDescription?:@"无法连接 GitHub，请检查网络。"
-                    showReleases:YES];
+                    showRepository:YES];
                 return;
             }
             NSInteger status=[(NSHTTPURLResponse *)response statusCode];
             if(status==401 || status==404) {
-                // This repository is private. Never claim "up to date" when
-                // the anonymous API cannot reveal its latest commit.
-                [strongSelf presentUpdateResult:@"无法自动检查私有仓库"
-                    message:@"GitHub 不允许匿名读取该私有仓库的 Release。请使用已登录 GitHub 的浏览器查看 Releases；插件不会保存或索取访问令牌。"
-                    showReleases:YES];
+                [strongSelf presentUpdateResult:@"仓库无法访问"
+                    message:@"GitHub 没有返回公开的 lcss-original 分支。请确认仓库已设为 Public，或在浏览器中检查状态。"
+                    showRepository:YES];
                 return;
             }
             if(status!=200) {
                 [strongSelf presentUpdateResult:@"检查更新失败"
-                    message:[NSString stringWithFormat:@"GitHub 返回 HTTP %ld。请稍后重试或前往 Releases 查看。",(long)status]
-                    showReleases:YES];
+                    message:[NSString stringWithFormat:@"GitHub 返回 HTTP %ld，请稍后重试。",(long)status]
+                    showRepository:YES];
                 return;
             }
-            NSArray *releases=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
-            NSDictionary *selected=nil;
-            NSString *latest=nil;
-            if([releases isKindOfClass:NSArray.class]) for(id candidate in releases) {
-                if(![candidate isKindOfClass:NSDictionary.class] ||
-                   [candidate[@"draft"] boolValue] || [candidate[@"prerelease"] boolValue]) continue;
-                NSString *tag=candidate[@"tag_name"];
-                if(![tag isKindOfClass:NSString.class] || ![tag hasPrefix:@"fm-v"]) continue;
-                NSString *version=[tag substringFromIndex:4];
-                if(!version.length) continue;
-                if(!latest || [version compare:latest options:NSNumericSearch]==NSOrderedDescending) {
-                    latest=version;selected=candidate;
-                }
-            }
-            if(!selected) {
-                [strongSelf presentUpdateResult:@"未找到微珠正式版"
-                    message:@"仓库中还没有可读取的 fm-v* 正式 Release。请登录 GitHub 查看发布状态。"
-                    showReleases:YES];
+            NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+            NSString *latest=[json isKindOfClass:NSDictionary.class]?json[@"sha"]:nil;
+            if(![latest isKindOfClass:NSString.class] || latest.length!=40) {
+                [strongSelf presentUpdateResult:@"更新信息无效"
+                    message:@"GitHub 没有返回有效的提交版本。" showRepository:YES];
                 return;
             }
-            NSString *tag=selected[@"tag_name"];
-            NSString *installed=FM_MENU_VERSION;
-            NSComparisonResult comparison=[installed compare:latest options:NSNumericSearch];
-            if(comparison==NSOrderedAscending) {
-                [strongSelf presentUpdateResult:@"发现新版本"
-                    message:[NSString stringWithFormat:@"当前 v%@，最新正式版 %@。请前往 Releases 下载并在 LC 中替换、重签动态库。",installed,tag]
-                    showReleases:YES];
-            } else if(comparison==NSOrderedSame) {
-                [strongSelf presentUpdateResult:@"已是最新正式版"
-                    message:[NSString stringWithFormat:@"当前版本 v%@，与最新正式 Release %@ 一致。",installed,tag]
-                    showReleases:NO];
+            NSString *installed=FM_BUILD_COMMIT;
+            if(installed.length!=40) {
+                [strongSelf presentUpdateResult:@"构建版本未标记"
+                    message:@"当前 dylib 没有可比较的 Git Commit，请前往仓库查看源码更新。"
+                    showRepository:YES];
+            } else if([installed caseInsensitiveCompare:latest]==NSOrderedSame) {
+                [strongSelf presentUpdateResult:@"已是最新源码版本"
+                    message:[NSString stringWithFormat:@"v%@（%@）与公开分支 lcss-original 的提交一致。",FM_MENU_VERSION,FMCommitSummary()]
+                    showRepository:NO];
             } else {
-                [strongSelf presentUpdateResult:@"当前版本高于正式版"
-                    message:[NSString stringWithFormat:@"已安装 v%@，最新正式 Release 为 %@。",installed,tag]
-                    showReleases:YES];
+                [strongSelf presentUpdateResult:@"检测到源码更新"
+                    message:[NSString stringWithFormat:@"当前构建 %@，GitHub 当前 %@。此功能检查源码提交，不代表有可下载的新 dylib；需重新编译并签名安装。",FMCommitSummary(),[latest substringToIndex:7]]
+                    showRepository:YES];
             }
         });
     }] resume];
@@ -2354,7 +2332,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [versionRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
-        subtitle:self.checkingUpdate?@"正在查询 GitHub…":@"检查最新正式 Release"
+        subtitle:self.checkingUpdate?@"正在查询 GitHub…":@"检查 GitHub 源码更新"
         symbol:@"arrow.clockwise.circle" action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:checkRow];
