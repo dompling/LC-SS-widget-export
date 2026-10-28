@@ -15,7 +15,8 @@ Standalone iOS 16+ arm64 tweak for classic single-task Guests and the opted-in L
 
 ## Download
 - GitHub Actions: `Build LCFloatingMenu dylib` -> artifact `LCFloatingMenu-dylib`.
-- GitHub Releases: standalone prerelease tag `lc-floating-menu-<run number>`, file `LCFloatingMenu.dylib`.
+- No dedicated FloatingMenu Release is published. Use the workflow artifact or locally compiled `dist/LCFloatingMenu.dylib`.
+- In-app update checking compares the embedded build commit against the public `lcss-original` branch; it detects source updates, not downloadable binaries.
 
 ## Install
 1. In LC+SS -> Tweaks create a tweak folder named `LCFloatingMenu`.
