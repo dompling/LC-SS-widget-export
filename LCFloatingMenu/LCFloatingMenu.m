@@ -11,6 +11,7 @@
 #import "../LCOrbit/Core/LCOrbitGuestService.h"
 #import "../LCOrbit/Core/LCOrbitMultitask.h"
 #import "../LCOrbit/Core/LCOrbitHostSettings.h"
+#import "../LCOrbit/Core/LCOrbitPluginUpdater.h"
 #import "../LCOrbit/Core/LCOrbitTweakAudit.h"
 #import "../LCOrbit/Core/LCOrbitTweakSync.h"
 #import "../LCOrbit/Core/LCOrbitSharedTweaksViewController.h"
@@ -23,12 +24,31 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.5"
+#define FM_MENU_VERSION @"1.0.6"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
 static NSString *const FMRepositoryURL=@"https://github.com/dompling/LC-SS-widget-export";
 static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/fm-latest";
+static NSString *const FMUpdateCacheVersion=@"LCFloatingMenu.updateIndicator.latestVersion";
+static NSString *const FMUpdateCacheTime=@"LCFloatingMenu.updateIndicator.lastAttempt";
+static NSString *const FMUpdateCacheSuccess=@"LCFloatingMenu.updateIndicator.lastSuccess";
+static NSTimeInterval const FMUpdateRefreshInterval=6*60*60;
+static NSTimeInterval const FMUpdateRetryInterval=15*60;
+static NSInteger FMVersionCompare(NSString *latest,NSString *installed) {
+    NSArray *a=[latest componentsSeparatedByString:@"."],*b=[installed componentsSeparatedByString:@"."];
+    if(a.count!=3 || b.count!=3) return NSNotFound;
+    for(NSUInteger i=0;i<3;i++) {
+        for(NSString *part in @[a[i],b[i]]) {
+            if(!part.length || [part rangeOfCharacterFromSet:[NSCharacterSet.decimalDigitCharacterSet invertedSet]].location!=NSNotFound)
+                return NSNotFound;
+        }
+        NSInteger x=[a[i] integerValue],y=[b[i] integerValue];
+        if(x>y) return NSOrderedDescending;
+        if(x<y) return NSOrderedAscending;
+    }
+    return NSOrderedSame;
+}
 static NSString *FMCommitSummary(void) {
     NSString *hash=FM_BUILD_COMMIT;
     if(hash.length!=40) return @"未标记构建";
@@ -446,6 +466,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)rebuild;
 @end
 
+static id FMOrientationObserver=nil;
+static id FMLayoutChangeObserver=nil;
+
 @interface FMManager : NSObject <UIScrollViewDelegate>
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) UIView *overlayView;
@@ -490,12 +513,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,assign) BOOL orbFaded;
 @property(nonatomic,assign) CGFloat orbNormalAlpha;
 @property(nonatomic,strong) id screenTouchObserver;
-@property(nonatomic,strong) id orientationObserver;
-@property(nonatomic,strong) id layoutChangeObserver;
+@property(nonatomic,weak) UIView *orbUpdateLine;
+@property(nonatomic,assign) BOOL orbUpdateAvailable;
+@property(nonatomic,assign) BOOL orbUpdateChecking;
+@property(nonatomic,strong) NSTimer *orbUpdateTimer;
 @property(nonatomic,copy) NSString *page;
 @property(nonatomic,strong) NSArray<NSDictionary*> *apps;
 + (instancetype)shared;
 - (void)installIfPossible;
+- (void)checkOrbUpdateIfNeeded;
+- (void)applyOrbUpdateIndicator;
 - (void)draw;
 - (void)refreshSystemAppearance;
 - (void)scheduleAppearanceCheck;
@@ -565,6 +592,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
         [self refreshSystemAppearance];
         [self scheduleAppearanceCheck];
+        [self checkOrbUpdateIfNeeded];
         return;
     }
     self.overlayView=[self.orbitContext.overlays mountModule:@"FloatingMenu" inScene:scene];
@@ -585,15 +613,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [weakSelf wakeOrb];
         }];
     }
-    if(!self.orientationObserver) {
+    if(!FMOrientationObserver) {
         __weak typeof(self) weakSelf=self;
-        self.orientationObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+        FMOrientationObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
             [weakSelf handleOrientationOrLayoutChange];
         }];
     }
-    if(!self.layoutChangeObserver) {
+    if(!FMLayoutChangeObserver) {
         __weak typeof(self) weakSelf=self;
-        self.layoutChangeObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitOverlayLayoutDidChangeNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+        FMLayoutChangeObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitOverlayLayoutDidChangeNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
             [weakSelf handleOrientationOrLayoutChange];
         }];
     }
@@ -601,6 +629,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
     [self scheduleAppearanceCheck];
+    if(!self.orbUpdateTimer) {
+        __weak typeof(self) weakSelf=self;
+        self.orbUpdateTimer=[NSTimer scheduledTimerWithTimeInterval:60*60 repeats:YES block:^(NSTimer *timer) {
+            [weakSelf checkOrbUpdateIfNeeded];
+        }];
+    }
+    [self checkOrbUpdateIfNeeded];
 }
 - (void)handleOrientationOrLayoutChange {
     [self refreshLayoutForOrientation];
@@ -770,9 +805,95 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self.panel removeFromSuperview]; self.panel=nil;
     [self.dismissLayer removeFromSuperview]; self.dismissLayer=nil;
 }
+- (void)applyOrbUpdateIndicator {
+    UIView *line=self.orbUpdateLine;
+    if(!line) return;
+    [line.layer removeAnimationForKey:@"fm.update.red-breath"];
+    if(!self.orbUpdateAvailable) {
+        line.backgroundColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+        line.layer.shadowOpacity=0;
+        line.layer.shadowRadius=0;
+        line.alpha=1;
+        if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
+        return;
+    }
+    [self cancelOrbFade];
+    self.orbFaded=NO;
+    if(self.orb && !self.isOpen) self.orb.alpha=1;
+    line.backgroundColor=[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1];
+    line.layer.shadowColor=[UIColor colorWithRed:1 green:.09 blue:.16 alpha:1].CGColor;
+    line.layer.shadowOpacity=.85;
+    line.layer.shadowRadius=5;
+    line.layer.shadowOffset=CGSizeZero;
+    line.alpha=1;
+    if(!UIAccessibilityIsReduceMotionEnabled()) {
+        CABasicAnimation *pulse=[CABasicAnimation animationWithKeyPath:@"opacity"];
+        pulse.fromValue=@.38;
+        pulse.toValue=@1;
+        pulse.duration=1.15;
+        pulse.autoreverses=YES;
+        pulse.repeatCount=HUGE_VALF;
+        pulse.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [line.layer addAnimation:pulse forKey:@"fm.update.red-breath"];
+    }
+}
+- (void)checkOrbUpdateIfNeeded {
+    if(self.orbUpdateChecking || !self.window || UIApplication.sharedApplication.applicationState!=UIApplicationStateActive)
+        return;
+    NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+    NSString *saved=[defaults stringForKey:FMUpdateCacheVersion];
+    BOOL wasAvailable=FMVersionCompare(saved?:@"",FM_MENU_VERSION)==NSOrderedDescending;
+    if(self.orbUpdateAvailable!=wasAvailable) {
+        self.orbUpdateAvailable=wasAvailable;
+        [self applyOrbUpdateIndicator];
+    }
+    NSTimeInterval now=NSDate.date.timeIntervalSince1970;
+    NSTimeInterval last=[defaults doubleForKey:FMUpdateCacheTime];
+    NSTimeInterval success=[defaults doubleForKey:FMUpdateCacheSuccess];
+    if(last>0 && now>=last && now-last<(success>=last?FMUpdateRefreshInterval:FMUpdateRetryInterval)) return;
+    self.orbUpdateChecking=YES;
+    [defaults setDouble:now forKey:FMUpdateCacheTime];
+    NSMutableURLRequest *req=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:FMUpdateAPI]];
+    req.timeoutInterval=12;
+    [req setValue:@"LCFloatingMenu/1.0 (background update indicator)" forHTTPHeaderField:@"User-Agent"];
+    [req setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+    __weak typeof(self) weakSelf=self;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
+        BOOL valid=NO;
+        NSString *version=nil;
+        if(!error && [(NSHTTPURLResponse *)response statusCode]==200 && data.length) {
+            NSDictionary *json=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if([json isKindOfClass:NSDictionary.class]) {
+                NSString *body=json[@"body"];
+                for(NSString *line in [body isKindOfClass:NSString.class]?[body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]:@[]) {
+                    if([line hasPrefix:@"FM_VERSION="]) version=[line substringFromIndex:11];
+                }
+                for(id item in json[@"assets"]) {
+                    if([item isKindOfClass:NSDictionary.class] && [item[@"name"] isEqualToString:@"LCFloatingMenu.dylib"]) {
+                        valid=FMVersionCompare(version?:@"",FM_MENU_VERSION)!=NSNotFound;
+                        break;
+                    }
+                }
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            FMManager *owner=weakSelf;
+            if(!owner) return;
+            owner.orbUpdateChecking=NO;
+            if(!valid) return; // network failure never clears a known update
+            [defaults setObject:version forKey:FMUpdateCacheVersion];
+            [defaults setDouble:NSDate.date.timeIntervalSince1970 forKey:FMUpdateCacheSuccess];
+            BOOL available=FMVersionCompare(version,FM_MENU_VERSION)==NSOrderedDescending;
+            if(owner.orbUpdateAvailable!=available) {
+                owner.orbUpdateAvailable=available;
+                [owner applyOrbUpdateIndicator];
+            }
+        });
+    }] resume];
+}
 - (void)scheduleOrbFade {
     [self.orbFadeTimer invalidate];
-    if(!BoolPref(@"idleFade",YES)) return;
+    if(!BoolPref(@"idleFade",YES) || self.orbUpdateAvailable) return;
     if(self.isOpen || !self.orb) return;
     __weak typeof(self) weakSelf=self;
     self.orbFadeTimer=[NSTimer scheduledTimerWithTimeInterval:5.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
@@ -784,7 +905,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.orbFadeTimer=nil;
 }
 - (void)fadeOrb {
-    if(self.isOpen || !self.orb || self.orbFaded) return;
+    if(self.isOpen || !self.orb || self.orbFaded || self.orbUpdateAvailable) return;
     self.orbFaded=YES;
     [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
         self.orb.alpha=0.22;
@@ -829,12 +950,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     line.layer.cornerCurve=kCACornerCurveCircular;
     line.userInteractionEnabled=NO;
     [FMGlassContent(bead) addSubview:line];
+    line.accessibilityIdentifier=@"fm.orb.update-indicator";
+    self.orbUpdateLine=line;
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
     self.orbNormalAlpha=Clamp(alpha,.25,1);
     self.orbFaded=NO;
-    button.alpha=self.isOpen?0:self.orbNormalAlpha;
+    button.alpha=self.isOpen?0:(self.orbUpdateAvailable?1:self.orbNormalAlpha);
     button.userInteractionEnabled=!self.isOpen;
     button.accessibilityElementsHidden=self.isOpen;
     button.accessibilityLabel=@"LC 悬浮菜单";
@@ -853,7 +976,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [button addGestureRecognizer:pan];
     [self.overlayView addSubview:button];
     self.orb=button;
-    if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
+    [self applyOrbUpdateIndicator];
 }
 - (void)hold:(UILongPressGestureRecognizer *)gesture {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
@@ -1029,6 +1152,34 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(action) [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return row;
 }
+// A restrained emerald status light, not a large success badge.
+// The outer halo breathes subtly; the solid center always stays readable.
+static UIView *FMRunningBreathingLight(CGFloat size) {
+    UIView *light=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    light.userInteractionEnabled=NO;
+    light.accessibilityIdentifier=@"fm.running.breathing-light";
+    UIView *halo=[[UIView alloc] initWithFrame:CGRectInset(light.bounds,1,1)];
+    halo.layer.cornerRadius=CGRectGetWidth(halo.bounds)*.5;
+    halo.backgroundColor=[UIColor colorWithRed:.16 green:.79 blue:.41 alpha:.28];
+    [light addSubview:halo];
+    CGFloat coreSize=MAX(5,MIN(7,size*.50));
+    UIView *core=[[UIView alloc] initWithFrame:CGRectMake((size-coreSize)*.5,(size-coreSize)*.5,coreSize,coreSize)];
+    core.backgroundColor=[UIColor colorWithRed:.19 green:.88 blue:.47 alpha:1];
+    core.layer.cornerRadius=coreSize*.5;
+    core.layer.shadowColor=core.backgroundColor.CGColor;
+    core.layer.shadowRadius=2;
+    core.layer.shadowOpacity=.30;
+    core.layer.shadowOffset=CGSizeZero;
+    [light addSubview:core];
+    if(!UIAccessibilityIsReduceMotionEnabled()) {
+        CABasicAnimation *breath=[CABasicAnimation animationWithKeyPath:@"opacity"];
+        breath.fromValue=@.18;breath.toValue=@.78;
+        breath.duration=1.85;breath.autoreverses=YES;breath.repeatCount=HUGE_VALF;
+        breath.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [halo.layer addAnimation:breath forKey:@"fm.running.breath"];
+    }
+    return light;
+}
 - (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
     UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
     box.layer.cornerRadius=size*.22;box.clipsToBounds=YES;
@@ -1049,19 +1200,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
     if(current) {
-        CGFloat dotSize=MAX(8,MIN(10,size*.18));
-        UIView *dot=[[UIView alloc] initWithFrame:CGRectMake(size-dotSize-2,size-dotSize-2,dotSize,dotSize)];
-        dot.backgroundColor=[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0];
-        dot.layer.cornerRadius=dotSize*.5;
-        dot.layer.borderWidth=1.0;
-        dot.layer.borderColor=[UIColor whiteColor].CGColor;
-        dot.clipsToBounds=YES;
-        dot.userInteractionEnabled=NO;
-        [box addSubview:dot];
+        CGFloat side=MIN(13,MAX(10,size*.30));
+        UIView *light=FMRunningBreathingLight(side);
+        light.frame=CGRectMake(size-side,size-side,side,side);
+        [box addSubview:light];
     } else if(blocked) {
         CGFloat side=MIN(size*.45,MAX(13,MIN(18,size*.36)));
-        UIImageView *mark=[[UIImageView alloc] initWithImage:
-            [UIImage systemImageNamed:@"exclamationmark.circle.fill"]];
+        UIImageView *mark=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"exclamationmark.circle.fill"]];
         mark.frame=CGRectMake(size-side-1,size-side-1,side,side);
         mark.backgroundColor=FMThemeColor(FMColorSurface);
         mark.tintColor=FMThemeColor(FMColorSecondary);
@@ -1097,7 +1242,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL running=[LCOrbitMultitask isRunningGuest:app];
     UIImageView *arrow=[[UIImageView alloc] initWithImage:
-        [UIImage systemImageNamed:current?@"checkmark":@"chevron.right"]];
+        [UIImage systemImageNamed:@"chevron.right"]];
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
     arrow.tintColor=FMThemeColor(FMColorText);
     arrow.contentMode=UIViewContentModeScaleAspectFit;
@@ -1850,6 +1995,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     });
 }
 - (void)detachFromScene {
+    [self.orbUpdateTimer invalidate];
+    self.orbUpdateTimer=nil;
+    self.orbUpdateLine=nil;
     [self invalidatePendingLaunch];
     [self cancelAppearanceCheck];
     if(@available(iOS 17.0,*)) {
@@ -1876,18 +2024,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     settings.hidden=YES;
     settings.rootViewController=nil;
     if(restoreKey) [prior makeKeyWindow];
-    if(self.screenTouchObserver) {
-        [NSNotificationCenter.defaultCenter removeObserver:self.screenTouchObserver];
-        self.screenTouchObserver=nil;
-    }
-    if(self.orientationObserver) {
-        [NSNotificationCenter.defaultCenter removeObserver:self.orientationObserver];
-        self.orientationObserver=nil;
-    }
-    if(self.layoutChangeObserver) {
-        [NSNotificationCenter.defaultCenter removeObserver:self.layoutChangeObserver];
-        self.layoutChangeObserver=nil;
-    }
     [self.orbitContext.overlays unmountModule:@"FloatingMenu"];
     self.overlayView=nil;
     self.window=nil;
@@ -2878,72 +3014,67 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.checkingUpdate=YES;
     self.updateStatusLabel.text=@"正在检查最新发布版…";
     NSMutableURLRequest *request=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:FMUpdateAPI]];
-    request.timeoutInterval=12;
+    request.timeoutInterval=15;
     [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"LCFloatingMenu/1.0" forHTTPHeaderField:@"User-Agent"];
     __weak typeof(self) weakSelf=self;
-    [[[NSURLSession sharedSession] dataTaskWithRequest:request
-        completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) strongSelf=weakSelf;
-            if(!strongSelf) return;
-            strongSelf.checkingUpdate=NO;
-            strongSelf.updateStatusLabel.text=@"检查微珠最新发布版";
-            if(error) {
-                [strongSelf presentUpdateResult:@"检查更新失败"
-                    message:error.localizedDescription?:@"无法连接 GitHub，请检查网络。"
-                    showRepository:YES];
-                return;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
+        dispatch_async(dispatch_get_main_queue(),^{
+            typeof(self) owner=weakSelf;
+            if(!owner) return;
+            owner.checkingUpdate=NO;
+            owner.updateStatusLabel.text=@"检查微珠最新发布版";
+            if(error || [(NSHTTPURLResponse *)response statusCode]!=200) {
+                [owner presentUpdateResult:@"检查更新失败" message:error.localizedDescription?:@"无法获取 GitHub 最新发布信息。" showRepository:YES];return;
             }
-            NSInteger status=[(NSHTTPURLResponse *)response statusCode];
-            if(status==404) {
-                [strongSelf presentUpdateResult:@"暂无微珠最新版"
-                    message:@"fm-latest Release 尚未发布成功，请前往 GitHub 查看构建状态。"
-                    showRepository:YES];
-                return;
-            }
-            if(status!=200) {
-                [strongSelf presentUpdateResult:@"检查更新失败"
-                    message:[NSString stringWithFormat:@"GitHub 返回 HTTP %ld，请稍后重试。",(long)status]
-                    showRepository:YES];
-                return;
-            }
-            NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
-            NSString *body=[json isKindOfClass:NSDictionary.class]?json[@"body"]:nil;
-            NSArray *assets=[json isKindOfClass:NSDictionary.class]?json[@"assets"]:nil;
-            NSString *latestCommit=nil,*latestVersion=nil,*latestBuild=nil;
+            NSDictionary *json=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if(![json isKindOfClass:NSDictionary.class]) return;
+            NSString *body=json[@"body"];
+            NSString *version=nil,*commit=nil;
             if([body isKindOfClass:NSString.class]) for(NSString *line in [body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-                if([line hasPrefix:@"FM_COMMIT="]) latestCommit=[line substringFromIndex:10];
-                else if([line hasPrefix:@"FM_VERSION="]) latestVersion=[line substringFromIndex:11];
-                else if([line hasPrefix:@"FM_BUILD="]) latestBuild=[line substringFromIndex:9];
+                if([line hasPrefix:@"FM_VERSION="]) version=[line substringFromIndex:11];
+                if([line hasPrefix:@"FM_COMMIT="]) commit=[line substringFromIndex:10];
             }
-            BOOL hasBinary=NO;
-            if([assets isKindOfClass:NSArray.class]) for(id item in assets) {
-                if([item isKindOfClass:NSDictionary.class] &&
-                   [item[@"name"] isEqual:@"LCFloatingMenu-latest.dylib"]) {hasBinary=YES;break;}
+            NSDictionary *asset=nil;
+            for(id item in json[@"assets"]) if([item isKindOfClass:NSDictionary.class] &&
+                [item[@"name"] isEqualToString:@"LCFloatingMenu.dylib"]) {asset=item;break;}
+            NSString *digest=asset[@"digest"],*link=asset[@"browser_download_url"];
+            if(commit.length!=40 || !version.length || ![link hasPrefix:@"https://github.com/dompling/LC-SS-widget-export/releases/download/"] ||
+               ![digest isKindOfClass:NSString.class] || digest.length!=71) {
+                [owner presentUpdateResult:@"发布信息不完整" message:@"缺少版本、下载地址或 SHA-256 校验值，已取消更新。" showRepository:YES];return;
             }
-            if(latestCommit.length!=40 || !hasBinary) {
-                [strongSelf presentUpdateResult:@"发布信息尚不完整"
-                    message:@"最新 Release 缺少有效构建标识或 dylib 下载文件。"
-                    showRepository:YES];
-                return;
+            if([version compare:FM_MENU_VERSION options:NSNumericSearch]!=NSOrderedDescending) {
+                [owner presentUpdateResult:@"已是最新版本" message:[NSString stringWithFormat:@"当前 v%@，最新 v%@。",FM_MENU_VERSION,version] showRepository:NO];return;
             }
-            NSString *installed=FM_BUILD_COMMIT;
-            NSString *version=latestVersion.length?latestVersion:@"未知";
-            NSString *build=latestBuild.length?latestBuild:@"?";
-            if(installed.length!=40) {
-                [strongSelf presentUpdateResult:@"当前构建未标记版本"
-                    message:[NSString stringWithFormat:@"GitHub 最新版 v%@（Build %@），请到仓库下载。",version,build]
-                    showRepository:YES];
-            } else if([installed caseInsensitiveCompare:latestCommit]==NSOrderedSame) {
-                [strongSelf presentUpdateResult:@"已是最新发布版"
-                    message:[NSString stringWithFormat:@"当前版本 v%@（%@）与最新微珠构建一致。",FM_MENU_VERSION,FMCommitSummary()]
-                    showRepository:NO];
-            } else {
-                [strongSelf presentUpdateResult:@"发现新构建"
-                    message:[NSString stringWithFormat:@"当前 v%@（%@），最新发布 v%@（Build %@，%@）。前往 GitHub 下载 dylib 并重新签名安装。",FM_MENU_VERSION,FMCommitSummary(),version,build,[latestCommit substringToIndex:7]]
-                    showRepository:YES];
+            if(!FMHostUI()) {
+                [owner presentUpdateResult:@"发现新版本" message:@"请返回 LC 主界面，在微珠设置中心安装更新。" showRepository:YES];return;
             }
+            UIAlertController *confirm=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"升级微珠至 v%@？",version]
+                message:@"将下载并校验官方 dylib，备份旧版后替换 LC 私有插件。更新后仍需在 LC 原生 Tweaks 页面重新签名，并重启相关应用。不会自动替换共享或专属插件副本。"
+                preferredStyle:UIAlertControllerStyleAlert];
+            [confirm addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+            [confirm addAction:[UIAlertAction actionWithTitle:@"下载并安装" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                if(owner.checkingUpdate) return;
+                owner.checkingUpdate=YES;
+                owner.updateStatusLabel.text=@"下载并校验插件中…";
+                NSMutableURLRequest *download=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:link]];
+                download.timeoutInterval=40;
+                [[[NSURLSession sharedSession] dataTaskWithRequest:download completionHandler:^(NSData *binary,NSURLResponse *resp,NSError *err) {
+                    NSError *installError=nil;
+                    BOOL success=NO;
+                    if(!err && [(NSHTTPURLResponse *)resp statusCode]==200 && binary.length>0)
+                        success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:digest error:&installError];
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        owner.checkingUpdate=NO;
+                        owner.updateStatusLabel.text=@"检查微珠最新发布版";
+                        [owner presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
+                            message:success?@"已备份旧插件并安装新版本。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
+                            (installError.localizedDescription?:err.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
+                            showRepository:!success];
+                    });
+                }] resume];
+            }]];
+            if(owner.view.window) [owner presentViewController:confirm animated:YES completion:nil];
         });
     }] resume];
 }
@@ -3166,6 +3297,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [LCOrbitTweakAudit captureSnapshot];
     });
     [[FMManager shared] installIfPossible];
+    [[FMManager shared] checkOrbUpdateIfNeeded];
 }
 - (void)orbitDidReceiveLifecycleEvent:(NSString *)event scene:(UIWindowScene *)scene {
     FMManager *manager=[FMManager shared];

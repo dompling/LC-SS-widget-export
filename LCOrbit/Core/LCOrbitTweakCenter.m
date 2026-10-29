@@ -297,6 +297,31 @@ static NSString *TCResult(NSString *action,NSString *message) {
     }
     return TCResult(@"restore",[NSString stringWithFormat:@"%@ 已恢复备份，重新启动 Guest 后生效。",name]);
 }
++ (NSString *)deleteBackup:(NSString *)name backup:(NSString *)filename shared:(BOOL)shared {
+    if(![LCOrbitHost isHostUI] || !TCName(name) ||
+       ![filename isKindOfClass:NSString.class] ||
+       ![filename isEqualToString:filename.lastPathComponent] ||
+       ![filename hasPrefix:[name stringByAppendingString:@"."]] ||
+       ![filename hasSuffix:@".bak"]) return @"无效备份名称，未删除。";
+    NSString *folder=TCBackupRoot(shared);
+    NSString *target=[folder stringByAppendingPathComponent:filename];
+    if(shared && !TCRegular(target)) target=[TCOldSyncBackupRoot() stringByAppendingPathComponent:filename];
+    if(!TCRegular(target)) return @"备份不存在或不是普通文件，未删除。";
+    NSError *error=nil;
+    if(![NSFileManager.defaultManager removeItemAtPath:target error:&error])
+        return [NSString stringWithFormat:@"删除失败：%@",error.localizedDescription?:@"未知错误"];
+    return TCResult(@"delete-backup",@"指定备份已删除，不影响当前插件。");
+}
++ (NSString *)deleteAllBackups:(NSString *)name {
+    if(![LCOrbitHost isHostUI] || !TCName(name)) return @"无效插件名称。";
+    NSArray *files=[self backupsForPlugin:name];
+    NSUInteger success=0,failed=0;
+    for(NSDictionary *entry in files) {
+        NSString *result=[self deleteBackup:name backup:entry[@"file"] shared:[entry[@"shared"] boolValue]];
+        if([result containsString:@"已删除"]) success++; else failed++;
+    }
+    return [NSString stringWithFormat:@"已删除 %lu 个备份，失败 %lu 个。当前插件未改动。",(unsigned long)success,(unsigned long)failed];
+}
 + (NSString *)setPlugin:(NSString *)name enabled:(BOOL)enabled shared:(BOOL)shared {
     if(![LCOrbitHost isHostUI] || !TCName(name)) return @"无效插件名称。";
     if(!shared && !enabled && [name isEqualToString:@"LCFloatingMenu.dylib"])

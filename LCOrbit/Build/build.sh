@@ -51,6 +51,7 @@ xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version
     "$ROOT/LCOrbit/Core/LCOrbitTweakAudit.m" \
     "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m" \
     "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m" \
+    "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m" \
     "$ROOT/LCOrbit/Core/LCOrbitTweakCenterViews.m" \
     "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m" \
     "$ROOT/LCOrbit/Core/LCOrbitLogViewer.m" \

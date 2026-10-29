@@ -11,6 +11,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<NSDictionary *> *)backupsForPlugin:(NSString *)name;
 + (NSString *)backupPlugin:(NSString *)name shared:(BOOL)shared;
 + (NSString *)restorePlugin:(NSString *)name backup:(NSString *)filename shared:(BOOL)shared;
++ (NSString *)deleteBackup:(NSString *)name backup:(NSString *)filename shared:(BOOL)shared;
++ (NSString *)deleteAllBackups:(NSString *)name;
 + (NSString *)setPlugin:(NSString *)name enabled:(BOOL)enabled shared:(BOOL)shared;
 @end
 NS_ASSUME_NONNULL_END
