@@ -12,6 +12,9 @@
 @interface LCOrbitPassThroughWindow : UIWindow @end
 @implementation LCOrbitPassThroughWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if(!event || event.type==UIEventTypeTouches) {
+        [NSNotificationCenter.defaultCenter postNotificationName:@"LCOrbitScreenTouchedNotification" object:nil];
+    }
     UIView *target=[super hitTest:point withEvent:event];
     return target==self || target==self.rootViewController.view?nil:target;
 }
