@@ -1023,6 +1023,7 @@ static id FMLayoutChangeObserver=nil;
         self.orb.alpha=self.orbNormalAlpha?:0.72;
         CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
         CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
+        UIEdgeInsets safe=self.window.safeAreaInsets;
         CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
         CGFloat minY=MAX(60,safe.top+6)+orbH/2;
         CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
