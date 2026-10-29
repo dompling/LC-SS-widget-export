@@ -32,6 +32,11 @@ jobs:
           grep -Fq 'isfinite(contentSize.width)' MultitaskSupport/PiPManager.m
           grep -Fq '[self.displayingDecoratedVC minimizeWindowPiP];' MultitaskSupport/PiPManager.m
           test "$(grep -Fc '[self.displayingDecoratedVC minimizeWindowPiP];' MultitaskSupport/PiPManager.m)" -eq 1
+      - name: Test automatic PiP lifecycle and zero-sized AVKit layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh LCOrbit/Tests/run-automatic-pip-tests.sh
       - name: Compile and archive iOS host
         shell: bash
         run: |
