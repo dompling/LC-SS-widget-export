@@ -60,7 +60,7 @@ BOOL OrbitMethodMatches(Class cls, NSString *name, const char *result, NSArray<N
 - (void)setSafeAreaEdgeInsets:(UIEdgeInsets)insets;
 @end
 
-static char SnapshotKey, ConstraintsKey, HostingPlacementKey;
+static char SnapshotKey, ConstraintsKey, HostingPlacementKey, GuestOrientationKey;
 static Class WindowClass, DockClass;
 static IMP OriginalInit, OriginalSetup, OriginalVertical, OriginalFrame;
 static IMP OriginalSafeArea, OriginalSettings, OriginalExit, OriginalInitialized;
@@ -175,6 +175,31 @@ static UIEdgeInsets PortraitInsets(UIEdgeInsets insets, UIInterfaceOrientation o
         default: return insets;
     }
 }
+// LC and the Guest have separate scenes. A video player can request landscape
+// while LC stays portrait: remember its direction without rotating the host
+// UIWindow or affecting ordinary single-task / native-window modes.
+static void RememberGuestOrientation(UIViewController *window,UIInterfaceOrientation requested) {
+    if(!window || OrbitPiPProtectedWindow(window) ||
+       requested<UIInterfaceOrientationPortrait || requested>UIInterfaceOrientationLandscapeRight) return;
+    UIWindow *host=window.view.window ?: window.parentViewController.view.window;
+    UIWindowScene *scene=host.windowScene;
+    if(!host || !scene) return;
+    UIInterfaceOrientation hostDirection=scene.interfaceOrientation;
+    BOOL guestLandscape=UIInterfaceOrientationIsLandscape(requested);
+    BOOL hostLandscape=UIInterfaceOrientationIsLandscape(hostDirection);
+    NSNumber *previous=objc_getAssociatedObject(window,&GuestOrientationKey);
+    if(guestLandscape && !hostLandscape) {
+        if(previous.integerValue!=requested) {
+            objc_setAssociatedObject(window,&GuestOrientationKey,@(requested),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            NSLog(@"[LCOrbit] guest landscape fullscreen=%ld (host=%ld)",(long)requested,(long)hostDirection);
+        }
+    } else if(!guestLandscape || hostLandscape) {
+        if(previous) {
+            objc_setAssociatedObject(window,&GuestOrientationKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            NSLog(@"[LCOrbit] guest fullscreen orientation restored to host");
+        }
+    }
+}
 static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfaceOrientation *orientation,UIEdgeInsets *insets) {
     UIWindow *host=window.view.window ?: window.parentViewController.view.window;
     UIWindowScene *scene=host.windowScene;
@@ -187,6 +212,9 @@ static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfac
        safe.top<0 || safe.left<0 || safe.bottom<0 || safe.right<0 ||
        safe.top+safe.bottom>bounds.size.height || safe.left+safe.right>bounds.size.width) return NO;
     *frame=(CGRect){CGPointZero,bounds.size};
+    UIInterfaceOrientation guest=(UIInterfaceOrientation)[objc_getAssociatedObject(window,&GuestOrientationKey) integerValue];
+    if(UIInterfaceOrientationIsLandscape(guest) && !UIInterfaceOrientationIsLandscape(direction))
+        direction=guest;
     if(UIInterfaceOrientationIsLandscape(direction)) frame->size=CGSizeMake(bounds.size.height,bounds.size.width);
     *orientation=direction;*insets=safe;
     return YES;
@@ -288,8 +316,15 @@ static void FinalSceneSettings(id remote,SEL selector,void (^block)(id,id)) {
     // iOS 18+ uses AppScene's temporary settings only for contentView.frame.
     // Apply insets at the real FBScene boundary, after LC's UIKit wrapper.
     ((void(*)(id,SEL,id))OriginalFinalSettings)(remote,selector,^(id settings,id context) {
+        UIInterfaceOrientation before=[settings interfaceOrientation];
         if(block) block(settings,context);
-        ApplyGeometry(settings,frame,orientation,insets);
+        // An actual FBScene orientation change is a Guest request. Status-bar
+        // or style-only updates cannot cancel a landscape video fullscreen.
+        UIInterfaceOrientation after=[settings interfaceOrientation];
+        if(before!=after) RememberGuestOrientation(window,after);
+        CGRect guestFrame; UIInterfaceOrientation guestOrientation; UIEdgeInsets guestInsets;
+        if(FullscreenGeometry(window,&guestFrame,&guestOrientation,&guestInsets))
+            ApplyGeometry(settings,guestFrame,guestOrientation,guestInsets);
     });
 }
 static void InitialSceneSettings(id parameters,SEL selector,void (^block)(id)) {
@@ -359,6 +394,7 @@ static void RestoreAppearance(UIViewController *window) {
     UIView *handle=[(id)window resizeHandle];
     handle.hidden=[snapshot[@"handleHidden"] boolValue];handle.alpha=[snapshot[@"handleAlpha"] doubleValue];
     objc_setAssociatedObject(window,&SnapshotKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window,&GuestOrientationKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     // Fullscreen setup made LC skip its non-maximized geometry snapshot.
     // Rebuild it before native resizing/rotation can use the saved frame.
     [(id)window updateOriginalFrame];
@@ -417,10 +453,13 @@ static UIEdgeInsets SafeArea(UIViewController *window,SEL selector,id settings) 
     return UIEdgeInsetsZero;
 }
 static void Settings(UIViewController *window,SEL selector,id scene,id settings,id context,uint32_t actionType) {
-    if(!Fullscreen()) {
+    if(!Fullscreen() || OrbitPiPProtectedWindow(window)) {
         ((void(*)(id,SEL,id,id,id,uint32_t))OriginalSettings)(window,selector,scene,settings,context,actionType);
         return;
     }
+    // AppScene's native callback carries the Guest remote orientation. LC's
+    // parent may still be portrait even if the App requests landscape.
+    RememberGuestOrientation(window,[settings interfaceOrientation]);
     UpdateScene(window,settings);
 }
 static void Layout(UIViewController *window,SEL selector) {
