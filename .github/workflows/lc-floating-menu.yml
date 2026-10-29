@@ -63,7 +63,6 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
       - name: Download verified build
         uses: actions/download-artifact@v4
         with:
@@ -83,21 +82,14 @@ jobs:
           sha256sum "$BINARY" || shasum -a 256 "$BINARY"
 
           # Keep the actual .dylib name unchanged in BOTH releases.
-          # Release notes from this tag are published with the binary.
-          NOTES="LCFloatingMenu/RELEASE_NOTES_${VERSION}.md"
-          if [[ ! -s "$NOTES" ]]; then
-            NOTES="dist/release-notes.txt"
-            printf 'Verified iOS arm64 dylib from tag %s (commit %s). Import and re-sign in LiveContainer.\n' "$TAG" "$GITHUB_SHA" > "$NOTES"
-          fi
           # A version tag is immutable; re-running updates its asset only.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" "$BINARY" --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"
           else
             gh release create "$TAG" "$BINARY" \
               --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" \
               --title "LCFloatingMenu $VERSION" \
-              --notes-file "$NOTES" \
+              --notes "Verified iOS arm64 dylib from tag $TAG (commit $GITHUB_SHA). Import and re-sign in LiveContainer." \
               --latest=false
           fi
 

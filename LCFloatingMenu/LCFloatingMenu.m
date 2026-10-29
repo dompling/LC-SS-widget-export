@@ -23,7 +23,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.4"
+#define FM_MENU_VERSION @"1.0.5"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -486,6 +486,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,assign) CGFloat orbY;
 @property(nonatomic,assign) BOOL left;
 @property(nonatomic,assign) BOOL isOpen;
+@property(nonatomic,strong) NSTimer *orbFadeTimer;
+@property(nonatomic,assign) BOOL orbFaded;
+@property(nonatomic,assign) CGFloat orbNormalAlpha;
+@property(nonatomic,strong) id screenTouchObserver;
 @property(nonatomic,copy) NSString *page;
 @property(nonatomic,strong) NSArray<NSDictionary*> *apps;
 + (instancetype)shared;
@@ -573,6 +577,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.page=@"apps";
     self.apps=InstalledApps();
     [self rememberCurrentApp];
+    if(!self.screenTouchObserver) {
+        __weak typeof(self) weakSelf=self;
+        self.screenTouchObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitScreenTouchedNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            [weakSelf wakeOrb];
+        }];
+    }
     FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu context=%@",
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
@@ -723,7 +733,42 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self.panel removeFromSuperview]; self.panel=nil;
     [self.dismissLayer removeFromSuperview]; self.dismissLayer=nil;
 }
+- (void)scheduleOrbFade {
+    [self.orbFadeTimer invalidate];
+    if(!BoolPref(@"idleFade",YES)) return;
+    if(self.isOpen || !self.orb) return;
+    __weak typeof(self) weakSelf=self;
+    self.orbFadeTimer=[NSTimer scheduledTimerWithTimeInterval:5.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
+        [weakSelf fadeOrb];
+    }];
+}
+- (void)cancelOrbFade {
+    [self.orbFadeTimer invalidate];
+    self.orbFadeTimer=nil;
+}
+- (void)fadeOrb {
+    if(self.isOpen || !self.orb || self.orbFaded) return;
+    self.orbFaded=YES;
+    [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
+        self.orb.alpha=0.22;
+    } completion:nil];
+}
+- (void)wakeOrb {
+    if(!self.orb || self.isOpen) return;
+    [self cancelOrbFade];
+    if(self.orbFaded || self.orb.alpha < (self.orbNormalAlpha?:0.72) - 0.05) {
+        self.orbFaded=NO;
+        [UIView animateWithDuration:0.20 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
+            self.orb.alpha=self.orbNormalAlpha?:0.72;
+        } completion:nil];
+    }
+    if(BoolPref(@"idleFade",YES)) {
+        [self scheduleOrbFade];
+    }
+}
+
 - (void)drawOrb {
+    [self cancelOrbFade];
     [self.orb removeFromSuperview]; self.orb=nil;
     CGRect f=[self orbFrame];
     FMHitButton *button=[FMHitButton buttonWithType:UIButtonTypeCustom];
@@ -750,12 +795,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
-    button.alpha=self.isOpen?0:Clamp(alpha,.16,1);
+    self.orbNormalAlpha=Clamp(alpha,.25,1);
+    self.orbFaded=NO;
+    button.alpha=self.isOpen?0:self.orbNormalAlpha;
     button.userInteractionEnabled=!self.isOpen;
     button.accessibilityElementsHidden=self.isOpen;
     button.accessibilityLabel=@"LC 悬浮菜单";
     button.accessibilityHint=@"轻触展开，拖动移动，长按进入菜单设置";
     button.accessibilityTraits=UIAccessibilityTraitButton;
+    [button addTarget:self action:@selector(wakeOrb) forControlEvents:UIControlEventTouchDown];
     if(BoolPref([@"override." stringByAppendingString:GuestID()],NO) &&
        BoolPref([@"doubleTap." stringByAppendingString:GuestID()],NO)) {
         UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggle)];
@@ -768,6 +816,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [button addGestureRecognizer:pan];
     [self.overlayView addSubview:button];
     self.orb=button;
+    if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
 }
 - (void)hold:(UILongPressGestureRecognizer *)gesture {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
@@ -809,6 +858,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
     if(g.state==UIGestureRecognizerStateBegan || g.state==UIGestureRecognizerStateChanged) {
+        [self cancelOrbFade];
+        self.orbFaded=NO;
+        self.orb.alpha=self.orbNormalAlpha?:0.72;
         CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
         CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
         UIEdgeInsets safe=self.window.safeAreaInsets;
@@ -827,6 +879,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         if(UIAccessibilityIsReduceMotionEnabled()) {
             self.orb.frame=[self orbFrame];
             [self draw];
+            [self scheduleOrbFade];
         } else {
             UIButton *dragged=self.orb;
             [UIView animateWithDuration:.34 delay:0 usingSpringWithDamping:.78
@@ -838,17 +891,28 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                     // snap finishes, grow the destination-side shoulders.
                     FMAnimateOrbShoulders(dragged,self.left,0,YES);
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.25*NSEC_PER_SEC),
-                        dispatch_get_main_queue(),^{if(self.orb==dragged)[self draw];});
+                        dispatch_get_main_queue(),^{
+                            if(self.orb==dragged) {
+                                [self draw];
+                                [self scheduleOrbFade];
+                            }
+                        });
                 }];
+            [self scheduleOrbFade];
         }
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         [self draw];
+        [self scheduleOrbFade];
     }
 }
 - (void)toggle {
     BOOL opening=!self.isOpen;
-    if(opening) [self loadAppsScroll];
-    else [self persistAppsScroll];
+    if(opening) {
+        [self cancelOrbFade];
+        [self loadAppsScroll];
+    } else {
+        [self persistAppsScroll];
+    }
     self.isOpen=opening; self.page=@"apps";
     if(self.isOpen) {
         self.apps=InstalledApps();
@@ -859,6 +923,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
     if(BoolPref(@"haptic",YES)) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    }
+    if(!opening) {
+        self.orbFaded=NO;
+        self.orb.alpha=self.orbNormalAlpha?:0.72;
+        [self scheduleOrbFade];
     }
     if(opening) {
         [self draw];
@@ -943,13 +1012,23 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
-    if(current || blocked) {
+    if(current) {
+        CGFloat dotSize=MAX(8,MIN(10,size*.18));
+        UIView *dot=[[UIView alloc] initWithFrame:CGRectMake(size-dotSize-2,size-dotSize-2,dotSize,dotSize)];
+        dot.backgroundColor=[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0];
+        dot.layer.cornerRadius=dotSize*.5;
+        dot.layer.borderWidth=1.0;
+        dot.layer.borderColor=[UIColor whiteColor].CGColor;
+        dot.clipsToBounds=YES;
+        dot.userInteractionEnabled=NO;
+        [box addSubview:dot];
+    } else if(blocked) {
         CGFloat side=MIN(size*.45,MAX(13,MIN(18,size*.36)));
         UIImageView *mark=[[UIImageView alloc] initWithImage:
-            [UIImage systemImageNamed:current?@"checkmark.circle.fill":@"exclamationmark.circle.fill"]];
+            [UIImage systemImageNamed:@"exclamationmark.circle.fill"]];
         mark.frame=CGRectMake(size-side-1,size-side-1,side,side);
         mark.backgroundColor=FMThemeColor(FMColorSurface);
-        mark.tintColor=current?FMAccent():FMThemeColor(FMColorSecondary);
+        mark.tintColor=FMThemeColor(FMColorSecondary);
         mark.layer.cornerRadius=side*.5;mark.clipsToBounds=YES;
         mark.userInteractionEnabled=NO;
         [box addSubview:mark];
@@ -1640,6 +1719,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
+        [self settingSwitch:s title:@"自动淡化" key:@"idleFade" defaultValue:YES tag:21];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
         [self settingSwitch:s title:@"最近打开的 App 置顶"
@@ -1871,6 +1951,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self settingSwitch:s title:@"最近打开的 App 置顶"
                  key:@"recentAppsFirst" defaultValue:NO tag:20];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
+    [self settingSwitch:s title:@"自动淡化" key:@"idleFade" defaultValue:YES tag:21];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
     [self spacer:s size:10];
     [self diyPage:s];
@@ -2314,6 +2395,17 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
         case 20:key=@"recentAppsFirst";break;
+        case 21: {
+            key=@"idleFade";
+            if(!sw.isOn) {
+                [self cancelOrbFade];
+                self.orbFaded=NO;
+                self.orb.alpha=self.orbNormalAlpha?:0.72;
+            } else {
+                [self scheduleOrbFade];
+            }
+            break;
+        }
         case 18:key=@"clearGlass";break;
         case 4:key=AppPref();break;
         default:return;
