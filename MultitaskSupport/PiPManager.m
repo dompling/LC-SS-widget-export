@@ -113,11 +113,18 @@ static PiPManager* sharedInstance = nil;
         self.pipVideoCallContentView.frame = CGRectMake(0, 0, self.displayingVC.view.bounds.size.width, self.displayingVC.view.bounds.size.height);
         self.pipVideoCallViewController.additionalSafeAreaInsets = self.displayingVC.view.safeAreaInsets;
         [self.pipVideoCallContentView addSubview:self.displayingVC.contentView];
+        // Remote-hosting views can report zero bounds during the hand-off.
+        // Restore a finite initial frame before AVKit's first presentation.
+        CGSize contentSize=self.displayingVC.contentView.bounds.size;
+        if(!isfinite(contentSize.width) || !isfinite(contentSize.height) ||
+           contentSize.width<=0 || contentSize.height<=0)
+            self.displayingVC.contentView.frame=(CGRect){CGPointZero,sourceSize};
     } else {
         self.displayingVC.contentView.frame = CGRectMake(0, 0, self.displayingVC.view.bounds.size.width, self.displayingVC.view.bounds.size.height);
     }
     [self.pipVideoCallViewController.view addSubview:self.pipVideoCallContentView];
     [self.pipVideoCallViewController.view layoutIfNeeded];
+    [self.displayingVC.contentView setNeedsDisplay];
     NSLog(@"[LC-PiP] mounted guest: source=%@ content=%@ pip=%@",
           NSStringFromCGRect(self.displayingVC.view.bounds),
           NSStringFromCGRect(self.displayingVC.contentView.bounds),
@@ -136,7 +143,12 @@ static PiPManager* sharedInstance = nil;
 
 
 - (void)pictureInPictureControllerDidStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
-    
+    [self.pipVideoCallViewController.view layoutIfNeeded];
+    NSLog(@"[LC-PiP] didStart: guest=%@ hosted=%d size=%@ window=%@",
+          self.displayingVC.bundleId,
+          self.displayingVC.usesHostingControllerAPI,
+          NSStringFromCGRect(self.displayingVC.contentView.bounds),
+          self.displayingVC.contentView.window ? @"attached" : @"nil");
 }
 
 - (void)pictureInPictureControllerWillStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
