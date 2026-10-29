@@ -247,7 +247,10 @@ typedef id (*PiPControllerInitializer)(id __attribute__((ns_consumed)),SEL,id) _
     video.preferredContentSize=size;
     UIView *target=content;
     if(PiPFlag(scene,@"usesHostingControllerAPI")) {
-        target=[[UIView alloc] initWithFrame:video.view.bounds];
+        // AVKit's controller view may still have zero bounds while PiP is being
+        // armed. Seed the hosted remote-scene wrapper using the live Guest
+        // frame so automatic PiP has a drawable first content size.
+        target=[[UIView alloc] initWithFrame:(CGRect){CGPointZero,size}];
         target.layer.anchorPoint=CGPointZero;
         target.layer.position=CGPointZero;
         [video.view addSubview:target];
