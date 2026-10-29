@@ -1,0 +1,54 @@
+name: Release LCFloatingMenu 1.0.5 (one-shot)
+on:
+  push:
+    paths:
+      - '.github/workflows/release-105-once.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish-105:
+    if: github.ref == 'refs/heads/lcss-original'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Verify version and build official binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq '#define FM_MENU_VERSION @"1.0.5"' LCFloatingMenu/LCFloatingMenu.m
+          test -s LCFloatingMenu/RELEASE_NOTES_1.0.5.md
+          LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
+          LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib
+      - name: Publish 1.0.5 tag and release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -s dist/LCFloatingMenu.dylib
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git ls-remote --exit-code --tags origin refs/tags/1.0.5 >/dev/null 2>&1; then
+            echo "1.0.5 tag already exists; refusing to overwrite it"
+            exit 1
+          fi
+          git tag -a 1.0.5 -m "LCFloatingMenu v1.0.5"
+          git push origin refs/tags/1.0.5
+          gh release create 1.0.5 dist/LCFloatingMenu.dylib \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "LCFloatingMenu 1.0.5" \
+            --notes-file LCFloatingMenu/RELEASE_NOTES_1.0.5.md --latest=false
+          printf 'FM_VERSION=1.0.5\nFM_COMMIT=%s\nFM_TAG=1.0.5\n' "$GITHUB_SHA" > dist/latest-info.txt
+          if gh release view fm-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload fm-latest dist/LCFloatingMenu.dylib dist/latest-info.txt --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit fm-latest --repo "$GITHUB_REPOSITORY" \
+              --title "LCFloatingMenu latest (1.0.5)" --notes-file dist/latest-info.txt --prerelease --latest=false
+          else
+            gh release create fm-latest dist/LCFloatingMenu.dylib dist/latest-info.txt \
+              --repo "$GITHUB_REPOSITORY" --title "LCFloatingMenu latest (1.0.5)" \
+              --notes-file dist/latest-info.txt --prerelease --latest=false
+          fi
