@@ -118,7 +118,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 @property(nonatomic,strong) id appearanceRegistration,settingsNavigation,settingsScreen,settingsScroll;
 @property(nonatomic,strong) id appsScroll,overlayView,orb,panel,dismissLayer;
 @property(nonatomic,strong) NSTimer *orbUpdateTimer;
-@property(nonatomic,weak) UIView *orbUpdateLine;
+@property(nonatomic,weak) id orbUpdateLine;
 @property BOOL appsScrollRestorePending,isOpen,launchPending,launchMultitaskMode,launchSystemMenuMode;
 @property NSUInteger launchGeneration;
 + (instancetype)shared;
