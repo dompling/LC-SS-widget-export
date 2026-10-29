@@ -23,7 +23,10 @@ for forbidden in ["@selector(openSettings)", "@selector(toggle)", "@selector(goH
 home=src[src.index("- (void)compactReturnHome {"):src.index("- (void)goHome {")]
 assert "[LCOrbitMultitask showHome]" in home and '[self launchPath:@"ui" uuid:nil]' in home, "compact Home must navigate to LC in both task modes"
 assert "confirmTitle:" not in home, "compact Home must not ask for confirmation"
-assert "NSUInteger compactActions=1;" in src, "compact footer height must reserve one control"
+assert "NSUInteger compactActions=1+([LCOrbitMultitask isPiPActive]?1:0);" in src, "compact footer must reserve a PiP-close slot only while active"
+assert "CGFloat slot=compact?(height-4)/MAX(1,items.count)" in src, "compact footer must distribute hit targets for the actual action count"
+assert "closePictureInPicture" in compact_footer and "关闭画中画" in compact_footer, "compact drawer must expose an explicit PiP stop fallback"
+assert "stopPiPIfActive:&error" in src, "PiP close must call the host stop API without terminating a Guest"
 assert "@selector(openSettings)" in footer, "normal footer must keep settings"
 assert "self.orb.center=CGPointMake(Clamp(handleX" not in src, "compact open must not relocate the saved orb"
 assert "CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;" in src, "compact corners must be softer than capsule radius"
