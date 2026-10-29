@@ -5,7 +5,7 @@ run-name: FloatingMenu ${{ github.ref_type == 'tag' && 'release' || 'build' }} -
 # A semantic-version tag is pushed only when a formal release is requested.
 on:
   push:
-    branches: [lcss-original, fix/plugin-pip-controls-20261029]
+    branches: [lcss-original]
     tags:
       - '*.*.*'
     paths:
@@ -135,26 +135,3 @@ jobs:
           fi
           echo "Versioned: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/LCFloatingMenu.dylib"
           echo "Latest: https://github.com/$GITHUB_REPOSITORY/releases/download/$LATEST_TAG/LCFloatingMenu.dylib"
-
-  cleanup-abandoned-pip-test:
-    if: github.ref == 'refs/heads/fix/plugin-pip-controls-20261029'
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Delete exact abandoned test branch after verified build
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          BRANCH='fix/plugin-auto-pip-frame-20261029'
-          EXPECTED='62257c0410d364b14d181cac847032d12df087f8'
-          ACTUAL="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha' 2>/dev/null || true)"
-          if [[ "$ACTUAL" != "$EXPECTED" ]]; then
-            echo "Skip deletion: expected $EXPECTED, actual ${ACTUAL:-missing}"
-            exit 0
-          fi
-          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"
-          echo "Deleted abandoned branch $BRANCH"
