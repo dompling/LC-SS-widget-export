@@ -1958,6 +1958,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     });
 }
 - (void)detachFromScene {
+    [self.orbUpdateTimer invalidate];
+    self.orbUpdateTimer=nil;
+    self.orbUpdateLine=nil;
     [self invalidatePendingLaunch];
     [self cancelAppearanceCheck];
     if(@available(iOS 17.0,*)) {
@@ -3317,8 +3320,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     [manager detachFromScene];
     manager.orbitContext=nil;
-    [manager.orbUpdateTimer invalidate];
-    manager.orbUpdateTimer=nil;
 }
 @end
 void LCFloatingMenuRegisterWithOrbit(LCOrbitCore *core) {
