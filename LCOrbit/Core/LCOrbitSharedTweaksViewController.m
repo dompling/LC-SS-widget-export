@@ -284,7 +284,7 @@
             cell.selectionStyle=UITableViewCellSelectionStyleNone;
             UISwitch *toggle=[UISwitch new];
             toggle.on=[LCOrbitTweakSync automaticSyncEnabled];
-            toggle.onTintColor=self.accentColor;
+            toggle.onTintColor=[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0];
             toggle.enabled=!self.busy && [LCOrbitHost isHostUI];
             toggle.accessibilityLabel=@"自动同步到共享插件";
             [toggle addTarget:self action:@selector(automaticSyncChanged:) forControlEvents:UIControlEventValueChanged];
