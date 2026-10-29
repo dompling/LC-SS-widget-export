@@ -266,6 +266,24 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     else ((void(*)(id,SEL,id))objc_msgSend)(pip,begin,scene);
     return YES;
 }
++ (BOOL)isPiPActive {
+    if(!NSThread.isMainThread || ![LCOrbitHost isHostUI]) return NO;
+    id manager=Call(NSClassFromString(@"PiPManager"),@"shared");
+    SEL active=NSSelectorFromString(@"isPiP");
+    return [manager respondsToSelector:active] &&
+        ((BOOL(*)(id,SEL))objc_msgSend)(manager,active);
+}
++ (BOOL)stopPiPIfActive:(NSError **)error {
+    if(!NSThread.isMainThread || ![LCOrbitHost isHostUI])
+        return Fail(error,@"请从 LC 主界面关闭画中画。");
+    id manager=Call(NSClassFromString(@"PiPManager"),@"shared");
+    SEL stop=NSSelectorFromString(@"stopPiP");
+    if(!manager || ![manager respondsToSelector:stop])
+        return Fail(error,@"当前 LC 未提供画中画关闭接口。");
+    if(![self isPiPActive]) return Fail(error,@"画中画已经关闭。");
+    ((void(*)(id,SEL))objc_msgSend)(manager,stop);
+    return YES;
+}
 + (void)showHome {
     if(![self isEnabled]) return;
     for(id window in [self windows]) SetVisible(window,NO);
