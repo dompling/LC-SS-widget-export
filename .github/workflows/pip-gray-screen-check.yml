@@ -1,0 +1,55 @@
+name: PiP gray-screen regression test (no Release)
+
+on:
+  push:
+    branches:
+      - fix/pip-gray-loading-20261029
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    name: Build LC+SS PiP test IPA
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      scheme: LiveContainer
+      archive_path: archive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+      - name: Verify PiP source guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'self.observingPiPBounds=YES;' MultitaskSupport/PiPManager.m
+          grep -Fq 'isfinite(contentSize.width)' MultitaskSupport/PiPManager.m
+          grep -Fq '[self.displayingDecoratedVC minimizeWindowPiP];' MultitaskSupport/PiPManager.m
+          test "$(grep -Fc '[self.displayingDecoratedVC minimizeWindowPiP];' MultitaskSupport/PiPManager.m)" -eq 1
+      - name: Compile and archive iOS host
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild archive -archivePath "$archive_path" -scheme "$scheme" \
+            -project LiveContainer.xcodeproj -sdk iphoneos -arch arm64 \
+            -configuration Release CODE_SIGNING_ALLOWED=NO | xcpretty
+          test -d "$archive_path.xcarchive/Products/Applications"
+      - name: Package test LC+SS IPA (never publish Release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .github/build_github.sh
+          test -s "LiveContainer+SideStore.ipa"
+      - name: Upload test IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LC-SS-PiP-gray-screen-test
+          path: LiveContainer+SideStore.ipa
+          if-no-files-found: error
+          retention-days: 7
