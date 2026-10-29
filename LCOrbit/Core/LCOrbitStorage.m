@@ -30,7 +30,7 @@ static BOOL JSONValue(id value) {
 static BOOL PreferenceValue(NSString *key,id value) {
     if(!JSONValue(value)) return NO;
     NSString *name=[key hasPrefix:@"LCFloatingMenu."]?[key substringFromIndex:15]:key;
-    if([@[@"favoritePaths",@"menuOrder"] containsObject:name]) {
+    if([@[@"favoritePaths",@"menuOrder",@"autoPiPApps"] containsObject:name]) {
         if(![value isKindOfClass:NSArray.class]) return NO;
         for(id item in value) if(![item isKindOfClass:NSString.class]) return NO;
     } else if([@[@"accentLight",@"accentDark"] containsObject:name]) {

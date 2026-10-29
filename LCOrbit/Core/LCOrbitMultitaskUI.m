@@ -67,6 +67,7 @@ static IMP OriginalSafeArea, OriginalSettings, OriginalExit, OriginalInitialized
 static IMP OriginalLayout, OriginalShowDock, OriginalShowHidden, OriginalToggleDock;
 static IMP OriginalBringToFront;
 static IMP OriginalMinimize;
+static IMP OriginalPiPStopped;
 static IMP OriginalWindowDidAddSubview;
 static __weak UIView *NativeDockSurface;
 static char DockVisibilityKey;
@@ -82,6 +83,14 @@ static Class HostClass(NSString *name) {
 }
 static BOOL Fullscreen(void) { return [LCOrbitMultitask isManagingWindows]; }
 static UIViewController *SceneController(UIViewController *window) { return [(id)window appSceneVC]; }
+// LC moves the Guest content into AVPictureInPictureVideoCallViewController.
+// While PiP owns it, do not change the decorated window or its scene geometry.
+static BOOL OrbitPiPProtectedWindow(UIViewController *window) {
+    id scene=window?SceneController(window):nil;
+    SEL state=NSSelectorFromString(@"shouldIgnoreSceneUpdates");
+    return [scene respondsToSelector:state] &&
+        ((BOOL(*)(id,SEL))objc_msgSend)(scene,state);
+}
 static id Dock(void) {
     SEL selector=NSSelectorFromString(@"shared");
     return [DockClass respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(DockClass,selector):nil;
@@ -195,6 +204,7 @@ static void ConfigureSafeArea(UIViewController *window,id settings) {
 }
 
 static void LayoutFullscreen(UIViewController *window) {
+    if(OrbitPiPProtectedWindow(window)) return;
     UIViewController *scene=SceneController(window);
     if(!window.isViewLoaded || !scene || ![(id)window navigationBar]) return;
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
@@ -229,6 +239,7 @@ static void LayoutFullscreen(UIViewController *window) {
     }
 }
 static void UpdateScene(UIViewController *window,id baseSettings) {
+    if(OrbitPiPProtectedWindow(window)) return;
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
     if(!FullscreenGeometry(window,&frame,&orientation,&insets)) return;
     LayoutFullscreen(window);
@@ -251,7 +262,7 @@ static void UpdateScene(UIViewController *window,id baseSettings) {
 }
 static void SceneSettings(id scene,SEL selector,void (^block)(id)) {
     UIViewController *window=[scene delegate];
-    if(!Fullscreen() || ![window isKindOfClass:WindowClass]) {
+    if(!Fullscreen() || ![window isKindOfClass:WindowClass] || OrbitPiPProtectedWindow(window)) {
         ((void(*)(id,SEL,id))OriginalSceneSettings)(scene,selector,block);return;
     }
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
@@ -269,7 +280,9 @@ static void FinalSceneSettings(id remote,SEL selector,void (^block)(id,id)) {
         id presenter=[(id)SceneController(candidate) presenter];
         if([presenter scene]==remote) {window=candidate;break;}
     }
-    if(!window) {((void(*)(id,SEL,id))OriginalFinalSettings)(remote,selector,block);return;}
+    if(!window || OrbitPiPProtectedWindow(window)) {
+        ((void(*)(id,SEL,id))OriginalFinalSettings)(remote,selector,block);return;
+    }
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
     if(!FullscreenGeometry(window,&frame,&orientation,&insets)) return;
     // iOS 18+ uses AppScene's temporary settings only for contentView.frame.
@@ -282,7 +295,8 @@ static void FinalSceneSettings(id remote,SEL selector,void (^block)(id,id)) {
 static void InitialSceneSettings(id parameters,SEL selector,void (^block)(id)) {
     UIViewController *window=NSThread.isMainThread && Fullscreen()?InitialSceneWindow:nil;
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
-    if(!window || !FullscreenGeometry(window,&frame,&orientation,&insets)) {
+    if(!window || OrbitPiPProtectedWindow(window) ||
+       !FullscreenGeometry(window,&frame,&orientation,&insets)) {
         ((void(*)(id,SEL,id))OriginalInitialSettings)(parameters,selector,block);return;
     }
     // Both LC scene APIs configure these parameters before remote activation.
@@ -298,7 +312,8 @@ static void PresenterReady(id scene,SEL selector) {
     }
     InstallFinalSceneHook();
     UIViewController *window=[scene delegate];
-    BOOL managed=Fullscreen() && [window isKindOfClass:WindowClass];
+    BOOL managed=Fullscreen() && [window isKindOfClass:WindowClass] &&
+        !OrbitPiPProtectedWindow(window);
     UIViewController *previous=InitialSceneWindow;
     if(managed) {
         LayoutFullscreen(window);
@@ -314,9 +329,13 @@ static void PresenterReady(id scene,SEL selector) {
         [window.view layoutIfNeeded];
         UpdateScene(window,nil);
     }
+    Class automatic=NSClassFromString(@"LCOrbitAutomaticPiP");
+    SEL refresh=NSSelectorFromString(@"refresh");
+    if([automatic respondsToSelector:refresh]) ((void(*)(id,SEL))objc_msgSend)(automatic,refresh);
 }
 
 static void RestoreAppearance(UIViewController *window) {
+    if(OrbitPiPProtectedWindow(window)) return;
     NSDictionary *snapshot=objc_getAssociatedObject(window,&SnapshotKey);
     if(!snapshot) return;
     PositionHostingView(window,NO);
@@ -349,13 +368,14 @@ static void RestoreAppearance(UIViewController *window) {
 }
 
 static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
+    if(OrbitPiPProtectedWindow(window)) return;
     [window.view.layer removeAllAnimations];
     window.view.transform=CGAffineTransformIdentity;
     window.view.alpha=visible?1:0;
     window.view.hidden=!visible;
 }
 static void Activate(UIViewController *window,SEL selector) {
-    if(![LCOrbitMultitask isEnabled]) return;
+    if(![LCOrbitMultitask isEnabled] || OrbitPiPProtectedWindow(window)) return;
     if(Fullscreen()) for(UIViewController *other in [LCOrbitMultitask windows])
         SetVisible(other,selector,other==window);
     SetVisible(window,selector,YES);
@@ -388,11 +408,11 @@ static void Vertical(UIViewController *window,SEL selector) {
     UpdateScene(window,nil);
 }
 static void Frame(UIViewController *window,SEL selector,id settings) {
-    if(!Fullscreen()) { ((void(*)(id,SEL,id))OriginalFrame)(window,selector,settings);return; }
+    if(!Fullscreen() || OrbitPiPProtectedWindow(window)) { ((void(*)(id,SEL,id))OriginalFrame)(window,selector,settings);return; }
     LayoutFullscreen(window);ConfigureSafeArea(window,settings);
 }
 static UIEdgeInsets SafeArea(UIViewController *window,SEL selector,id settings) {
-    if(!Fullscreen()) return ((UIEdgeInsets(*)(id,SEL,id))OriginalSafeArea)(window,selector,settings);
+    if(!Fullscreen() || OrbitPiPProtectedWindow(window)) return ((UIEdgeInsets(*)(id,SEL,id))OriginalSafeArea)(window,selector,settings);
     ConfigureSafeArea(window,settings);
     return UIEdgeInsetsZero;
 }
@@ -510,6 +530,7 @@ static void HostingBringToFront(UIView *hosting,SEL selector,UIView *view) {
     // LC's Swift Dock reorders the task view directly, bypassing orbit_activate.
     for(UIViewController *window in [LCOrbitMultitask windows]) {
         if(window.view!=view) continue;
+        if(OrbitPiPProtectedWindow(window)) break;
         if(Fullscreen()) for(UIViewController *other in [LCOrbitMultitask windows])
             SetVisible(other,selector,other==window);
         [LCOrbitMultitask didActivateWindow:window];
@@ -550,6 +571,13 @@ static void FindWindows(UIViewController *controller,NSMutableSet *found) {
     }
     for(UIViewController *child in controller.childViewControllers) FindWindows(child,found);
     FindWindows(controller.presentedViewController,found);
+}
+
+static void PiPStopped(id manager,SEL selector,id controller) {
+    ((void(*)(id,SEL,id))OriginalPiPStopped)(manager,selector,controller);
+    // LC first puts content back and clears shouldIgnoreSceneUpdates. This
+    // also finishes a snapshot restoration deferred for LC's manual PiP.
+    dispatch_async(dispatch_get_main_queue(),^{[LCOrbitMultitask refreshPresentation];});
 }
 
 @implementation LCOrbitMultitask (Presentation)
@@ -627,6 +655,9 @@ static void FindWindows(UIViewController *controller,NSMutableSet *found) {
     Replace(sceneClass,@"updateSettingsWithBlock:",(IMP)SceneSettings,&OriginalSceneSettings);
     Replace(parametersClass,@"updateSettingsWithBlock:",(IMP)InitialSceneSettings,&OriginalInitialSettings);
     Replace(sceneClass,@"setUpAppPresenter",(IMP)PresenterReady,&OriginalPresenter);
+    Class pipClass=HostClass(@"PiPManager");
+    if(OrbitMethodMatches(pipClass,@"pictureInPictureControllerDidStopPictureInPicture:",@encode(void),@[@"@"]))
+        Replace(pipClass,@"pictureInPictureControllerDidStopPictureInPicture:",(IMP)PiPStopped,&OriginalPiPStopped);
     installed=YES;
     return YES;
 }
@@ -648,7 +679,8 @@ static void FindWindows(UIViewController *controller,NSMutableSet *found) {
         if(!active) for(UIViewController *window in found)
             if(!window.view.hidden) active=window;
         for(UIViewController *window in found) LayoutFullscreen(window);
-        if(active) Activate(active,NSSelectorFromString(@"orbit_activate"));
+        if(active && !OrbitPiPProtectedWindow(active))
+            Activate(active,NSSelectorFromString(@"orbit_activate"));
     } else {
         BOOL restored=NO;
         for(UIViewController *window in found) {

@@ -60,6 +60,7 @@ static BOOL UIInterfaceOrientationIsLandscape(NSInteger orientation) { return or
 @interface OrbitScene : NSObject
 @property(nonatomic,strong) UIView *view,*contentView;
 @property CGFloat scaleRatio;
+@property BOOL shouldIgnoreSceneUpdates;
 @property(nonatomic,strong) OrbitScene *presenter,*scene;
 @property(nonatomic,strong) OrbitSettings *settings;
 - (void)updateSettingsWithBlock:(void (^)(OrbitSettings *))block;
@@ -98,9 +99,24 @@ static BOOL UIInterfaceOrientationIsLandscape(NSInteger orientation) { return or
 
 static char SnapshotKey,ConstraintsKey;
 static IMP OriginalVertical;
+static IMP OriginalPiPStopped;
+static NSUInteger NativePiPStops,PiPRestores;
+static OrbitWindow *PiPRestoreWindow;
+@interface LCOrbitMultitask : NSObject
++ (void)refreshPresentation;
+@end
 static OrbitScene *SceneController(UIViewController *window) {return window.appSceneVC;}
+static BOOL OrbitPiPProtectedWindow(UIViewController *window) {return window.appSceneVC.shouldIgnoreSceneUpdates;}
 static void PositionHostingView(UIViewController *window,BOOL fullscreen) {}
 #include "restore.inc"
+#include "pip-stopped.inc"
+@implementation LCOrbitMultitask
++ (void)refreshPresentation {PiPRestores++;RestoreAppearance(PiPRestoreWindow);}
+@end
+static void NativePiPStopped(id object,SEL selector,id controller) {
+    NativePiPStops++;
+    PiPRestoreWindow.appSceneVC.shouldIgnoreSceneUpdates=NO;
+}
 
 @implementation OrbitWindow
 // These three methods are extracted verbatim from LC's source by the runner.
@@ -128,9 +144,19 @@ int main(void) {
             @"contentTransform":Transform(CGAffineTransformIdentity),@"contentSublayer":[NSValue valueWithCATransform3D:CATransform3DIdentity]};
         objc_setAssociatedObject(window,&SnapshotKey,snapshot,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         OriginalVertical=(IMP)NativeVertical;
-        RestoreAppearance(window);
         unsigned failures=0,assertions=0;
 #define EXPECT(condition,message) do {assertions++;if(!(condition)){failures++;fprintf(stderr,"FAIL: %s\n",message);}}while(0)
+        window.appSceneVC.shouldIgnoreSceneUpdates=YES;
+        window.appSceneVC.scaleRatio=.5;
+        RestoreAppearance(window);
+        EXPECT(CGRectEqualToRect(window.view.frame,CGRectMake(0,0,390,844)),"active PiP defers decorated-window geometry restoration");
+        EXPECT(window.appSceneVC.scaleRatio==.5,"active PiP content scale is not overwritten");
+        EXPECT(objc_getAssociatedObject(window,&SnapshotKey)!=nil,"active PiP retains snapshot for later restoration");
+        PiPRestoreWindow=window;OriginalPiPStopped=(IMP)NativePiPStopped;
+        PiPStopped(nil,NSSelectorFromString(@"pictureInPictureControllerDidStopPictureInPicture:"),nil);
+        EXPECT(NativePiPStops==1 && PiPRestores==0,"native PiP callback completes before deferred presentation restoration");
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.05]];
+        EXPECT(PiPRestores==1 && objc_getAssociatedObject(window,&SnapshotKey)==nil,"ending manual PiP completes the retained snapshot restoration");
         EXPECT(CGSizeEqualToSize(window.originalFrame.size,CGSizeMake(320,524)),"disable initializes LC's saved window dimensions");
         EXPECT(fabs(window.originalFrame.origin.x-35.0/390)<0.00001 && fabs(window.originalFrame.origin.y-100.0/844)<0.00001,"disable restores normalized window position for rotation");
         EXPECT(CGSizeEqualToSize(window.appSceneVC.contentView.frame.size,CGSizeMake(320,480)),"disable resizes remote content after restoring native control bar");

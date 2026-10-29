@@ -23,7 +23,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.3"
+#define FM_MENU_VERSION @"1.0.4"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -260,6 +260,74 @@ static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL co
     rim.lineWidth=collapsed?.9:.75;
     [glass.layer addSublayer:rim];
 }
+// One compatible, four-segment path at every phase. The free-floating
+// outline is a *symmetric stadium*: its rounded top and bottom reach the
+// same midpoint whether docking to the left or to the right. The side
+// shoulders are grown only after the bead has snapped to the destination.
+// Matching control points prevent CAPath's trapezoid/flip interpolation.
+static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
+    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
+    CGFloat r=MIN(w*.5,h*.5);
+    CGFloat flare=MIN(w*1.3,h*.32);
+    CGFloat dock=1-Clamp(opened,0,1); // 0: neutral capsule; 1: docked shoulders
+    CGFloat capsuleTopControl=r-r*4/3.; // cubic upper semicircle reaches y=0
+    CGFloat capsuleBottomControl=h-r+r*4/3.;
+    CGFloat topY=r*(1-dock);
+    CGFloat innerTop=r*(1-dock)+flare*dock;
+    CGFloat bottomY=(h-r)*(1-dock)+h*dock;
+    UIBezierPath *path=[UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(w,topY)];
+    [path addCurveToPoint:CGPointMake(0,innerTop)
+            controlPoint1:CGPointMake(w,capsuleTopControl*(1-dock)+flare*.65*dock)
+            controlPoint2:CGPointMake(0,capsuleTopControl*(1-dock)+flare*.35*dock)];
+    [path addLineToPoint:CGPointMake(0,h-innerTop)];
+    [path addCurveToPoint:CGPointMake(w,bottomY)
+            controlPoint1:CGPointMake(0,capsuleBottomControl*(1-dock)+(h-flare*.35)*dock)
+            controlPoint2:CGPointMake(w,capsuleBottomControl*(1-dock)+(h-flare*.65)*dock)];
+    [path closePath];
+    if(left) {
+        CGAffineTransform mirror=CGAffineTransformMake(-1,0,0,1,w,0);
+        [path applyTransform:mirror];
+    }
+    return path;
+}
+static void FMAnimateOrbPath(CALayer *layer,NSString *key,CGPathRef destination,BOOL animated) {
+    if(!layer) return;
+    if(animated && !UIAccessibilityIsReduceMotionEnabled()) {
+        CGPathRef current=nil;
+        if([key isEqualToString:@"shadowPath"])
+            current=((CALayer *)layer.presentationLayer).shadowPath ?: layer.shadowPath;
+        else
+            current=((CAShapeLayer *)layer.presentationLayer).path ?: ((CAShapeLayer *)layer).path;
+        if(current) {
+            CABasicAnimation *morph=[CABasicAnimation animationWithKeyPath:key];
+            morph.fromValue=(__bridge id)current;
+            morph.toValue=(__bridge id)destination;
+            morph.duration=.26;
+            morph.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            [layer addAnimation:morph forKey:@"fm.orb.shoulders"];
+        }
+    } else [layer removeAnimationForKey:@"fm.orb.shoulders"];
+    if([key isEqualToString:@"shadowPath"]) layer.shadowPath=destination;
+    else ((CAShapeLayer *)layer).path=destination;
+}
+static void FMAnimateOrbShoulders(UIButton *button,BOOL left,CGFloat opened,BOOL animated) {
+    UIView *glass=[button viewWithTag:9202];
+    CAShapeLayer *mask=(CAShapeLayer *)glass.layer.mask;
+    if(![mask isKindOfClass:CAShapeLayer.class]) return;
+    CAShapeLayer *rim=nil;
+    for(CALayer *layer in glass.layer.sublayers)
+        if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
+            rim=(CAShapeLayer *)layer;break;
+        }
+    // Own the Bezier wrapper until all layers retain the CGPath. A borrowed
+    // CGPathRef from a temporary UIBezierPath can be freed mid-animation.
+    UIBezierPath *outline=FMOrbDragPath(glass.bounds,left,opened);
+    CGPathRef destination=outline.CGPath;
+    FMAnimateOrbPath(mask,@"path",destination,animated);
+    FMAnimateOrbPath(rim,@"path",destination,animated);
+    FMAnimateOrbPath(button.layer,@"shadowPath",destination,animated);
+}
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
     return NO;
@@ -350,10 +418,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return result;
 }
 
-@interface FMHitButton : UIButton @end
+@interface FMHitButton : UIButton
+@property(nonatomic,assign) BOOL docksLeft;
+@end
 @implementation FMHitButton
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
-    return CGRectContainsPoint(CGRectInset(self.bounds,-14,-10),p);
+    // The bead is flush against a screen edge: symmetric insets waste half
+    // the extra width offscreen. Keep >=44pt on the *inside* of that edge.
+    CGFloat width=MAX(44.,CGRectGetWidth(self.bounds));
+    CGFloat height=MAX(44.,CGRectGetHeight(self.bounds)+20.);
+    CGFloat x=self.docksLeft?0:CGRectGetWidth(self.bounds)-width;
+    CGRect hit=CGRectMake(x,(CGRectGetHeight(self.bounds)-height)*.5,width,height);
+    return CGRectContainsPoint(hit,p);
 }
 @end
 
@@ -503,7 +579,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self scheduleAppearanceCheck];
 }
 - (CGFloat)orbWidth { return 16*FMOrbScale(); }
-- (CGFloat)orbHeight { return 64*FMOrbScale(); }
+- (CGFloat)orbHeight { return 72*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -650,13 +726,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)drawOrb {
     [self.orb removeFromSuperview]; self.orb=nil;
     CGRect f=[self orbFrame];
-    UIButton *button=[FMHitButton buttonWithType:UIButtonTypeCustom];
+    FMHitButton *button=[FMHitButton buttonWithType:UIButtonTypeCustom];
+    button.docksLeft=self.left;
     button.frame=f;
     button.layer.shadowColor=FMAccent().CGColor;
     button.layer.shadowOpacity=.24;button.layer.shadowRadius=6;
     button.layer.shadowOffset=CGSizeMake(0,1);
     UIView *bead=[self glass:button.bounds radius:f.size.width*.5 strong:NO];
     FMApplySideNotch(bead,button.layer,self.left,YES,YES);
+    for(CALayer *layer in bead.layer.sublayers)
+        if([layer isKindOfClass:CAShapeLayer.class]) layer.name=@"fm.orb.rim";
     bead.userInteractionEnabled=NO;
     bead.tag=9202;
     [button addSubview:bead];
@@ -733,22 +812,35 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
         CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
         UIEdgeInsets safe=self.window.safeAreaInsets;
-        CGFloat minX=safe.left+orbW*.5, maxX=MAX(minX,w-safe.right-orbW*.5);
+        CGFloat minX=safe.left+orbW*.5,maxX=MAX(minX,w-safe.right-orbW*.5);
         CGFloat minY=MAX(60,safe.top+6)+orbH/2;
         CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
         self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
+        if(g.state==UIGestureRecognizerStateBegan)
+            FMAnimateOrbShoulders(self.orb,self.left,1,YES);
         if(g.state==UIGestureRecognizerStateChanged) self.orb.alpha=1;
     } else if(g.state==UIGestureRecognizerStateEnded) {
-        self.left=self.orb.center.x < self.window.bounds.size.width*.5;
+        self.left=self.orb.center.x<self.window.bounds.size.width*.5;
+        ((FMHitButton *)self.orb).docksLeft=self.left;
         self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
-        SetPref(@"onLeft",@(self.left)); SetPref(@"orbY",@(self.orbY));
+        SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
         if(UIAccessibilityIsReduceMotionEnabled()) {
             self.orb.frame=[self orbFrame];
             [self draw];
-        } else [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.74
-             initialSpringVelocity:.35 options:UIViewAnimationOptionCurveEaseOut animations:^{
-                self.orb.frame=[self orbFrame];
-             } completion:^(BOOL done){[self draw];}];
+        } else {
+            UIButton *dragged=self.orb;
+            [UIView animateWithDuration:.34 delay:0 usingSpringWithDamping:.78
+                initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
+                animations:^{dragged.frame=[self orbFrame];}
+                completion:^(BOOL finished){
+                    if(!finished || self.orb!=dragged) return;
+                    // The neutral capsule is mirror-invariant. Once the
+                    // snap finishes, grow the destination-side shoulders.
+                    FMAnimateOrbShoulders(dragged,self.left,0,YES);
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.25*NSEC_PER_SEC),
+                        dispatch_get_main_queue(),^{if(self.orb==dragged)[self draw];});
+                }];
+        }
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         [self draw];
     }
@@ -1555,9 +1647,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         [self settingSwitch:s title:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
     } else if([category isEqualToString:@"apps"]) {
-        [self perAppPage:s];
-        [self spacer:s size:20];
         [self managePage:s];
+        [self spacer:s size:20];
+        [self perAppPage:s];
     } else {
         [self section:@"分开查看日志" sub:nil in:s];
         [self addRow:[self rowForTitle:@"微珠运行日志" icon:@"doc.text.magnifyingglass" height:54 action:@selector(openMenuLogs)] height:54 to:s];
@@ -1783,9 +1875,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self spacer:s size:10];
     [self diyPage:s];
     [self spacer:s size:10];
-    [self perAppPage:s];
-    [self spacer:s size:10];
     [self managePage:s];
+    [self spacer:s size:10];
+    [self perAppPage:s];
     [self spacer:s size:10];
     [self section:@"诊断" sub:nil in:s];
     [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:44 action:@selector(exportLogs)] height:44 to:s];
@@ -1916,62 +2008,145 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 - (void)sortDrag:(UILongPressGestureRecognizer *)gesture {
     if(!self.manageRows.count) return;
-    UIView *surface=self.settingsNavigation.topViewController.view ?: self.panel;
-    if(!surface) return;
-    UIView *handle=gesture.view;
-    UIView *sourceRow=handle.superview;
-    NSDictionary *app=objc_getAssociatedObject(handle,@selector(sortDrag:));
-    if(!app) return;
-    CGPoint finger=[gesture locationInView:surface];
-    static const CGFloat kMaxMotion=260;
+    UIView *sourceRow=gesture.view;
+    NSDictionary *app=objc_getAssociatedObject(sourceRow,@selector(sortDrag:));
+    if(!app || ![sourceRow.superview isKindOfClass:UIStackView.class]) return;
+    UIStackView *group=(UIStackView *)sourceRow.superview;
+    NSMutableDictionary *state=objc_getAssociatedObject(gesture,@selector(sortDrag:));
+    CGPoint finger=[gesture locationInView:group];
     if(gesture.state==UIGestureRecognizerStateBegan) {
-        objc_setAssociatedObject(gesture,@selector(sortDrag:),@(finger.y),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [group layoutIfNeeded];
+        NSUInteger original=[group.arrangedSubviews indexOfObjectIdenticalTo:sourceRow];
+        if(original==NSNotFound) return;
+        UIView *lifted=[sourceRow snapshotViewAfterScreenUpdates:NO];
+        if(!lifted) {
+            // Detached/transitioning UIKit views can return nil here. Draw
+            // the row into an image so the drag still has a lifted surface.
+            UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc]
+                initWithSize:sourceRow.bounds.size];
+            UIImage *snapshot=[renderer imageWithActions:^(UIGraphicsImageRendererContext *context){
+                [sourceRow.layer renderInContext:context.CGContext];
+            }];
+            lifted=[[UIImageView alloc] initWithImage:snapshot];
+        }
+        lifted.frame=sourceRow.frame;
+        lifted.userInteractionEnabled=NO;
+        lifted.layer.cornerRadius=13;
+        lifted.layer.masksToBounds=NO;
+        lifted.layer.shadowColor=UIColor.blackColor.CGColor;
+        lifted.layer.shadowOpacity=.20;
+        lifted.layer.shadowRadius=11;
+        lifted.layer.shadowOffset=CGSizeMake(0,5);
+        // Keep the original arranged row in the stack as a real 68pt slot.
+        // Only its contents are hidden: moving that slot makes neighbors
+        // animate away and leaves a clearly visible destination vacancy.
+        for(UIView *child in sourceRow.subviews) child.alpha=0;
+        sourceRow.backgroundColor=[FMAccent() colorWithAlphaComponent:.095];
+        sourceRow.layer.cornerRadius=12;
+        sourceRow.layer.borderWidth=.9;
+        sourceRow.layer.borderColor=[FMAccent() colorWithAlphaComponent:.36].CGColor;
+        [group addSubview:lifted];
+        [group bringSubviewToFront:lifted];
+        state=[@{@"group":group,@"lifted":lifted,
+                 @"startY":@(finger.y),@"centerY":@(CGRectGetMidY(sourceRow.frame)),
+                 @"original":@(original),@"index":@(original)} mutableCopy];
+        objc_setAssociatedObject(gesture,@selector(sortDrag:),state,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if(BoolPref(@"haptic",YES))
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-        sourceRow.layer.zPosition=10;
-        sourceRow.alpha=.82;
-    } else if(gesture.state==UIGestureRecognizerStateChanged) {
-        CGFloat initial=[objc_getAssociatedObject(gesture,@selector(sortDrag:)) doubleValue];
-        sourceRow.transform=CGAffineTransformMakeTranslation(0,Clamp(finger.y-initial,-kMaxMotion,kMaxMotion));
-    } else if(gesture.state==UIGestureRecognizerStateEnded) {
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        FMLog(@"menu-reorder-start",FMAppKey(app));
+    } else if(gesture.state==UIGestureRecognizerStateChanged && state) {
+        UIView *lifted=state[@"lifted"];
+        CGFloat y=[state[@"centerY"] doubleValue]+finger.y-[state[@"startY"] doubleValue];
+        lifted.center=CGPointMake(CGRectGetMidX(sourceRow.frame),y);
+        // Compute insertion against real, untransformed row frames, rather
+        // than against the floating snapshot. The vacancy travels live.
+        NSUInteger destination=0;
+        for(UIView *row in group.arrangedSubviews) {
+            if(row==sourceRow) continue;
+            if(y>CGRectGetMidY(row.frame)) destination++;
+        }
+        if(destination!=[state[@"index"] unsignedIntegerValue]) {
+            [group layoutIfNeeded];
+            [group insertArrangedSubview:sourceRow atIndex:destination];
+            state[@"index"]=@(destination);
+            [UIView animateWithDuration:.23 delay:0
+                options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut
+                animations:^{ [group layoutIfNeeded]; }
+                completion:nil];
+            // A subtle tick signals the slot has moved, not every frame.
+            if(BoolPref(@"haptic",YES))
+                [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+        }
+    } else if(gesture.state==UIGestureRecognizerStateEnded ||
+              gesture.state==UIGestureRecognizerStateCancelled ||
+              gesture.state==UIGestureRecognizerStateFailed) {
+        BOOL cancelled=gesture.state!=UIGestureRecognizerStateEnded;
         NSArray *items=[self visibleApps];
         NSUInteger from=[items indexOfObject:app];
-        if(from!=NSNotFound && from<items.count) {
-            // Use other rows' original centers as insertion boundaries.
-            // Including the transformed source row made drop targets unstable.
+        NSUInteger destination=from;
+        if(state) {
+            NSUInteger index=[state[@"index"] unsignedIntegerValue];
+            destination=cancelled?[state[@"original"] unsignedIntegerValue]:index;
+            if(cancelled && destination!=index) {
+                [group layoutIfNeeded];
+                [group insertArrangedSubview:sourceRow atIndex:destination];
+                [UIView animateWithDuration:.20 delay:0
+                    options:UIViewAnimationOptionBeginFromCurrentState
+                    animations:^{ [group layoutIfNeeded]; } completion:nil];
+            }
+        } else if(!cancelled) {
+            // Also support interruption/recovery if a recognizer has no
+            // matching Began callback; never leave the app unmovable.
+            UIView *surface=self.settingsNavigation.topViewController.view ?: self.panel;
+            if(!surface) return;
+            CGPoint location=[gesture locationInView:surface];
             NSUInteger insertion=0;
             for(NSUInteger i=0;i<self.manageRows.count;i++) {
                 if(i==from) continue;
                 UIView *row=self.manageRows[i];
                 CGRect rect=[row convertRect:row.bounds toView:surface];
-                if(finger.y>CGRectGetMidY(rect)) insertion=i+1;
+                if(location.y>CGRectGetMidY(rect)) insertion=i+1;
             }
-            NSUInteger to=insertion>from?insertion-1:insertion;
-            to=MIN(to,items.count-1);
-            if(to!=from) {
-                NSMutableArray *order=[NSMutableArray arrayWithCapacity:items.count];
-                for(NSDictionary *item in items) [order addObject:FMAppKey(item)];
-                NSString *moving=order[from];
-                [order removeObjectAtIndex:from];
-                [order insertObject:moving atIndex:to];
-                SetPref(@"menuOrder",order);
-                FMLog(@"menu-reordered",@"drag");
-            }
+            destination=insertion>from?insertion-1:insertion;
         }
-        sourceRow.transform=CGAffineTransformIdentity;
-        sourceRow.layer.zPosition=0;
-        sourceRow.alpha=1;
-        [self refreshUI];
-    } else if(gesture.state==UIGestureRecognizerStateCancelled ||
-              gesture.state==UIGestureRecognizerStateFailed) {
-        sourceRow.transform=CGAffineTransformIdentity;
-        sourceRow.layer.zPosition=0;
-        sourceRow.alpha=1;
+        if(!cancelled && from!=NSNotFound && destination!=NSNotFound &&
+           destination<items.count && from!=destination) {
+            NSMutableArray *order=[NSMutableArray arrayWithCapacity:items.count];
+            for(NSDictionary *item in items) [order addObject:FMAppKey(item)];
+            NSString *moving=order[from];
+            [order removeObjectAtIndex:from];
+            [order insertObject:moving atIndex:destination];
+            SetPref(@"menuOrder",order);
+            FMLog(@"menu-reordered",@"animated-slot");
+        }
+        if(state) {
+            UIView *lifted=state[@"lifted"];
+            objc_setAssociatedObject(gesture,@selector(sortDrag:),nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [group layoutIfNeeded];
+            [UIView animateWithDuration:.22 delay:0
+                options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseOut
+                animations:^{
+                    lifted.frame=sourceRow.frame;
+                    lifted.alpha=.93;
+                } completion:^(BOOL finished) {
+                    [lifted removeFromSuperview];
+                    for(UIView *child in sourceRow.subviews) child.alpha=1;
+                    sourceRow.backgroundColor=UIColor.clearColor;
+                    sourceRow.layer.borderWidth=0;
+                    sourceRow.layer.borderColor=nil;
+                    sourceRow.layer.cornerRadius=0;
+                    [self refreshUI];
+                }];
+        } else if(!cancelled) [self refreshUI];
     }
 }
 - (void)managePage:(UIStackView*)stack {
-    [self section:@"收藏与排序" sub:nil in:stack];
+    BOOL hostUI=FMHostUI();
+    [self section:@"应用列表" sub:hostUI?
+        @"左侧圆圈收藏 · 长按整行排序 · 右侧开关控制离开 LC 自动画中画":
+        @"左侧圆圈收藏 · 长按整行排序" in:stack];
     NSArray<NSDictionary*> *apps=[self visibleApps];
+    NSArray<NSString *> *pins=[self favorites];
     self.manageRows=[NSMutableArray arrayWithCapacity:apps.count];
     UIStackView *group=[UIStackView new];
     group.axis=UILayoutConstraintAxisVertical;
@@ -1979,16 +2154,35 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     group.distribution=UIStackViewDistributionFill;
     group.spacing=0;
     group.backgroundColor=FMThemeColor(FMColorSurface);
-    group.layer.cornerRadius=18;
-    group.clipsToBounds=YES;
+    group.layer.cornerRadius=17;
+    // Don't clip a lifted row during the full-row drag gesture.
+    group.clipsToBounds=NO;
     [stack addArrangedSubview:group];
     for(NSUInteger i=0;i<apps.count;i++) {
         NSDictionary *app=apps[i];
-        UIView *row=[[UIView alloc] init];
+        BOOL showsAutoPiP=hostUI && ![app[@"builtin"] boolValue];
+        UIView *row=[UIView new];
         row.backgroundColor=UIColor.clearColor;
-        [row.heightAnchor constraintEqualToConstant:65].active=YES;
+        [row.heightAnchor constraintEqualToConstant:68].active=YES;
         [group addArrangedSubview:row];
-        UIView *icon=[self iconViewForApp:app size:43];
+        // Selected circular control = favorite. The four-favorite limit and
+        // scoped private/shared identity are handled by the existing pinApp:.
+        BOOL favored=[pins containsObject:FMAppKey(app)] || [pins containsObject:app[@"path"]];
+        UIButton *selection=[UIButton buttonWithType:UIButtonTypeSystem];
+        selection.translatesAutoresizingMaskIntoConstraints=NO;
+        UIImageSymbolConfiguration *circleStyle=[UIImageSymbolConfiguration
+            configurationWithPointSize:17 weight:UIImageSymbolWeightLight];
+        [selection setImage:[UIImage systemImageNamed:favored?@"checkmark.circle":@"circle"
+                                   withConfiguration:circleStyle] forState:UIControlStateNormal];
+        selection.tintColor=favored?FMAccent():FMThemeColor(FMColorSecondary);
+        selection.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",
+            app[@"title"]?:@"App",favored?@"已收藏，点击取消":@"未收藏，点击收藏"];
+        selection.accessibilityTraits=UIAccessibilityTraitButton|
+            (favored?UIAccessibilityTraitSelected:0);
+        objc_setAssociatedObject(selection,@selector(pinApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [selection addTarget:self action:@selector(pinApp:) forControlEvents:UIControlEventTouchUpInside];
+        [row addSubview:selection];
+        UIView *icon=[self iconViewForApp:app size:42];
         icon.translatesAutoresizingMaskIntoConstraints=NO;
         icon.userInteractionEnabled=NO;
         [row addSubview:icon];
@@ -1997,60 +2191,50 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         name.numberOfLines=1;
         name.lineBreakMode=NSLineBreakByTruncatingTail;
         [row addSubview:name];
-        UIButton *pin=[UIButton buttonWithType:UIButtonTypeSystem];
-        pin.translatesAutoresizingMaskIntoConstraints=NO;
-        BOOL favored=[[self favorites] containsObject:FMAppKey(app)] || [[self favorites] containsObject:app[@"path"]];
-        UIImageSymbolConfiguration *starConfig=[UIImageSymbolConfiguration
-            configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
-        [pin setImage:[UIImage systemImageNamed:favored?@"star.fill":@"star"
-                              withConfiguration:starConfig] forState:UIControlStateNormal];
-        pin.tintColor=favored?(FMMenuDark()?RGBA(1,.77,.30,1):RGBA(.55,.35,.03,1)):
-                            FMThemeColor(FMColorSecondary);
-        pin.accessibilityLabel=favored?@"取消收藏":@"添加到收藏";
-        objc_setAssociatedObject(pin,@selector(pinApp:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [pin addTarget:self action:@selector(pinApp:) forControlEvents:UIControlEventTouchUpInside];
-        [row addSubview:pin];
-        UIView *handle=[UIView new];
-        handle.translatesAutoresizingMaskIntoConstraints=NO;
-        handle.isAccessibilityElement=YES;
-        handle.accessibilityLabel=[NSString stringWithFormat:@"拖动排序 %@",app[@"title"]];
-        handle.accessibilityTraits=UIAccessibilityTraitButton;
-        UIImageView *lines=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal"]];
-        lines.translatesAutoresizingMaskIntoConstraints=NO;
-        lines.contentMode=UIViewContentModeScaleAspectFit;
-        lines.tintColor=FMThemeColor(FMColorSecondary);
-        [handle addSubview:lines];
-        UILongPressGestureRecognizer *drag=[[UILongPressGestureRecognizer alloc]
-            initWithTarget:self action:@selector(sortDrag:)];
-        drag.minimumPressDuration=.30;
-        [handle addGestureRecognizer:drag];
-        objc_setAssociatedObject(handle,@selector(sortDrag:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [row addSubview:handle];
         [NSLayoutConstraint activateConstraints:@[
-            [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:12],
+            [selection.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:9],
+            [selection.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [selection.widthAnchor constraintEqualToConstant:42],
+            [selection.heightAnchor constraintEqualToConstant:54],
+            [icon.leadingAnchor constraintEqualToAnchor:selection.trailingAnchor constant:5],
             [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [icon.widthAnchor constraintEqualToConstant:43],
-            [icon.heightAnchor constraintEqualToConstant:43],
+            [icon.widthAnchor constraintEqualToConstant:42],
+            [icon.heightAnchor constraintEqualToConstant:42],
             [name.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:11],
             [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [name.trailingAnchor constraintLessThanOrEqualToAnchor:pin.leadingAnchor constant:-6],
-            [pin.widthAnchor constraintEqualToConstant:46],
-            [pin.heightAnchor constraintEqualToConstant:50],
-            [pin.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [pin.trailingAnchor constraintEqualToAnchor:handle.leadingAnchor],
-            [handle.widthAnchor constraintEqualToConstant:48],
-            [handle.heightAnchor constraintEqualToConstant:60],
-            [handle.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [handle.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-5],
-            [lines.widthAnchor constraintEqualToConstant:19],
-            [lines.heightAnchor constraintEqualToConstant:17],
-            [lines.centerXAnchor constraintEqualToAnchor:handle.centerXAnchor],
-            [lines.centerYAnchor constraintEqualToAnchor:handle.centerYAnchor]
+            [name.trailingAnchor constraintLessThanOrEqualToAnchor:row.trailingAnchor constant:-16]
         ]];
+        if(showsAutoPiP) {
+            UISwitch *control=[UISwitch new];
+            control.translatesAutoresizingMaskIntoConstraints=NO;
+            control.onTintColor=FMAccent();
+            control.on=[LCOrbitMultitask automaticPiPEnabledForGuest:app];
+            NSString *title=app[@"title"]?:app[@"path"]?:@"App";
+            control.accessibilityLabel=[title stringByAppendingString:@"，离开 LC 自动画中画"];
+            [control setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                    forAxis:UILayoutConstraintAxisHorizontal];
+            objc_setAssociatedObject(control,@selector(automaticPiPChanged:),app,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [control addTarget:self action:@selector(automaticPiPChanged:)
+                forControlEvents:UIControlEventValueChanged];
+            [row addSubview:control];
+            [NSLayoutConstraint activateConstraints:@[
+                [control.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-15],
+                [control.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+                [name.trailingAnchor constraintLessThanOrEqualToAnchor:control.leadingAnchor constant:-10]
+            ]];
+        }
+        UILongPressGestureRecognizer *drag=[[UILongPressGestureRecognizer alloc]
+            initWithTarget:self action:@selector(sortDrag:)];
+        drag.minimumPressDuration=.35;
+        drag.cancelsTouchesInView=YES;
+        [row addGestureRecognizer:drag];
+        objc_setAssociatedObject(row,@selector(sortDrag:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        row.accessibilityIdentifier=[@"fm.manage.row." stringByAppendingString:FMAppKey(app)];
         if(i+1<apps.count) {
             UIView *divider=[UIView new];
             divider.translatesAutoresizingMaskIntoConstraints=NO;
-            divider.backgroundColor=FMThemeColor(FMColorBorder);
+            divider.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.38];
             [row addSubview:divider];
             [NSLayoutConstraint activateConstraints:@[
                 [divider.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
@@ -2080,6 +2264,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
     }
 }
+
 - (void)perAppPage:(UIStackView*)s {
     [self section:FMHostUI()?@"LC 主界面独立设置":@"当前 App 独立设置" sub:GuestID() in:s];
     [self settingSwitch:s title:@"启用独立设置" key:[@"override." stringByAppendingString:GuestID()] defaultValue:NO tag:7];
@@ -2091,6 +2276,14 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self section:@"单任务切换行为" sub:nil in:s];
     [self settingSwitch:s title:@"当前 App 切换前确认" key:AppPref() defaultValue:BoolPref(@"confirm",YES) tag:4];
 
+}
+- (void)automaticPiPChanged:(UISwitch *)control {
+    NSDictionary *app=objc_getAssociatedObject(control,@selector(automaticPiPChanged:));
+    NSError *error=nil;
+    if(!app || ![LCOrbitMultitask setAutomaticPiPEnabled:control.isOn forGuest:app error:&error]) {
+        control.on=app?[LCOrbitMultitask automaticPiPEnabledForGuest:app]:NO;
+        [self showMessage:@"设置未保存" details:error.localizedDescription?:@"无法设置此 App 的自动画中画。"];
+    }
 }
 - (void)multitaskModeChanged:(UISegmentedControl *)control {
     NSError *error=nil;
@@ -2668,7 +2861,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     section.textColor=FMThemeColor(FMColorSecondary);
     section.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
     [stack addArrangedSubview:section];
-    UIControl *apps=[self navigationRow:@"应用管理" subtitle:@"每 App 设置、收藏与排序"
+    UIControl *apps=[self navigationRow:@"应用管理" subtitle:FMHostUI()?@"收藏、排序、自动画中画与独立设置":@"收藏、排序与独立设置"
                                symbol:@"square.stack.3d.up" action:@selector(openApps)];
     [apps.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:apps];

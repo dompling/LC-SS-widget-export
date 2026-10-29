@@ -19,6 +19,7 @@ static IMP OriginalMinimize;
 static NSArray *ManagedWindows;
 static id Active;
 static NSUInteger GeometryUpdates,FrontCalls;
+static BOOL OrbitPiPProtectedWindow(UIViewController *window) { return NO; }
 static void SetVisible(UIViewController *window,SEL selector,BOOL visible) { window.view.hidden=!visible; }
 static void UpdateScene(UIViewController *window,id settings) { GeometryUpdates++; }
 static void NativeFront(id object,SEL selector,id view) { FrontCalls++; }

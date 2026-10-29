@@ -135,6 +135,14 @@ JSON 仅存放插件自身配置，不包含 LC 证书、系统多任务偏好�
 
 也可进入 **微珠 → 设置 → 开启多任务 / 多任务切换菜单** 调整。
 
+### 按 App 自动画中画
+
+在 **微珠设置 → 应用管理 → 对应 App → 离开 LC 自动画中画** 为实际安装的 App 单独打开开关，默认关闭。每个 App 的图标、名称、收藏、拖动排序和自动画中画开关集中在同一条记录中，LC 主界面或当前 App 的独立设置位于应用列表下方。共享和私有的同名 App 分别保存设置；可以提前配置，实际仅在兼容的 LC 多任务窗口运行时生效。插件菜单不再显示手动画中画按钮，LC 自己的原生入口保留。
+
+插件会在前台准备当前 App 的系统 PiP 控制器，离开 LC 时由 AVKit 自动启动；仅在 LC 内切换任务不会主动启动 PiP。关闭对应开关、禁用多任务或微珠，会撤销插件自己准备的 PiP；已有活动 PiP 先通过 LC 原有委托移回内容，再清理绑定。用户手动创建的 LC PiP 控制器不由插件替换或停止。模式切换期间，正在 PiP 中的内容延后恢复窗口样式，待 LC 完成退出 PiP 后再恢复。
+
+开关保存在 `Documents/LCOrbit/config.json` 的 `LCFloatingMenu.autoPiPApps` 字符串数组中，记录 `private/Name.app` 或 `shared/Name.app` 身份。运行日志记录 `auto-pip-armed`、`auto-pip-starting`、`auto-pip-stopped`、`auto-pip-failed` 等事件。系统 PiP 仍只展示 App 内容，不提供跨 App 触摸操作；后台自动启动效果需要设备验证。
+
 **只需在 LC 宿主启用微珠。** 子任务不用选择微珠插件目录，也不要求启用 Guest 的 TweakLoader。宿主全屏多任务启动资格不会因 Guest 禁用了插件加载器而被拒绝。即使共享全局目录导致 dylib 被映射进 LiveProcess，插件入口也会立即返回，不启动第二份 Core、微珠、日志审计或生命周期监听；普通经典单任务 Guest 保留原有插件行为。
 
 - 微珠通过 LC 原有的 Objective-C 多任务启动接口启动 Guest，复用 LC 的容器、远程场景、键盘事件转发和退出清理；不修改 LC 源码或安装包。
@@ -162,7 +170,7 @@ JSON 仅存放插件自身配置，不包含 LC 证书、系统多任务偏好�
 
 ## Gemini-design UI overhaul
 
-- Edge microbead: default 12 x 38 pt, snap-to-edge, enlarged touch target, configurable collapsed opacity and long-press shortcuts.
+- Edge microbead: default 16 x 72 pt, snap-to-edge, enlarged touch target, configurable collapsed opacity and long-press shortcuts.
 - **Final drawer design:** Compact mode is one continuous ~108pt-wide Liquid Glass side drawer. Real Guest app icons (50pt) form a single centered vertical row, separated from a **fixed, vertical** action area by one fine hairline. Home, Settings, Collapse use matching 50pt glass icon tiles; Restart is optional. Only the app icon region scrolls. Standard mode uses the **same optical glass, cool edge highlight and matching tile rhythm** in a ~310pt-wide list, with app labels and a compact horizontal icon footer. Both retain a 75%-120% size control and screen bounds protection.
 - Genuine LC app icons: first LCAppIconLight.png / LCAppIconDark.png in Guest bundle; fallback to CFBundleIcons assets or neutral icon (never fake initials).
 - Settings center: preview, haptics, DIY workshop, manager, per-App controls and diagnostics export.

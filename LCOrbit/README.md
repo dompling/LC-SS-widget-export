@@ -12,6 +12,7 @@ Stage 1 refactors the standalone `LCFloatingMenu.dylib` into a module plus a sha
 - `Core/LCOrbitEventBus.*`: in-process notifications for decoupled modules.
 - `Core/LCOrbitStorage.*`: schema-versioned JSON preferences with legacy key migration, last-good recovery and process locks.
 - `Core/LCOrbitLog.*`: structured bounded runtime/audit JSON logs and legacy history import.
+- `Core/LCOrbitAutomaticPiP.m`: foreground preparation for per-App opt-in system PiP, with checked runtime interfaces and LC delegate-based content migration/restoration.
 - `Build/build.sh`: build a sign-ready arm64 dylib compatible with existing LC tweak installation.
 - `Tests/verify.sh`: static smoke checks for target platform, architecture, symbols and legacy launch/pref paths.
 

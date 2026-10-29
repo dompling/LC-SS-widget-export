@@ -9,6 +9,12 @@ static NSString *Extension=@"test.LiveProcess";
 static NSUInteger Assertions, Failures, Launches, Notices, ConfigRefreshes;
 static NSString *Selected, *Container;
 static NSString *ContainerOwner;
+static NSArray *Inventory;
+static NSUInteger AutomaticRefreshes;
+@interface LCOrbitAutomaticPiP : NSObject @end
+@implementation LCOrbitAutomaticPiP
++ (void)refresh { AutomaticRefreshes++; }
+@end
 static void (^Pending)(NSNumber *,NSError *);
 
 @implementation LCOrbitHost
@@ -23,6 +29,10 @@ static void (^Pending)(NSNumber *,NSError *);
 @interface LCSharedUtils : NSObject @end
 @implementation LCSharedUtils
 + (NSString *)getContainerUsingLCSchemeWithFolderName:(NSString *)folder { return ContainerOwner; }
+@end
+@interface LCOrbitGuestService : NSObject @end
+@implementation LCOrbitGuestService
++ (NSArray *)installedApps { return Inventory; }
 @end
 @implementation NSUserDefaults (TestHost)
 + (NSUserDefaults *)lcSharedDefaults { return Defaults; }
@@ -82,7 +92,24 @@ int main(void) {
         id refreshObserver=[NSNotificationCenter.defaultCenter addObserverForName:LCOrbitMultitaskConfigurationChangedNotification
             object:nil queue:nil usingBlock:^(NSNotification *note) { ConfigRefreshes++; }];
         NSDictionary *a=Guest(@"A.app",@"a"), *b=Guest(@"B.app",@"b");
+        Inventory=@[a,b];
         NSError *error=nil;
+        BOOL automatic=[bridge respondsToSelector:@selector(setAutomaticPiPEnabled:forGuest:error:)];
+        Expect(automatic,@"automatic PiP has per-app opt-in configuration");
+        if(automatic) {
+            NSMutableDictionary *shared=[a mutableCopy];shared[@"identity"]=@"shared/A.app";
+            Expect(![bridge automaticPiPEnabledForGuest:a],@"automatic PiP defaults off");
+            Expect([bridge setAutomaticPiPEnabled:YES forGuest:a error:&error] && [bridge automaticPiPEnabledForGuest:a],@"actual app can opt in before multitask starts");
+            Expect(![bridge automaticPiPEnabledForGuest:shared] && ![bridge automaticPiPEnabledForGuest:b],@"namesake shared app and other apps remain independent");
+            Expect(![bridge setAutomaticPiPEnabled:YES forGuest:@{@"identity":@"builtin/SideStore",@"builtin":@YES} error:&error],@"builtin is not an automatic guest target");
+            Expect(![bridge setAutomaticPiPEnabled:YES forGuest:@{@"identity":@"private/../A.app",@"path":@"A.app"} error:&error],@"invalid app identity is rejected");
+            Host=NO;
+            Expect(![bridge setAutomaticPiPEnabled:NO forGuest:a error:&error] && [bridge automaticPiPEnabledForGuest:a],@"guest cannot rewrite host auto-PiP choices");
+            Host=YES;
+            Expect([bridge setAutomaticPiPEnabled:NO forGuest:a error:&error] && ![bridge automaticPiPEnabledForGuest:a],@"disabling removes only the selected app choice");
+            [[LCOrbitStorage preferences] setObject:@"invalid" forKey:@"LCFloatingMenu.autoPiPApps"];
+            Expect([LCOrbitStorage lastError]!=nil,@"auto-PiP list requires string array JSON type");
+        }
         Expect(![bridge isEnabled],@"fullscreen mode starts disabled");
         [Defaults setInteger:1 forKey:@"LCMultitaskMode"];
         Hooks=NO;
@@ -149,6 +176,22 @@ int main(void) {
         [bridge didActivateWindow:wa];
         Pending(@123,nil); Pending=nil;
         Expect([[bridge windows] count]==1 && [bridge isCurrentGuest:a],@"window registry deduplicates and identifies current guest");
+        if(automatic) {
+            NSUInteger beforeRefresh=AutomaticRefreshes;
+            [bridge forgetWindow:nil];
+            Expect(AutomaticRefreshes>beforeRefresh,@"module stop refreshes PiP even with a live current window and no stale registry entry");
+            Expect([[bridge activeGuestForAutomaticPiP][@"identity"] isEqual:a[@"identity"]],@"automatic PiP resolves the exact running guest");
+            NSMutableDictionary *otherDefault=[a mutableCopy];otherDefault[@"uuid"]=@"another-default-container";
+            Inventory=@[otherDefault,b];
+            Expect([[bridge activeGuestForAutomaticPiP][@"uuid"] isEqual:a[@"uuid"]],@"per-app PiP uses the live container rather than another configured default");
+            Inventory=@[a,b];
+            wa.running=NO;
+            Expect([bridge activeGuestForAutomaticPiP]==nil,@"dead scene cannot be armed for PiP");
+            wa.running=YES;
+            Inventory=@[b];
+            Expect([bridge activeGuestForAutomaticPiP]==nil,@"removed guest cannot be armed from a stale registry entry");
+            Inventory=@[a,b];
+        }
         NSMutableDictionary *namesake=[a mutableCopy];
         namesake[@"identity"]=@"shared/A.app";namesake[@"folder"]=@"/other-scope/A.app";
         Expect(![bridge isCurrentGuest:namesake],@"same bundle and container in another scope is not the active guest");
@@ -229,6 +272,7 @@ int main(void) {
         [@"invalid JSON" writeToFile:config atomically:YES encoding:NSUTF8StringEncoding error:nil];
         Expect(![bridge setUseSystemMenu:YES error:&error] && error!=nil && ![bridge usesSystemMenu],@"failed menu save reports error and retains effective choice");
         Expect(![bridge setEnabled:NO error:&error] && [bridge isEnabled],@"failed mode save cannot report success or disable effective mode");
+        if(automatic) Expect(![bridge setAutomaticPiPEnabled:YES forGuest:a error:&error] && ![bridge automaticPiPEnabledForGuest:a],@"failed JSON save cannot enable auto-PiP");
         [savedConfig writeToFile:config atomically:YES];[bridge setEnabled:NO error:nil];
         [NSNotificationCenter.defaultCenter removeObserver:refreshObserver];
         [NSNotificationCenter.defaultCenter removeObserver:menuObserver];

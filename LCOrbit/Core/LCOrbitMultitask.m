@@ -9,6 +9,7 @@ NSString *const LCOrbitMultitaskConfigurationChangedNotification=@"LCOrbitMultit
 static NSString *const EnabledKey=@"LCFloatingMenu.fullscreenMultitask";
 static NSString *const SystemMenuKey=@"LCFloatingMenu.systemMultitaskMenu";
 static NSString *const PreviousModeKey=@"LCFloatingMenu.previousMultitaskMode";
+static NSString *const AutoPiPKey=@"LCFloatingMenu.autoPiPApps";
 
 @interface LCOrbitTaskWindow : NSObject
 @property(nonatomic,weak) id window;
@@ -41,7 +42,24 @@ static NSString *CanonicalFolder(id path) {
     if(![path isKindOfClass:NSString.class] || ![path length]) return nil;
     return [[path stringByStandardizingPath] stringByResolvingSymlinksInPath];
 }
+static NSString *AutomaticPiPIdentity(NSDictionary *guest) {
+    if(![guest isKindOfClass:NSDictionary.class] || [guest[@"builtin"] boolValue]) return nil;
+    id identity=guest[@"identity"];
+    if(![identity isKindOfClass:NSString.class]) return nil;
+    NSArray *parts=[identity componentsSeparatedByString:@"/"];
+    if(parts.count!=2 || ![@[@"private",@"shared"] containsObject:parts[0]] ||
+       !TaskPathComponent(parts[1]) || ![parts[1] isEqual:guest[@"path"]]) return nil;
+    return identity;
+}
+static void RefreshAutomaticPiP(void) {
+    Class automatic=NSClassFromString(@"LCOrbitAutomaticPiP");
+    SEL refresh=NSSelectorFromString(@"refresh");
+    if([automatic respondsToSelector:refresh]) ((void(*)(id,SEL))objc_msgSend)(automatic,refresh);
+}
 static void SetVisible(id window,BOOL visible) {
+    id scene=Call(window,@"appSceneVC");
+    SEL pip=NSSelectorFromString(@"shouldIgnoreSceneUpdates");
+    if([scene respondsToSelector:pip] && ((BOOL(*)(id,SEL))objc_msgSend)(scene,pip)) return;
     SEL selector=NSSelectorFromString(@"orbit_setVisible:");
     if([window respondsToSelector:selector]) ((void(*)(id,SEL,BOOL))objc_msgSend)(window,selector,visible);
 }
@@ -49,7 +67,7 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     if(PendingLaunch!=token) return;
     PendingLaunch=nil;
     PendingGuest=nil;
-    if(!error && pid.intValue>0) return;
+    if(!error && pid.intValue>0) { RefreshAutomaticPiP();return; }
     if(!error) Fail(&error,@"LC 未返回有效的多任务进程，请从 LC 检查应用。 ");
     [NSNotificationCenter.defaultCenter postNotificationName:LCOrbitMultitaskLaunchFailedNotification
         object:LCOrbitMultitask.class userInfo:@{@"error":error}];
@@ -77,6 +95,7 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     if(writeError) { if(error) *error=writeError;return NO; }
     if([self respondsToSelector:@selector(refreshPresentation)]) [self refreshPresentation];
     [NSNotificationCenter.defaultCenter postNotificationName:LCOrbitMultitaskConfigurationChangedNotification object:self];
+    RefreshAutomaticPiP();
     return YES;
 }
 + (BOOL)setEnabled:(BOOL)enabled error:(NSError **)error {
@@ -102,7 +121,48 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     [[LCOrbitHost hostDefaults] removeObjectForKey:PreviousModeKey];
     if(enabled && [self respondsToSelector:@selector(refreshPresentation)]) [self refreshPresentation];
     [NSNotificationCenter.defaultCenter postNotificationName:LCOrbitMultitaskConfigurationChangedNotification object:self];
+    RefreshAutomaticPiP();
     return YES;
+}
++ (BOOL)automaticPiPEnabledForGuest:(NSDictionary *)guest {
+    NSString *identity=AutomaticPiPIdentity(guest);
+    id apps=[[LCOrbitStorage preferences] objectForKey:AutoPiPKey];
+    return identity && [apps isKindOfClass:NSArray.class] && [apps containsObject:identity];
+}
++ (BOOL)setAutomaticPiPEnabled:(BOOL)enabled forGuest:(NSDictionary *)guest error:(NSError **)error {
+    if(!NSThread.isMainThread || ![LCOrbitHost isHostUI]) return Fail(error,@"请在 LC 应用管理中设置自动画中画。");
+    NSString *identity=AutomaticPiPIdentity(guest);
+    if(!identity) return Fail(error,@"该项目不是可设置的 App。");
+    id stored=[[LCOrbitStorage preferences] objectForKey:AutoPiPKey];
+    NSMutableArray *apps=[stored isKindOfClass:NSArray.class]?[stored mutableCopy]:[NSMutableArray array];
+    [apps removeObject:identity];
+    if(enabled) [apps addObject:identity];
+    [[LCOrbitStorage preferences] setObject:apps forKey:AutoPiPKey];
+    NSError *writeError=[LCOrbitStorage lastError];
+    if(writeError) { if(error) *error=writeError;return NO; }
+    RefreshAutomaticPiP();
+    [NSNotificationCenter.defaultCenter postNotificationName:LCOrbitMultitaskConfigurationChangedNotification object:self];
+    return YES;
+}
++ (NSDictionary *)activeGuestForAutomaticPiP {
+    if(!NSThread.isMainThread || ![self isEnabled]) return nil;
+    id window=[self activeWindow],scene=Call(window,@"appSceneVC");
+    SEL running=NSSelectorFromString(@"isAppRunning");
+    if(![scene respondsToSelector:running] || !((BOOL(*)(id,SEL))objc_msgSend)(scene,running)) return nil;
+    NSArray *inventory=Call(NSClassFromString(@"LCOrbitGuestService"),@"installedApps");
+    for(LCOrbitTaskWindow *entry in TaskWindows) if(entry.window==window && entry.folder.length) {
+        for(NSDictionary *guest in inventory) {
+            if(AutomaticPiPIdentity(guest) && [entry.bundle isEqual:guest[@"path"]] &&
+               [entry.folder isEqual:CanonicalFolder(guest[@"folder"])]) {
+                // Settings belong to the App; the selected live window may use
+                // a different container from the inventory's configured default.
+                NSMutableDictionary *active=[guest mutableCopy];
+                active[@"uuid"]=entry.container;
+                return active;
+            }
+        }
+    }
+    return nil;
 }
 + (NSArray *)windows {
     NSMutableArray *windows=[NSMutableArray array];
@@ -143,6 +203,9 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
         }
     }
     if(ActiveWindow==window) { ActiveWindow=nil;changed=YES; }
+    // Module shutdown calls forgetWindow:nil even if no weak entry expired.
+    // Reconcile the auto-PiP opt-in immediately in that case as well.
+    RefreshAutomaticPiP();
     if(changed) {
         // Scene cleanup may still be running. Redraw after LC finishes it.
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -155,12 +218,14 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     if(![self isEnabled]) return;
     if([self isManagingWindows]) for(id other in [self windows]) if(other!=window) SetVisible(other,NO);
     ActiveWindow=window;
+    RefreshAutomaticPiP();
     [NSNotificationCenter.defaultCenter postNotificationName:LCOrbitMultitaskMenuRequestedNotification
         object:self userInfo:@{@"expanded":@NO}];
 }
 + (void)didHideWindow:(id)window {
     if(ActiveWindow!=window) return;
     ActiveWindow=nil;
+    RefreshAutomaticPiP();
     if([self isEnabled]) [NSNotificationCenter.defaultCenter postNotificationName:LCOrbitMultitaskMenuRequestedNotification
         object:self userInfo:@{@"expanded":@NO}];
 }
@@ -176,10 +241,36 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
            [entry.container isEqual:guest[@"uuid"]] && [entry.folder isEqual:CanonicalFolder(guest[@"folder"])]) return YES;
     return NO;
 }
+// Use LC's own PiPManager rather than creating another AVKit controller.
+// Only explicit user taps request PiP; switching apps never starts it silently.
++ (BOOL)togglePiPForActiveWindow:(NSError **)error {
+    if(!NSThread.isMainThread || ![self isEnabled] || ![LCOrbitHost isHostUI])
+        return Fail(error,@"请在 LC 多任务界面使用画中画。");
+    if(@available(iOS 16.0,*)) {} else return Fail(error,@"此系统不支持 LC 画中画。");
+    id window=[self activeWindow];
+    id scene=Call(window,@"appSceneVC");
+    SEL running=NSSelectorFromString(@"isAppRunning");
+    if(!window || ![scene respondsToSelector:running] ||
+       !((BOOL(*)(id,SEL))objc_msgSend)(scene,running))
+        return Fail(error,@"没有正在播放的前台任务，请先打开目标 App。");
+    Class manager=NSClassFromString(@"PiPManager");
+    id pip=Call(manager,@"shared");
+    SEL inspect=NSSelectorFromString(@"isPiPWithDecoratedVC:");
+    SEL begin=NSSelectorFromString(@"startPiPWithVC:");
+    SEL stop=NSSelectorFromString(@"stopPiP");
+    if(!pip || ![pip respondsToSelector:inspect] ||
+       ![pip respondsToSelector:begin] || ![pip respondsToSelector:stop])
+        return Fail(error,@"当前 LC 未提供兼容的画中画管理器。");
+    if(((BOOL(*)(id,SEL,id))objc_msgSend)(pip,inspect,window))
+        ((void(*)(id,SEL))objc_msgSend)(pip,stop);
+    else ((void(*)(id,SEL,id))objc_msgSend)(pip,begin,scene);
+    return YES;
+}
 + (void)showHome {
     if(![self isEnabled]) return;
     for(id window in [self windows]) SetVisible(window,NO);
     ActiveWindow=nil;
+    RefreshAutomaticPiP();
 }
 + (BOOL)isRunningGuest:(NSDictionary *)guest {
     if(!NSThread.isMainThread || ![self isEnabled] || ![guest isKindOfClass:NSDictionary.class] ||

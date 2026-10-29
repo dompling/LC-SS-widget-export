@@ -16,6 +16,10 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 + (BOOL)shouldShowFloatingMenu;
 + (BOOL)launchGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)isCurrentGuest:(NSDictionary *)guest;
++ (BOOL)togglePiPForActiveWindow:(NSError * _Nullable * _Nullable)error;
++ (BOOL)automaticPiPEnabledForGuest:(NSDictionary *)guest;
++ (BOOL)setAutomaticPiPEnabled:(BOOL)enabled forGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
++ (nullable NSDictionary *)activeGuestForAutomaticPiP;
 + (void)showHome;
 + (BOOL)closeCurrentGuest;
 // Exact target close: no fallback to the foreground task or a namesake app.

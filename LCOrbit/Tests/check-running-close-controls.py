@@ -32,6 +32,9 @@ assert "CGFloat height=self.panelFooterHeight;" in src, "footer must use fitted 
 assert "action:@selector(holdPanel:)" in src, "drawer long press opens settings"
 hold=src[src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"):src.index("- (void)draw {",src.index("- (void)hold:(UILongPressGestureRecognizer *)gesture {"))]
 assert "[self openSettings];" in hold, "bead long press must open settings"
+assert "CGFloat width=MAX(44.,CGRectGetWidth(self.bounds));" in src, "collapsed bead must have a 44pt-wide logical hit region"
+assert "self.docksLeft?0:CGRectGetWidth(self.bounds)-width" in src, "hit region must expand inward rather than offscreen"
+assert "button.docksLeft=self.left;" in src, "touch region must match the dock side"
 assert "FMApplySideNotch(glass,shadow.layer,self.left,compact,NO)" in src, "both app drawer layouts use mirrored side notch"
 assert "glass.layer.mask=clip" in src, "notch must clip native glass material"
 assert "bead.transform=CGAffineTransformMakeScale(stealth?.18:.32,.88)" not in src, "idle must not squash the glass handle"

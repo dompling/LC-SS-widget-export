@@ -20,6 +20,7 @@ sh "$ROOT/LCOrbit/Tests/run-guest-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-jit-favorites-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-tweak-center-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-multitask-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-automatic-pip-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-side-notch-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-floating-launch-tests.sh"
 python3 "$ROOT/LCOrbit/Tests/check-running-close-controls.py"
@@ -40,6 +41,7 @@ xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version
     "$ROOT/LCOrbit/Core/LCOrbitHost.m" \
     "$ROOT/LCOrbit/Core/LCOrbitGuestService.m" \
     "$ROOT/LCOrbit/Core/LCOrbitMultitask.m" \
+    "$ROOT/LCOrbit/Core/LCOrbitAutomaticPiP.m" \
     "$ROOT/LCOrbit/Core/LCOrbitMultitaskUI.m" \
     "$ROOT/LCOrbit/Core/LCOrbitHostSettings.m" \
     "$ROOT/LCOrbit/Core/LCOrbitEventBus.m" \

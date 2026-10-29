@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <objc/message.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <math.h>
 
@@ -116,6 +117,7 @@ static BOOL LCHasRemoteSheetProviderSelector=YES;
 @end
 static BOOL Fullscreen(void) { return Enabled; }
 static UIViewController *SceneController(UIViewController *window) { return window.appSceneVC; }
+static BOOL OrbitPiPProtectedWindow(UIViewController *window) { return NO; }
 static void LayoutFullscreen(UIViewController *window) {}
 static void NativeSettings(id object,SEL selector,void (^block)(id)) {
     OrbitController *scene=object;Updates++;if(block) block(scene.settings);

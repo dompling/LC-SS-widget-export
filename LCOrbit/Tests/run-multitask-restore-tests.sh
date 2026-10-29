@@ -11,6 +11,8 @@ source=(root/'LCOrbit/Core/LCOrbitMultitaskUI.m').read_text()
 start=source.index('static void RestoreAppearance(')
 end=source.index('\nstatic void SetVisible(',start)
 (work/'restore.inc').write_text(source[start:end])
+start=source.index('static void PiPStopped(')
+(work/'pip-stopped.inc').write_text(source[start:source.index('\n}',start)+2])
 native=(root/'MultitaskSupport/DecoratedAppSceneViewController.m').read_text()
 methods=[]
 for signature in ['- (void)updateOriginalFrame {','- (void)updateWindowedFrameWithSettings:', '- (void)appSceneVC:(AppSceneViewController*)vc didUpdateFromSettings:', '- (void)appSceneVCWillActivateScene:']:

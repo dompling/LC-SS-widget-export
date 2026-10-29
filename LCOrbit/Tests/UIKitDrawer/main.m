@@ -30,6 +30,8 @@
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
 - (void)closeTaskFromButton:(UIControl *)sender;
 - (void)closeMultitaskGuest;
+- (void)automaticPiPChanged:(UISwitch *)control;
+- (void)sortDrag:(UILongPressGestureRecognizer *)gesture;
 - (void)pan:(UIPanGestureRecognizer *)gesture;
 @end
 @interface NSUserDefaults (DrawerFixture) @end
@@ -37,9 +39,12 @@
 + (BOOL)isLiveProcess { return YES; } // Suppress injection bootstrap only.
 @end
 static NSArray *FixtureApps;
-static BOOL FixtureCurrent, FixtureRunning=YES;
+static BOOL FixtureCurrent, FixtureRunning=YES, FixtureHost=YES;
 static CGFloat FixtureWidth=667;
 static NSUInteger CloseCount, PositionWrites;
+static NSMutableDictionary *AutoPiPStates;
+static NSDictionary *LastAutoPiPTarget;
+static BOOL RejectAutoPiP;
 static UIAlertController *CapturedAlert;
 static NSMutableArray *Results;
 static NSMutableArray *Managers;
@@ -57,10 +62,19 @@ static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(c
 + (BOOL)fixtureEnabled { return YES; }
 + (BOOL)fixtureCurrent:(NSDictionary *)app { return FixtureCurrent && [app[@"identity"] isEqual:FixtureApps.firstObject[@"identity"]]; }
 + (BOOL)fixtureClose:(NSDictionary *)app error:(NSError **)error { CloseCount++;return YES; }
++ (BOOL)fixtureAutoPiP:(NSDictionary *)app { return [AutoPiPStates[app[@"identity"]] boolValue]; }
++ (BOOL)fixtureSetAutoPiP:(BOOL)enabled forGuest:(NSDictionary *)app error:(NSError **)error {
+    if(RejectAutoPiP) {
+        if(error) *error=[NSError errorWithDomain:@"DrawerFixture" code:1
+            userInfo:@{NSLocalizedDescriptionKey:@"Fixture configuration write rejected"}];
+        return NO;
+    }
+    LastAutoPiPTarget=app;AutoPiPStates[app[@"identity"]]=@(enabled);return YES;
+}
 @end
 @interface LCOrbitHost (DrawerFixture) @end
 @implementation LCOrbitHost (DrawerFixture)
-+ (BOOL)fixtureHost { return YES; }
++ (BOOL)fixtureHost { return FixtureHost; }
 @end
 @interface LCOrbitPreferences (DrawerFixture) @end
 @implementation LCOrbitPreferences (DrawerFixture)
@@ -89,6 +103,14 @@ static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(c
 @property(nonatomic,assign) CGPoint fixturePoint;
 @end
 @implementation FixturePan
+- (UIGestureRecognizerState)state { return self.fixtureState; }
+- (CGPoint)locationInView:(UIView *)view { return self.fixturePoint; }
+@end
+@interface FixtureLongPress : UILongPressGestureRecognizer
+@property(nonatomic,assign) UIGestureRecognizerState fixtureState;
+@property(nonatomic,assign) CGPoint fixturePoint;
+@end
+@implementation FixtureLongPress
 - (UIGestureRecognizerState)state { return self.fixtureState; }
 - (CGPoint)locationInView:(UIView *)view { return self.fixturePoint; }
 @end
@@ -127,6 +149,31 @@ static void RunTests(void) {
     UIEdgeInsets ordinary=UIEdgeInsetsMake(0,0,21,0);
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
     [prefs setObject:@NO forKey:@"LCFloatingMenu.recentAppsFirst"];
+    // Test actual UIKit hit-testing, not just the visible 16pt bead frame.
+    // Old symmetric -14pt expansion left only ~30pt reachable on the screen.
+    for(NSNumber *left in @[@NO,@YES]) for(NSNumber *scale in @[@.70,@1,@1.9]) {
+        [prefs setObject:scale forKey:@"LCFloatingMenu.orbScale"];
+        FMManager *handle=Manager(NO,1,667,ordinary,left.boolValue,NO,@"apps");
+        CGRect frame=Frame(handle.orb,handle);
+        CGFloat edge=left.boolValue?CGRectGetMinX(frame):CGRectGetMaxX(frame);
+        CGFloat cy=CGRectGetMidY(frame);
+        CGFloat sign=left.boolValue?1:-1;
+        CGPoint inside=CGPointMake(edge+sign*42,cy);
+        CGPoint outside=CGPointMake(edge+sign*46,cy);
+        UIView *hit=[handle.overlayView hitTest:inside withEvent:nil];
+        UIView *miss=[handle.overlayView hitTest:outside withEvent:nil];
+        BOOL works=hit==handle.orb && miss!=handle.orb;
+        Check([NSString stringWithFormat:@"bead-inward-hit-%@-%.0f",
+               left.boolValue?@"left":@"right",scale.doubleValue*100],works,
+              @{ @"frame":NSStringFromCGRect(frame),@"inside":NSStringFromCGPoint(inside),
+                 @"outside":NSStringFromCGPoint(outside),@"hit":@(hit==handle.orb),
+                 @"outsideMiss":@(miss!=handle.orb)});
+    }
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbScale"];
+    FMManager *proportion=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    Check(@"bead-16-by-72-proportion",fabs(proportion.orb.bounds.size.width-16)<.01 &&
+          fabs(proportion.orb.bounds.size.height-72)<.01,NSStringFromCGRect(proportion.orb.bounds));
+    Snapshot(proportion,@"collapsed-bead");
     for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *height in @[@320,@375]) {
         FMManager *m=Manager(compact.boolValue,1,height.doubleValue,ordinary,NO,YES,@"apps");
         CGRect list=Frame(m.appsScroll,m);CGFloat headerEnd=CGRectGetMinY(list),footerStart=CGFLOAT_MAX;
@@ -186,6 +233,8 @@ static void RunTests(void) {
         }
         Check([NSString stringWithFormat:@"normal-footer-icon-only-%.0f",scale.doubleValue*100],
               centersWork && blankIsInactive,@{@"iconCentersWork":@(centersWork),@"surroundingBlankInactive":@(blankIsInactive)});
+        Check([NSString stringWithFormat:@"manual-pip-button-removed-%.0f",scale.doubleValue*100],
+              Actions(m,@"toggleMultitaskPiP").count==0,nil);
     }
     for(NSNumber *left in @[@NO,@YES]) {
         UIEdgeInsets insets=UIEdgeInsetsMake(0,59,21,35);FMManager *m=Manager(NO,1,375,insets,left.boolValue,NO,@"apps");
@@ -218,7 +267,21 @@ static void RunTests(void) {
     CapturedAlert=nil;CloseCount=0;[closing closeMultitaskGuest];
     Check(@"footer-close-immediate",!CapturedAlert && CloseCount==1 && !closing.isOpen,@{@"closeCalls":@(CloseCount),@"alert":@(CapturedAlert!=nil)});FixtureCurrent=NO;
     FMManager *pan=Manager(NO,1,667,ordinary,NO,NO,@"apps");CGRect saved=pan.orb.frame;PositionWrites=0;
-    FixturePan *g=[FixturePan new];g.fixturePoint=CGPointMake(150,180);g.fixtureState=UIGestureRecognizerStateBegan;[pan pan:g];g.fixtureState=UIGestureRecognizerStateChanged;[pan pan:g];g.fixtureState=UIGestureRecognizerStateCancelled;[pan pan:g];
+    FixturePan *g=[FixturePan new];g.fixturePoint=CGPointMake(150,180);g.fixtureState=UIGestureRecognizerStateBegan;[pan pan:g];
+    UIView *orbGlass=[pan.orb viewWithTag:9202];
+    CAShapeLayer *neutralMask=(CAShapeLayer *)orbGlass.layer.mask;
+    CGPathRef neutralPath=CGPathCreateCopy(neutralMask.path);
+    CGFloat orbW=CGRectGetWidth(orbGlass.bounds),orbH=CGRectGetHeight(orbGlass.bounds);
+    BOOL roundedTop=CGPathContainsPoint(neutralPath,NULL,CGPointMake(orbW*.5,.10),NO) &&
+                    !CGPathContainsPoint(neutralPath,NULL,CGPointMake(orbW*.05,.10),NO);
+    BOOL roundedBottom=CGPathContainsPoint(neutralPath,NULL,CGPointMake(orbW*.5,orbH-.10),NO) &&
+                       !CGPathContainsPoint(neutralPath,NULL,CGPointMake(orbW*.95,orbH-.10),NO);
+    Check(@"drag-capsule-not-trapezoid",roundedTop && roundedBottom,nil);
+    g.fixtureState=UIGestureRecognizerStateChanged;g.fixturePoint=CGPointMake(520,180);[pan pan:g];
+    Check(@"drag-crosses-screen-without-flip",CGPathEqualToPath(neutralPath,neutralMask.path) &&
+          !pan.left,nil);
+    CGPathRelease(neutralPath);
+    g.fixtureState=UIGestureRecognizerStateCancelled;[pan pan:g];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.6*NSEC_PER_SEC),dispatch_get_main_queue(),^{
         Check(@"cancelled-pan-restores-position",CGRectEqualToRect(saved,pan.orb.frame) && PositionWrites==0,@{@"saved":NSStringFromCGRect(saved),@"actual":NSStringFromCGRect(pan.orb.frame),@"positionWrites":@(PositionWrites)});
     });
@@ -237,6 +300,114 @@ static void RunTests(void) {
         BOOL removed=YES;for(UIView *v in Views(stack)) if([v isKindOfClass:UILabel.class]) {NSString *t=((UILabel *)v).text;removed &= ![t containsString:@"圆形微珠"] && ![t containsString:@"闲置贴边待命"];}
         Check([@"removed-native-category-" stringByAppendingString:category],removed,nil);Snapshot(m,[@"settings-native-" stringByAppendingString:category]);
     }
+    NSArray *savedApps=FixtureApps;
+    NSMutableDictionary *longName=[savedApps[0] mutableCopy];
+    longName[@"title"]=@"一个很长很长的应用名称用来检查开关不会覆盖应用文字";
+    NSDictionary *builtin=@{@"identity":@"builtin/SideStore",@"path":@"SideStore",@"title":@"SideStore",@"builtin":@YES};
+    FixtureApps=@[longName,savedApps[1],builtin];
+    FMManager *autoSettings=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    UIStackView *autoStack=[[UIStackView alloc] initWithFrame:CGRectMake(20,20,360,1000)];
+    autoStack.axis=UILayoutConstraintAxisVertical;autoStack.spacing=10;
+    [autoSettings.overlayView addSubview:autoStack];
+    [autoSettings populateSettingsCategory:@"apps" stack:autoStack];
+    CGSize settingsSize=[autoStack systemLayoutSizeFittingSize:CGSizeMake(360,UILayoutFittingCompressedSize.height)
+        withHorizontalFittingPriority:UILayoutPriorityRequired verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
+    autoStack.frame=(CGRect){autoStack.frame.origin,settingsSize};[autoStack layoutIfNeeded];
+    NSMutableArray<UISwitch *> *autoControls=[NSMutableArray array];BOOL labelsFit=YES;
+    for(UIView *view in Views(autoStack)) if([view isKindOfClass:UISwitch.class] &&
+        [[(UISwitch *)view actionsForTarget:autoSettings forControlEvent:UIControlEventValueChanged]
+            containsObject:@"automaticPiPChanged:"]) {
+        UISwitch *control=(UISwitch *)view;[autoControls addObject:control];
+        for(UIView *sibling in control.superview.subviews) if([sibling isKindOfClass:UILabel.class])
+            labelsFit &= CGRectGetMaxX(sibling.frame)<=CGRectGetMinX(control.frame)-9.99;
+    }
+    Check(@"auto-pip-real-apps-only",autoControls.count==2 && labelsFit,
+          @{@"switchCount":@(autoControls.count),@"longNameDoesNotOverlap":@(labelsFit)});
+    NSUInteger titleCount=0;BOOL unified=autoControls.count==2;
+    for(UIView *view in Views(autoStack)) if([view isKindOfClass:UILabel.class] &&
+        [((UILabel *)view).text isEqual:longName[@"title"]]) titleCount++;
+    for(UISwitch *control in autoControls) {
+        NSDictionary *target=objc_getAssociatedObject(control,@selector(automaticPiPChanged:));
+        BOOL pinFound=NO,dragFound=objc_getAssociatedObject(control.superview,@selector(sortDrag:))==target;
+        for(UIView *sibling in control.superview.subviews) {
+            if([sibling isKindOfClass:UIControl.class] &&
+               [[(UIControl *)sibling actionsForTarget:autoSettings forControlEvent:UIControlEventTouchUpInside]
+                   containsObject:@"pinApp:"])
+                pinFound=objc_getAssociatedObject(sibling,@selector(pinApp:))==target;
+            if(objc_getAssociatedObject(sibling,@selector(sortDrag:)))
+                dragFound=objc_getAssociatedObject(sibling,@selector(sortDrag:))==target;
+        }
+        unified &= pinFound && dragFound;
+    }
+    Check(@"app-management-one-record-per-app",titleCount==1,@{@"titleOccurrences":@(titleCount)});
+    Check(@"app-management-controls-share-target",unified,nil);
+    UIView *firstAppRow=autoControls.firstObject.superview;
+    UIView *builtinRow=((UIStackView *)firstAppRow.superview).arrangedSubviews.lastObject;
+    BOOL builtinPreserved=builtinRow.bounds.size.height==68;
+    for(UIView *view in Views(builtinRow)) builtinPreserved &= ![view isKindOfClass:UISwitch.class];
+    Check(@"app-management-builtin-keeps-original-row",builtinPreserved,nil);
+    for(NSNumber *width in @[@284,@366,@400]) {
+        autoStack.frame=CGRectMake(20,20,width.doubleValue,settingsSize.height);[autoStack layoutIfNeeded];
+        BOOL fits=YES;
+        for(UISwitch *control in autoControls) {
+            CGRect rect=control.frame;
+            fits &= CGRectGetMinX(rect)>=0 && CGRectGetMaxX(rect)<=control.superview.bounds.size.width &&
+                CGRectGetMinY(rect)>=0 && CGRectGetMaxY(rect)<=control.superview.bounds.size.height;
+            for(UIView *sibling in control.superview.subviews) if([sibling isKindOfClass:UILabel.class])
+                fits &= sibling.frame.size.width>0 && CGRectGetMaxX(sibling.frame)<=CGRectGetMinX(rect)-9.99;
+        }
+        Check([NSString stringWithFormat:@"app-management-width-%@",width],fits,nil);
+    }
+    autoStack.frame=CGRectMake(20,20,360,settingsSize.height);[autoStack layoutIfNeeded];
+    UISwitch *autoControl=autoControls.firstObject;
+    Check(@"auto-pip-default-off",autoControl && !autoControl.isOn && autoControl.enabled,nil);
+    Snapshot(autoSettings,@"settings-auto-pip-apps");
+    autoControl.on=YES;[autoSettings automaticPiPChanged:autoControl];
+    Check(@"auto-pip-exact-app-action",LastAutoPiPTarget==longName &&
+          [AutoPiPStates[longName[@"identity"]] boolValue] && ![AutoPiPStates[savedApps[1][@"identity"]] boolValue],nil);
+    RejectAutoPiP=YES;CapturedAlert=nil;autoControl.on=NO;
+    [autoSettings automaticPiPChanged:autoControl];
+    Check(@"auto-pip-rejected-save-restores-switch",autoControl.isOn && CapturedAlert!=nil,nil);
+    RejectAutoPiP=NO;
+    // A dragged whole row becomes a floating snapshot. Its original 68pt
+    // arranged slot visibly empties and travels to the hovered index.
+    id orderBeforeMergeTest=[prefs objectForKey:@"LCFloatingMenu.menuOrder"];
+    UIView *dragHandle=firstAppRow;
+    UIStackView *manageGroup=(UIStackView *)firstAppRow.superview;
+    FixtureLongPress *managementDrag=[FixtureLongPress new];
+    [dragHandle addGestureRecognizer:managementDrag];
+    managementDrag.fixtureState=UIGestureRecognizerStateBegan;
+    managementDrag.fixturePoint=CGPointMake(CGRectGetMidX(firstAppRow.frame),CGRectGetMidY(firstAppRow.frame));
+    autoSettings.panel=autoStack;
+    [autoSettings sortDrag:managementDrag];
+    BOOL vacant=firstAppRow.layer.borderWidth>0 &&
+        manageGroup.subviews.count>manageGroup.arrangedSubviews.count;
+    for(UIView *child in firstAppRow.subviews) vacant &= child.alpha==0;
+    Check(@"app-management-drag-creates-vacant-slot",vacant,nil);
+    managementDrag.fixtureState=UIGestureRecognizerStateChanged;
+    managementDrag.fixturePoint=CGPointMake(CGRectGetMidX(firstAppRow.frame),
+        CGRectGetMaxY(builtinRow.frame)+15);
+    [autoSettings sortDrag:managementDrag];
+    BOOL shifted=[manageGroup.arrangedSubviews indexOfObjectIdenticalTo:firstAppRow]==2;
+    Check(@"app-management-drag-animated-vacancy-moves",shifted,nil);
+    managementDrag.fixtureState=UIGestureRecognizerStateEnded;
+    [autoSettings sortDrag:managementDrag];
+    Check(@"app-management-mixed-height-drag",[[prefs objectForKey:@"LCFloatingMenu.menuOrder"]
+        isEqual:@[savedApps[1][@"identity"],builtin[@"identity"],longName[@"identity"]]],nil);
+    [prefs setObject:orderBeforeMergeTest forKey:@"LCFloatingMenu.menuOrder"];
+    FixtureHost=NO;
+    FMManager *guestSettings=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    UIStackView *guestStack=[[UIStackView alloc] initWithFrame:CGRectMake(20,20,360,700)];
+    guestStack.axis=UILayoutConstraintAxisVertical;guestStack.spacing=10;
+    [guestSettings.overlayView addSubview:guestStack];[guestSettings populateSettingsCategory:@"apps" stack:guestStack];
+    [guestStack layoutIfNeeded];BOOL guestHasPiP=NO,guestIndependent=NO;
+    for(UIView *view in Views(guestStack)) {
+        if([view isKindOfClass:UISwitch.class]) guestHasPiP |= [[(UISwitch *)view actionsForTarget:guestSettings
+            forControlEvent:UIControlEventValueChanged] containsObject:@"automaticPiPChanged:"];
+        if([view isKindOfClass:UILabel.class]) guestIndependent |= [((UILabel *)view).text isEqual:@"当前 App 独立设置"];
+    }
+    Check(@"app-management-guest-keeps-independent-settings",!guestHasPiP && guestIndependent,nil);
+    FixtureHost=YES;FixtureApps=savedApps;
     // Recent ordering is opt-in, uses scoped identities, and never modifies
     // the saved manual order. Only reopening resets scroll, not row refresh.
     FMManager *recency=Manager(NO,1,667,ordinary,NO,YES,@"apps");
@@ -289,10 +460,12 @@ static void RunTests(void) {
     [super viewDidAppear:animated];static BOOL ran=NO;if(ran)return;ran=YES;
     NSString *home=NSHomeDirectory();setenv("LC_HOME_PATH",home.UTF8String,1);EvidencePath=[home stringByAppendingPathComponent:@"Documents/DrawerEvidence"];
     [NSFileManager.defaultManager createDirectoryAtPath:EvidencePath withIntermediateDirectories:YES attributes:nil error:nil];
-    Results=[NSMutableArray array];Managers=[NSMutableArray array];NSMutableArray *apps=[NSMutableArray array];
+    Results=[NSMutableArray array];Managers=[NSMutableArray array];AutoPiPStates=[NSMutableDictionary dictionary];NSMutableArray *apps=[NSMutableArray array];
     for(NSUInteger i=0;i<8;i++) {NSString *folder=[home stringByAppendingFormat:@"/Documents/Fixture%lu.app",(unsigned long)i];[NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];[@{@"CFBundleName":[NSString stringWithFormat:@"App %lu",(unsigned long)i]} writeToFile:[folder stringByAppendingPathComponent:@"Info.plist"] atomically:YES];[apps addObject:@{@"folder":folder,@"title":[NSString stringWithFormat:@"App %lu",(unsigned long)i],@"identity":folder,@"path":folder,@"launchable":@YES}];}FixtureApps=apps;
     SwapClass(LCOrbitGuestService.class,@selector(installedApps),@selector(fixtureApps));SwapClass(LCOrbitGuestService.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));
     SwapClass(LCOrbitMultitask.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));SwapClass(LCOrbitMultitask.class,@selector(isRunningGuest:),@selector(fixtureRunning:));SwapClass(LCOrbitMultitask.class,@selector(closeGuest:error:),@selector(fixtureClose:error:));SwapClass(LCOrbitMultitask.class,@selector(isEnabled),@selector(fixtureEnabled));SwapClass(LCOrbitHost.class,@selector(isHostUI),@selector(fixtureHost));
+    SwapClass(LCOrbitMultitask.class,@selector(automaticPiPEnabledForGuest:),@selector(fixtureAutoPiP:));
+    SwapClass(LCOrbitMultitask.class,@selector(setAutomaticPiPEnabled:forGuest:error:),@selector(fixtureSetAutoPiP:forGuest:error:));
     SwapInstance(LCOrbitPreferences.class,@selector(setObject:forKey:),@selector(fixtureSetObject:forKey:));SwapInstance(UIViewController.class,@selector(presentViewController:animated:completion:),@selector(fixturePresent:animated:completion:));
     RunTests();
 }
