@@ -614,6 +614,12 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
     [self scheduleAppearanceCheck];
+    if(!self.orbUpdateTimer) {
+        __weak typeof(self) weakSelf=self;
+        self.orbUpdateTimer=[NSTimer scheduledTimerWithTimeInterval:60*60 repeats:YES block:^(NSTimer *timer) {
+            [weakSelf checkOrbUpdateIfNeeded];
+        }];
+    }
     [self checkOrbUpdateIfNeeded];
 }
 - (CGFloat)orbWidth { return 16*FMOrbScale(); }
