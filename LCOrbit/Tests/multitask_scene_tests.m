@@ -193,9 +193,13 @@ int main(void) {
         // portrait. Subsequent LC layout callbacks must preserve that request.
         RememberGuestOrientation(window,UIInterfaceOrientationLandscapeRight);
         NativeResize(scene);
+        // Scene settings are host-normalized. LC AppScene swaps the logical
+        // size only once for landscape Guests, producing 844x390 content.
+        CGSize rendered=CGSizeMake(scene.settings.frame.size.height,scene.settings.frame.size.width);
         Expect(scene.settings.interfaceOrientation==UIInterfaceOrientationLandscapeRight &&
-            CGRectEqualToRect(scene.settings.frame,CGRectMake(0,0,844,390)),
-            @"Guest landscape video fullscreen survives portrait-host LC resize");
+            CGRectEqualToRect(scene.settings.frame,CGRectMake(0,0,390,844)) &&
+            CGSizeEqualToSize(rendered,CGSizeMake(844,390)),
+            @"Guest landscape video fullscreen has host-normalized scene and landscape content");
         Expect(scene.settings.safeAreaInsetsPortrait.left==34 &&
             scene.settings.safeAreaInsetsPortrait.top==0,
             @"Guest fullscreen translates host safe area for landscape");
@@ -232,8 +236,8 @@ int main(void) {
             settings.interfaceOrientation=UIInterfaceOrientationLandscapeLeft;
         });
         Expect(remote.settings.interfaceOrientation==UIInterfaceOrientationLandscapeLeft &&
-            CGRectEqualToRect(remote.settings.frame,CGRectMake(0,0,844,390)),
-            @"remote FBScene guest landscape change is not forced to host portrait");
+            CGRectEqualToRect(remote.settings.frame,CGRectMake(0,0,390,844)),
+            @"remote FBScene guest landscape change preserves logical frame for AppScene rendering");
         FinalSceneSettings(remote,NSSelectorFromString(@"_performUpdateWithoutActivation:"),^(OrbitSettings *settings,id context){
             settings.userInterfaceStyle=2;
         });
