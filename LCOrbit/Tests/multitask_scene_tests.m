@@ -108,6 +108,7 @@ static BOOL Enabled=YES;
 static NSUInteger Updates,Assertions,Failures;
 static Class WindowClass;
 static IMP OriginalSceneSettings,OriginalFinalSettings,OriginalInitialSettings,OriginalPresenter;
+static char GuestOrientationKey;
 static UIViewController *InitialSceneWindow;
 static NSArray *ManagedWindows;
 static BOOL LCHasRemoteSheetProviderSelector=YES;
@@ -188,6 +189,21 @@ int main(void) {
         NativeResize(scene);
         Expect(CGRectEqualToRect(scene.settings.frame,CGRectMake(0,0,390,844)),@"LC delayed resize cannot replace fullscreen frame or introduce a negative origin");
         Expect(scene.settings.peripheryInsets.top==59 && scene.settings.peripheryInsets.bottom==34,@"LC delayed resize cannot erase host safe area");
+        // A Guest can request landscape video fullscreen while LC stays
+        // portrait. Subsequent LC layout callbacks must preserve that request.
+        RememberGuestOrientation(window,UIInterfaceOrientationLandscapeRight);
+        NativeResize(scene);
+        Expect(scene.settings.interfaceOrientation==UIInterfaceOrientationLandscapeRight &&
+            CGRectEqualToRect(scene.settings.frame,CGRectMake(0,0,844,390)),
+            @"Guest landscape video fullscreen survives portrait-host LC resize");
+        Expect(scene.settings.safeAreaInsetsPortrait.left==34 &&
+            scene.settings.safeAreaInsetsPortrait.top==0,
+            @"Guest fullscreen translates host safe area for landscape");
+        RememberGuestOrientation(window,UIInterfaceOrientationPortrait);
+        NativeResize(scene);
+        Expect(scene.settings.interfaceOrientation==UIInterfaceOrientationPortrait &&
+            CGRectEqualToRect(scene.settings.frame,CGRectMake(0,0,390,844)),
+            @"Guest leaving fullscreen restores portrait");
         NSUInteger before=Updates;
         host.frame=CGRectZero;window.view.frame=CGRectZero;UpdateScene(window,nil);
         Expect(Updates==before,@"transient zero host geometry never reaches remote settings");
@@ -212,6 +228,23 @@ int main(void) {
         OrbitHostingController *hosting=[OrbitHostingController new];hosting.sceneView=[UIView new];
         hosting.sceneView.transform=CGAffineTransformIdentity;hosting.sceneView.superview=[UIView new];remote.delegate=hosting;
         OriginalFinalSettings=(IMP)NativeRemoteSettings;
+        FinalSceneSettings(remote,NSSelectorFromString(@"_performUpdateWithoutActivation:"),^(OrbitSettings *settings,id context){
+            settings.interfaceOrientation=UIInterfaceOrientationLandscapeLeft;
+        });
+        Expect(remote.settings.interfaceOrientation==UIInterfaceOrientationLandscapeLeft &&
+            CGRectEqualToRect(remote.settings.frame,CGRectMake(0,0,844,390)),
+            @"remote FBScene guest landscape change is not forced to host portrait");
+        FinalSceneSettings(remote,NSSelectorFromString(@"_performUpdateWithoutActivation:"),^(OrbitSettings *settings,id context){
+            settings.userInterfaceStyle=2;
+        });
+        Expect(remote.settings.interfaceOrientation==UIInterfaceOrientationLandscapeLeft,
+            @"style-only FBScene changes do not cancel Guest landscape fullscreen");
+        FinalSceneSettings(remote,NSSelectorFromString(@"_performUpdateWithoutActivation:"),^(OrbitSettings *settings,id context){
+            settings.interfaceOrientation=UIInterfaceOrientationPortrait;
+        });
+        Expect(remote.settings.interfaceOrientation==UIInterfaceOrientationPortrait &&
+            CGRectEqualToRect(remote.settings.frame,CGRectMake(0,0,390,844)),
+            @"remote FBScene exit restores portrait geometry");
         void (^lateUpdate)(id,id)=^(OrbitSettings *settings,id context) {
             settings.frame=CGRectMake(0,0,320,480);settings.interfaceOrientation=UIInterfaceOrientationPortrait;
             settings.userInterfaceStyle=2;
