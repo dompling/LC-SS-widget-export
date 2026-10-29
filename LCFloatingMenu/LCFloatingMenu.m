@@ -65,6 +65,24 @@ static void SetPref(NSString *key,id value) {
         object:nil userInfo:@{@"error":error}];
 }
 static NSString *AppPref(void) {return [NSString stringWithFormat:@"appEnabled.%@", GuestID()];}
+// Recency is independent of manual menu order and favorites. Store scoped
+// identities so private/shared apps with identical filenames stay distinct.
+static void FMRememberOpenedApp(NSDictionary *app) {
+    if(!BoolPref(@"recentAppsFirst",NO) || ![app isKindOfClass:NSDictionary.class] ||
+       [app[@"builtin"] boolValue]) return;
+    NSString *key=FMAppKey(app);
+    if(!key.length) return;
+    id stored=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
+    NSArray *previous=[stored isKindOfClass:NSArray.class]?stored:@[];
+    if([previous.firstObject isEqualToString:key]) return;
+    NSMutableArray<NSString *> *recent=[NSMutableArray arrayWithObject:key];
+    for(id item in previous) {
+        if([item isKindOfClass:NSString.class] && ![item isEqualToString:key] && recent.count<40)
+            [recent addObject:item];
+    }
+    SetPref(@"recentOpenedAppKeys",recent);
+}
+
 
 // File work stays off the UI thread. Launch waits for sharing so the next
 // shared Guest sees the updated dylib rather than racing the copy.
@@ -408,6 +426,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)requestAppsRefresh;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
+- (void)rememberCurrentApp;
+- (NSArray<NSDictionary *> *)orderedAppsForMenu;
 - (void)closeSettings;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
 - (void)updateSettingsContent;
@@ -476,6 +496,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.left=BoolPref(@"onLeft",NO);
     self.page=@"apps";
     self.apps=InstalledApps();
+    [self rememberCurrentApp];
     FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu context=%@",
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
@@ -579,6 +600,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(isfinite(y)) self.appsScrollOffset=MAX(0,y);
 }
 - (void)persistAppsScroll {
+    if(BoolPref(@"recentAppsFirst",NO)) return; // Opening resets to top; do not overwrite saved OFF-mode position.
     [self captureAppsScroll];
     CGFloat y=self.appsScrollOffset;
     if(!isfinite(y)) return;
@@ -591,6 +613,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
 }
 - (void)loadAppsScroll {
+    if(BoolPref(@"recentAppsFirst",NO)) {
+        self.appsScrollOffset=0;
+        FMLog(@"apps-scroll-reset",@"recent-apps-first");
+        return;
+    }
     id saved=[HostDefaults() objectForKey:Pref(@"appsScrollOffset")];
     if([saved isKindOfClass:NSNumber.class] && isfinite([saved doubleValue])) {
         self.appsScrollOffset=MAX(0,[saved doubleValue]);
@@ -731,7 +758,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(opening) [self loadAppsScroll];
     else [self persistAppsScroll];
     self.isOpen=opening; self.page=@"apps";
-    if(self.isOpen) self.apps=InstalledApps();
+    if(self.isOpen) {
+        self.apps=InstalledApps();
+        [self rememberCurrentApp];
+    }
     FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
     [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
@@ -822,7 +852,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
     if(current || blocked) {
-        CGFloat side=MAX(13,MIN(18,size*.36));
+        CGFloat side=MIN(size*.45,MAX(13,MIN(18,size*.36)));
         UIImageView *mark=[[UIImageView alloc] initWithImage:
             [UIImage systemImageNamed:current?@"checkmark.circle.fill":@"exclamationmark.circle.fill"]];
         mark.frame=CGRectMake(size-side-1,size-side-1,side,side);
@@ -835,24 +865,24 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return box;
 }
 - (CGFloat)taskCloseSize {
-    return 44/MAX(.70,self.panelContentScale?:1);
+    return 48/MAX(.50,self.panelContentScale?:1);
 }
 - (CGFloat)appRowHeight {
-    return MAX(60,[self taskCloseSize]+8);
+    return MAX(56,[self taskCloseSize]);
 }
 - (UIView *)appRow:(NSDictionary *)app {
     // Standard mode extends the drawer without changing its optical material.
     CGFloat height=[self appRowHeight];
-    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,282,height)];
+    UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,216,height)];
     row.backgroundColor=UIColor.clearColor;
     row.layer.cornerRadius=17;
     // Localized contrast only under list text, not behind the entire glass.
     row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
         FMHostUI()?(FMClearGlassEnabled()?.79:.88):FMReadableRowAlpha()];
-    UIView *icon=[self iconViewForApp:app size:46];
-    icon.frame=CGRectMake(8,(height-46)*.5,46,46);icon.userInteractionEnabled=NO;
+    UIView *icon=[self iconViewForApp:app size:36];
+    icon.frame=CGRectMake(12,(height-36)*.5,36,36);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
-    UILabel *title=[self label:FMAppCaption(app) size:15 weight:UIFontWeightSemibold];
+    UILabel *title=[self label:FMAppCaption(app) size:13 weight:UIFontWeightSemibold];
     title.translatesAutoresizingMaskIntoConstraints=NO;
     title.numberOfLines=1;
     title.lineBreakMode=NSLineBreakByTruncatingTail;
@@ -867,13 +897,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     arrow.hidden=running;
     [row addSubview:arrow];
     [NSLayoutConstraint activateConstraints:@[
-        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:10],
+        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:8],
         [title.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-9],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-4],
         [arrow.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
-        [arrow.widthAnchor constraintEqualToConstant:9],
-        [arrow.heightAnchor constraintEqualToConstant:13]
+        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-4],
+        [arrow.widthAnchor constraintEqualToConstant:18],
+        [arrow.heightAnchor constraintEqualToConstant:18]
     ]];
     row.accessibilityLabel=FMAppCaption(app);
     row.accessibilityTraits=UIAccessibilityTraitButton;
@@ -885,11 +915,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     // Sibling controls keep close taps independent of the row's switch action.
     UIView *container=[[UIView alloc] initWithFrame:row.frame];
     CGFloat closeSize=[self taskCloseSize];
-    row.frame=CGRectMake(0,0,container.bounds.size.width-closeSize-8,height);
+    row.frame=CGRectMake(0,0,container.bounds.size.width-closeSize-4,height);
     row.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [container addSubview:row];
     UIButton *close=[UIButton buttonWithType:UIButtonTypeCustom];
-    close.frame=CGRectMake(container.bounds.size.width-closeSize-4,(height-closeSize)*.5,
+    close.frame=CGRectMake(container.bounds.size.width-closeSize,(height-closeSize)*.5,
                            closeSize,closeSize);
     close.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin;
     UIImageSymbolConfiguration *symbol=[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold];
@@ -929,19 +959,19 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL compact=BoolPref(@"compactMode",NO);
     CGFloat shoulder=compact?22:28;
     // Compact drawer is 76pt before scaling; only the icon column scrolls.
-    // Its invisible row hit target remains >= 44pt even at 75% scale.
+    // Keep the 63pt logical row hit region even when users choose 50% visual scale.
     UIEdgeInsets safe=self.window.safeAreaInsets;
     CGFloat usableWidth=bounds.size.width-safe.left-safe.right;
-    CGFloat pw=MIN(small?(compact?76:310):346,usableWidth-24);
+    CGFloat pw=MIN(small?(compact?76:240):346,usableWidth-24);
     if(pw<=0) return;
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
     // Compact drawer has exactly one footer control: LC home.
     NSUInteger compactActions=1;
-    CGFloat actualScale=small?MIN(Clamp(FloatPref(@"panelScale",1.0),.75,1.20),
+    CGFloat actualScale=small?MIN(Clamp(FloatPref(@"panelScale",1.0),.50,1.20),
                                    (usableWidth-20)/pw):1;
-    if(!isfinite(actualScale) || actualScale<.70) return;
+    if(!isfinite(actualScale) || actualScale<.50) return;
     CGFloat footerHeight=0,top=0,bottom=0;
     BOOL fits=NO;
     // Fit complete controls before choosing panel height. A short scene trades
@@ -951,18 +981,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         BOOL tight=available/actualScale<360;
         self.panelShowsHeader=small && !compact && !tight;
         footerHeight=compact?(tight?MAX(50,44/actualScale)+4:10+compactActions*63+3):
-                              (tight?MAX(60,44/actualScale)+8:74);
-        top=compact?shoulder+8:(self.panelShowsHeader?86+shoulder:shoulder+6);
+                              (small?44:(tight?MAX(60,44/actualScale)+8:74));
+        top=compact?shoulder+8:(self.panelShowsHeader?64+shoulder:shoulder+6);
         bottom=footerHeight+6+shoulder;
         CGFloat rowHeight=compact?63:[self appRowHeight];
         if(!small || (top+bottom+rowHeight)*actualScale<=available) { fits=YES;break; }
-        if(actualScale<=.70) break;
-        actualScale=MAX(.70,actualScale*.95);
+        if(actualScale<=.50) break;
+        actualScale=MAX(.50,actualScale*.95);
     }
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
     CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12+2*shoulder):
-        MIN(531,147+65*MIN(appCount,5)+footerHeight+2*shoulder)):610;
+        top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4)):610;
     if(small) target=MAX(target,top+bottom+(compact?63:[self appRowHeight]));
     if([self.page isEqualToString:@"manage"]) target=620;
     if([self.page isEqualToString:@"diy"]) target=675;
@@ -1020,13 +1050,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(small) {
         // Only the central application list scrolls; header and footer never move.
         if(self.panelShowsHeader) [self buildAppHeader:glass];
-        scroll.frame=CGRectMake(compact?3:13,top,pw-(compact?6:26),
+        scroll.frame=CGRectMake(compact?3:12,top,pw-(compact?6:24),
                                 ph-top-bottom);
         scroll.clipsToBounds=YES;
         [self buildAppFooter:glass];
     }
     UIStackView *stack=[self stack];
-    stack.spacing=small?(compact?3:7):10;
+    stack.spacing=small?(compact?3:4):10;
     [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
@@ -1092,6 +1122,36 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     return found;
 }
+// Only the visible launcher is reordered. App management and pinned favorites
+// continue to use the user's manual order, regardless of this switch.
+- (void)rememberCurrentApp {
+    if(!BoolPref(@"recentAppsFirst",NO)) return;
+    for(NSDictionary *app in self.apps) {
+        if([LCOrbitGuestService isCurrentGuest:app]) {
+            FMRememberOpenedApp(app);
+            break;
+        }
+    }
+}
+- (NSArray<NSDictionary *> *)orderedAppsForMenu {
+    NSArray<NSDictionary *> *apps=[self visibleApps];
+    if(!BoolPref(@"recentAppsFirst",NO) || apps.count<2) return apps;
+    id preference=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
+    NSArray *recent=[preference isKindOfClass:NSArray.class]?preference:@[];
+    NSMutableArray<NSDictionary *> *sorted=[apps mutableCopy];
+    [sorted sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
+        BOOL currentA=[LCOrbitGuestService isCurrentGuest:a];
+        BOOL currentB=[LCOrbitGuestService isCurrentGuest:b];
+        if(currentA!=currentB) return currentA?NSOrderedAscending:NSOrderedDescending;
+        NSUInteger indexA=[recent indexOfObject:FMAppKey(a)];
+        NSUInteger indexB=[recent indexOfObject:FMAppKey(b)];
+        if(indexA!=indexB) return indexA<indexB?NSOrderedAscending:NSOrderedDescending;
+        NSUInteger manualA=[apps indexOfObjectIdenticalTo:a];
+        NSUInteger manualB=[apps indexOfObjectIdenticalTo:b];
+        return manualA<manualB?NSOrderedAscending:manualA>manualB?NSOrderedDescending:NSOrderedSame;
+    }];
+    return sorted;
+}
 - (NSArray<NSString*> *)favorites {
     NSArray *v=[HostDefaults() arrayForKey:Pref(@"favoritePaths")];
     return [v isKindOfClass:NSArray.class]?v:@[];
@@ -1112,20 +1172,34 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return missing;
 }
 - (void)appPage:(UIStackView *)stack {
-    NSArray<NSDictionary*> *apps=[self visibleApps];
+    NSArray<NSDictionary*> *apps=[self orderedAppsForMenu];
     if(BoolPref(@"compactMode",NO)) {
         for(NSDictionary *app in apps) {
-            // 63pt full-width hit area; the visible icon is 50pt square.
-            // Minimum 75% panel scale still yields a 47.25pt tap target.
+            // Preserve the 63pt full-width hit area, independent of the
+            // smaller 46pt icon and its painted backing.
             UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,88,63)];
-            row.backgroundColor=FMHostUI()?
-                [FMThemeColor(FMColorRow) colorWithAlphaComponent:
-                    FMClearGlassEnabled()?.64:.74]:UIColor.clearColor;
-            if(FMHostUI()) row.layer.cornerRadius=15;
+            row.backgroundColor=UIColor.clearColor;
+            // The 63pt row stays clickable, but its painted backing is inset
+            // around the app icon so compact/single-task tiles feel lighter.
+            if(FMHostUI()) {
+                UIView *backing=[UIView new];
+                backing.translatesAutoresizingMaskIntoConstraints=NO;
+                backing.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
+                    FMClearGlassEnabled()?.64:.74];
+                backing.layer.cornerRadius=14;
+                backing.userInteractionEnabled=NO;
+                [row addSubview:backing];
+                [NSLayoutConstraint activateConstraints:@[
+                    [backing.centerXAnchor constraintEqualToAnchor:row.centerXAnchor],
+                    [backing.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+                    [backing.widthAnchor constraintEqualToConstant:54],
+                    [backing.heightAnchor constraintEqualToConstant:54]
+                ]];
+            }
             row.accessibilityLabel=FMAppCaption(app);
             row.accessibilityTraits=UIAccessibilityTraitButton;
             row.enabled=![LCOrbitGuestService isCurrentGuest:app];
-            UIView *icon=[self iconViewForApp:app size:50];
+            UIView *icon=[self iconViewForApp:app size:46];
             icon.translatesAutoresizingMaskIntoConstraints=NO;
             icon.userInteractionEnabled=NO;
             icon.layer.borderWidth=.55;
@@ -1138,8 +1212,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [NSLayoutConstraint activateConstraints:@[
                 [icon.centerXAnchor constraintEqualToAnchor:row.centerXAnchor],
                 [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-                [icon.widthAnchor constraintEqualToConstant:50],
-                [icon.heightAnchor constraintEqualToConstant:50]
+                [icon.widthAnchor constraintEqualToConstant:46],
+                [icon.heightAnchor constraintEqualToConstant:46]
             ]];
             objc_setAssociatedObject(row,@selector(switchFromRow:),
                                      app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1186,16 +1260,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         UILabel *empty=[self label:@"暂无应用" size:13 weight:UIFontWeightMedium];
         empty.textAlignment=NSTextAlignmentCenter;
         empty.textColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMThemeColor(FMColorSecondary);
-        [self addRow:empty height:68 to:stack];
+        [self addRow:empty height:BoolPref(@"compactMode",NO)?68:[self appRowHeight] to:stack];
     }
 }
 - (void)buildAppHeader:(UIView *)glass {
     for(UIView *tile in self.appsHeaderTiles) [tile removeFromSuperview];
     self.appsHeaderGlass=glass;
     NSMutableArray<UIView *> *tiles=[NSMutableArray array];
-    CGFloat w=glass.bounds.size.width, inner=w-28;
-    // The expanded panel is intentionally icon-and-app-only: no title,
-    // description, item count, or duplicate explanatory text.
+    CGFloat w=glass.bounds.size.width, inner=w-24;
+    // Favorites show icons only; app names remain available to VoiceOver.
     NSArray *apps=[self visibleApps];
     NSMutableArray *pinned=[NSMutableArray array];
     for(NSString *path in [self favorites]) for(NSDictionary *item in apps)
@@ -1204,31 +1277,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         if(pinned.count==4) break;
         [pinned addObject:item];
     }
-    CGFloat gap=6,cell=(inner-gap*3)/4;
+    CGFloat gap=4,cell=(inner-gap*3)/4;
     for(NSUInteger i=0;i<pinned.count;i++) {
         NSDictionary *app=pinned[i];
         BOOL compact=BoolPref(@"compactMode",NO);
         UIControl *tile=[[UIControl alloc] initWithFrame:
-            CGRectMake(14+i*(cell+gap),(compact?5:8)+(compact?22:28),cell,compact?48:65)];
+            CGRectMake(12+i*(cell+gap),(compact?5:8)+(compact?22:28),cell,compact?48:40)];
         tile.backgroundColor=UIColor.clearColor;
-        // Favorites share the drawer material; no extra glass behind captions.
-        CGFloat iconSize=compact?40:36;
+        CGFloat iconSize=compact?40:32;
         UIView *icon=[self iconViewForApp:app size:iconSize];
-        icon.frame=CGRectMake((cell-iconSize)*.5,compact?4:4,iconSize,iconSize);
+        icon.frame=CGRectMake((cell-iconSize)*.5,4,iconSize,iconSize);
         icon.userInteractionEnabled=NO;
         [tile addSubview:icon];
-        if(!compact) {
-            UILabel *name=[self label:FMAppCaption(app) size:11 weight:UIFontWeightSemibold];
-            name.frame=CGRectMake(1,44,cell-2,16);name.textAlignment=NSTextAlignmentCenter;
-            name.lineBreakMode=NSLineBreakByTruncatingTail;
-            if(FMClearGlassEnabled()) {
-                // Shield short captions while preserving clear corners and gaps.
-                name.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
-                name.layer.cornerRadius=6;
-                name.clipsToBounds=YES;
-            }
-            [tile addSubview:name];
-        }
         objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
         tile.accessibilityLabel=FMAppCaption(app);
@@ -1236,6 +1296,15 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         tile.enabled=![LCOrbitGuestService isCurrentGuest:app];
         [FMGlassContent(glass) addSubview:tile];
         [tiles addObject:tile];
+    }
+    if(tiles.count) {
+        CGFloat y=CGRectGetMaxY(tiles.lastObject.frame)+8;
+        UIView *separator=[[UIView alloc] initWithFrame:
+                           CGRectMake(12,y,inner,1/UIScreen.mainScreen.scale)];
+        separator.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
+        separator.userInteractionEnabled=NO;
+        [FMGlassContent(glass) addSubview:separator];
+        [tiles addObject:separator];
     }
     self.appsHeaderTiles=tiles;
 }
@@ -1263,8 +1332,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     CGFloat w=glass.bounds.size.width;
     CGFloat height=self.panelFooterHeight;
-    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:13,
-                       glass.bounds.size.height-height-6-(compact?22:28),w-(compact?6:26),height)];
+    UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:12,
+                       glass.bounds.size.height-height-6-(compact?22:28),w-(compact?6:24),height)];
     footer.backgroundColor=UIColor.clearColor;
     [FMGlassContent(glass) addSubview:footer];
     if(compact) {
@@ -1280,16 +1349,20 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         NSArray *spec=items[i];
         CGRect hit=compact?
             CGRectMake(0,4+i*slot,footer.bounds.size.width,slot):
-            CGRectMake(i*slot,4,slot,height-8);
+            CGRectMake(i*slot,0,slot,height);
         UIControl *button=[[UIControl alloc] initWithFrame:hit];
         button.backgroundColor=UIColor.clearColor;
         button.accessibilityLabel=spec[2];
         button.accessibilityTraits=UIAccessibilityTraitButton;
         button.accessibilityHint=@"轻触执行";
-        CGFloat tileSize=compact?50:44;
+        CGFloat tileSize=compact?50:36;
         UIView *tile=[[UIView alloc] initWithFrame:
             CGRectMake((hit.size.width-tileSize)*.5,(hit.size.height-tileSize)*.5,
                        tileSize,tileSize)];
+        if(!compact) {
+            button.frame=CGRectOffset(tile.frame,hit.origin.x,hit.origin.y);
+            tile.frame=button.bounds;
+        }
         tile.layer.cornerRadius=tileSize*.24;
         tile.backgroundColor=FMClearGlassEnabled()?
             [FMThemeColor(FMColorTool) colorWithAlphaComponent:
@@ -1305,10 +1378,10 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         tile.layer.shadowRadius=3;
         [button addSubview:tile];
         UIImageSymbolConfiguration *conf=[UIImageSymbolConfiguration
-           configurationWithPointSize:compact?23:20 weight:UIImageSymbolWeightSemibold];
+           configurationWithPointSize:compact?23:22 weight:UIImageSymbolWeightSemibold];
         UIImageView *glyph=[[UIImageView alloc] initWithImage:
                                      [UIImage systemImageNamed:spec[0] withConfiguration:conf]];
-        glyph.frame=CGRectInset(tile.bounds,12,12);
+        glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
         glyph.tintColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
@@ -1425,6 +1498,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.page=@"apps";
     self.isOpen=visible;
     self.apps=InstalledApps();
+    if(visible) { [self rememberCurrentApp]; [self loadAppsScroll]; }
     FMLog(@"settings-close",FMHostUI()?@"lc-host-foreground":@"guest-foreground");
     [self draw];
 }
@@ -1476,6 +1550,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
+        [self settingSwitch:s title:@"最近打开的 App 置顶"
+                     key:@"recentAppsFirst" defaultValue:NO tag:20];
         [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         [self settingSwitch:s title:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
     } else if([category isEqualToString:@"apps"]) {
@@ -1668,7 +1744,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     heading.distribution=UIStackViewDistributionFill;
     UILabel *name=[self label:@"弹出菜单缩放" size:14 weight:UIFontWeightMedium];
     UILabel *percent=[self label:
-        [NSString stringWithFormat:@"%.0f%%",100*Clamp(FloatPref(@"panelScale",1.0),.75,1.20)]
+        [NSString stringWithFormat:@"%.0f%%",100*Clamp(FloatPref(@"panelScale",1.0),.50,1.20)]
         size:13 weight:UIFontWeightSemibold];
     percent.textColor=FMThemeColor(FMColorSecondary);
     percent.textAlignment=NSTextAlignmentRight;
@@ -1677,8 +1753,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [percent.widthAnchor constraintEqualToConstant:65].active=YES;
     [self addRow:heading height:29 to:stack];
     UISlider *slider=[UISlider new];
-    slider.minimumValue=.75;slider.maximumValue=1.20;
-    slider.value=Clamp(FloatPref(@"panelScale",1.0),.75,1.20);
+    slider.minimumValue=.50;slider.maximumValue=1.20;
+    slider.value=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
     slider.tag=14;slider.tintColor=FMAccent();
     slider.accessibilityLabel=@"弹出菜单缩放";
     objc_setAssociatedObject(slider,@selector(sliderChanged:),percent,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1700,6 +1776,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     [self settingScaleControl:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
+    [self settingSwitch:s title:@"最近打开的 App 置顶"
+                 key:@"recentAppsFirst" defaultValue:NO tag:20];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
     [self spacer:s size:10];
@@ -2042,11 +2120,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         case 7:key=[@"override." stringByAppendingString:GuestID()];break;
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
+        case 20:key=@"recentAppsFirst";break;
         case 18:key=@"clearGlass";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
+    if(sw.tag==20) {
+        if(sw.isOn) { self.appsScrollOffset=0; [self rememberCurrentApp]; }
+        FMLog(@"recent-apps-first",sw.isOn?@"on":@"off");
+    }
     if(sw.tag==3||sw.tag==7||sw.tag==8||sw.tag==18) [self draw];
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
@@ -2145,6 +2228,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)resetStyle {
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
+    SetPref(@"recentAppsFirst",@NO);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
     SetPref(@"appearanceMode",@(0));
     for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth"]) {
@@ -2209,6 +2293,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [manager showMessage:@"暂不可切换" details:error.localizedDescription];
             return;
         }
+        FMRememberOpenedApp(target);
         FMLog(@"switch-accepted",multitask?@"host-multitask":@"classic");
         manager.isOpen=NO;[manager draw];
     });
@@ -2219,6 +2304,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(!self.window || self.settingsWindow) return;
     if([LCOrbitMultitask usesSystemMenu]) { [self draw];return; }
     self.apps=InstalledApps();self.page=@"apps";
+    [self rememberCurrentApp];
     if(expanded && !self.isOpen) {
         [self loadAppsScroll];
         self.isOpen=YES;
@@ -2244,6 +2330,11 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         NSString *title=error.code==LCOrbitGuestErrorIneligible?@"不可安全切换":@"切换失败";
         [self showMessage:title details:error.localizedDescription?:@"启动失败"];
         return;
+    }
+    if(![path isEqualToString:@"ui"]) for(NSDictionary *app in self.apps) {
+        if([app[@"path"] isEqualToString:path] && [app[@"uuid"] isEqualToString:uuid]) {
+            FMRememberOpenedApp(app);break;
+        }
     }
     FMLog(@"switch-accepted",@"LCOrbitGuestService");
 }

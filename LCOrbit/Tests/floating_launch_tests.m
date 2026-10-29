@@ -58,6 +58,8 @@ static __weak UIWindowScene *FMStyleScene;
 static NSUInteger Attempts,ClassicLaunches,MultitaskLaunches,Warnings,Assertions,Failures;
 static NSMutableArray<void (^)(void)> *SyncCompletions;
 static NSString *FMAppKey(NSDictionary *app) { return app[@"identity"]?:app[@"path"]?:@""; }
+// Recency persistence is separately tested by the UIKit drawer fixture.
+static void FMRememberOpenedApp(NSDictionary *app) { (void)app; }
 static NSString *GuestID(void) { return CurrentGuest; }
 static BOOL FMHostUI(void) { return HostUI; }
 static void FMLog(NSString *event,NSString *detail) {}

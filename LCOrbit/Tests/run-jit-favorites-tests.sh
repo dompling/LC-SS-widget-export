@@ -14,7 +14,7 @@ def method(start, end):
     a=source.index(start)
     b=source.index(end,a)
     return source[a:b]
-methods=[method('- (NSArray<NSDictionary*> *)visibleApps {','\n- (NSArray<NSString*> *)favorites'),
+methods=[method('- (NSArray<NSDictionary*> *)visibleApps {','\n- (void)rememberCurrentApp'),
          method('- (NSArray<NSString*> *)favorites {','\n- (void)appPage:'),
          method('- (void)pinApp:(UIControl *)button {','\n- (void)promoteApp:')]
 helper=''

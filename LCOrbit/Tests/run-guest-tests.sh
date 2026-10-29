@@ -11,7 +11,7 @@ import sys
 root=Path(sys.argv[1])
 source=(root/'LCFloatingMenu/LCFloatingMenu.m').read_text()
 start=source.index('- (NSArray<NSDictionary*> *)visibleApps {')
-end=source.index('\n- (NSArray<NSString*> *)favorites',start)
+end=source.index('\n- (void)rememberCurrentApp',start)
 method=source[start:end]
 action_start=source.index('- (void)switchFromRow:(UIControl *)sender {')
 action_end=source.index('\n@end',action_start)

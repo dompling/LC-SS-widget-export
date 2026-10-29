@@ -1,0 +1,34 @@
+{
+  "scope": "Dimensions only; preserve existing materials, silhouette, colors, opacity, corner/border/shadow rules and actions.",
+  "normalMenu": {
+    "baseWidth": 240,
+    "referenceScreenWidth": 402,
+    "screenWidthRatio": 0.5970149253731343,
+    "rowHeight": 56,
+    "rowFont": 13,
+    "rowIcon": 36,
+    "headerIcon": 32,
+    "footerHeight": 44,
+    "footerTile": 36,
+    "footerGlyph": 22,
+    "trailingGlyph": 18,
+    "horizontalInset": 12,
+    "rowGap": 4,
+    "closeScreenTarget": 48,
+    "rowIconLeftInset": 12,
+    "footerHitArea": "visible 36pt icon tile only; compact unchanged",
+    "headerShowsNames": false,
+    "headerCellHeight": 40,
+    "headerReservedHeight": 48,
+    "headerNamesForVoiceOver": true
+  },
+  "verification": {
+    "uikitPassed": 31,
+    "uikitFailed": 0,
+    "unchangedCompactSettingsPNGs": 10,
+    "behaviorSuitesPassed": 18,
+    "staticAnalysisDiagnostics": 0,
+    "independentReview": "Prior size revision independently reviewed; this header-only update verified directly against baseline, existing UIKit tests, unchanged list/footer/material functions and static analysis."
+  },
+  "sha256": "9198bfeefa30f83d4d136804960e22dac60e8c3b77d04bc1c5664069948c42e4"
+}

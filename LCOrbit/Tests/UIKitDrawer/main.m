@@ -20,6 +20,11 @@
 @property(nonatomic,assign) BOOL left;
 @property(nonatomic,assign) BOOL isOpen;
 @property(nonatomic,weak) UIScrollView *appsScroll;
+@property(nonatomic,assign) CGFloat appsScrollOffset;
+- (NSArray<NSDictionary *> *)orderedAppsForMenu;
+- (void)rememberCurrentApp;
+- (void)loadAppsScroll;
+- (void)persistAppsScroll;
 - (void)draw;
 - (void)refreshAppsContent;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
@@ -33,6 +38,7 @@
 @end
 static NSArray *FixtureApps;
 static BOOL FixtureCurrent, FixtureRunning=YES;
+static CGFloat FixtureWidth=667;
 static NSUInteger CloseCount, PositionWrites;
 static UIAlertController *CapturedAlert;
 static NSMutableArray *Results;
@@ -104,7 +110,7 @@ static FMManager *Manager(BOOL compact,CGFloat scale,CGFloat height,UIEdgeInsets
     LCOrbitPreferences *p=[LCOrbitStorage preferences];
     [p setObject:@(compact) forKey:@"LCFloatingMenu.compactMode"];
     [p setObject:@(scale) forKey:@"LCFloatingMenu.panelScale"];
-    GeometryWindow *window=[[GeometryWindow alloc] initWithFrame:CGRectMake(0,0,667,height)];window.fixtureSize=CGSizeMake(667,height);window.fixtureInsets=insets;
+    GeometryWindow *window=[[GeometryWindow alloc] initWithFrame:CGRectMake(0,0,FixtureWidth,height)];window.fixtureSize=CGSizeMake(FixtureWidth,height);window.fixtureInsets=insets;
     window.rootViewController=[UIViewController new];window.rootViewController.view.frame=window.bounds;
     FMManager *m=[FMManager new];m.window=window;m.overlayView=[[UIView alloc] initWithFrame:window.bounds];
     [window.rootViewController.view addSubview:m.overlayView];m.orbitContext=[LCOrbitContext new];m.orbY=.5;m.left=left;m.isOpen=opened;m.page=page;m.apps=FixtureApps;
@@ -119,6 +125,8 @@ static void Snapshot(FMManager *m,NSString *name) {
 }
 static void RunTests(void) {
     UIEdgeInsets ordinary=UIEdgeInsetsMake(0,0,21,0);
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    [prefs setObject:@NO forKey:@"LCFloatingMenu.recentAppsFirst"];
     for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *height in @[@320,@375]) {
         FMManager *m=Manager(compact.boolValue,1,height.doubleValue,ordinary,NO,YES,@"apps");
         CGRect list=Frame(m.appsScroll,m);CGFloat headerEnd=CGRectGetMinY(list),footerStart=CGFLOAT_MAX;
@@ -128,12 +136,12 @@ static void RunTests(void) {
         NSString *name=[NSString stringWithFormat:@"short-%@-%@",compact.boolValue?@"compact":@"normal",height];
         Check(name,good,@{@"list":NSStringFromCGRect(list),@"headerEnd":@(headerEnd),@"footerStart":@(footerStart)});Snapshot(m,name);
     }
-    for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *scale in @[@.75,@1,@1.2]) {
+    for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *scale in @[@.50,@.75,@1,@1.2]) {
         FMManager *m=Manager(compact.boolValue,scale.doubleValue,667,ordinary,NO,YES,@"apps");
         NSArray *close=Actions(m,@"closeTaskFromButton:");BOOL good=close.count>0,distinct=YES;NSMutableArray *frames=[NSMutableArray array];
         for(UIControl *c in close) {
             CGRect f=Frame(c,m);[frames addObject:NSStringFromCGRect(f)];
-            CGFloat minimum=compact.boolValue?24:44;
+            CGFloat minimum=compact.boolValue?(scale.doubleValue<.75?16:24):48;
             good &= f.size.width>=minimum-.01 && f.size.height>=minimum-.01;
             UIControl *switcher=nil;for(UIControl *s in Actions(m,@"switchFromRow:")) if(s.superview==c.superview) switcher=s;
             if(!switcher) { distinct=NO;continue; }
@@ -143,8 +151,8 @@ static void RunTests(void) {
                 found=(hit==switcher || [hit isDescendantOfView:switcher]) &&
                     CGRectGetMidX(f)>CGRectGetMidX(sf) && CGRectGetMidY(f)<CGRectGetMidY(sf) &&
                     fabs(c.superview.bounds.size.height-63)<.01;
-            } else for(CGFloat x=CGRectGetMinX(sf)+22;x<=CGRectGetMaxX(sf)-22;x+=2) {
-                CGRect candidate=CGRectMake(x-22,CGRectGetMidY(sf)-22,44,44);
+            } else for(CGFloat x=CGRectGetMinX(sf)+24;x<=CGRectGetMaxX(sf)-24;x+=2) {
+                CGRect candidate=CGRectMake(x-24,CGRectGetMidY(sf)-24,48,48);
                 CGPoint center=CGPointMake(x,CGRectGetMidY(sf));UIView *hit=[m.overlayView hitTest:center withEvent:nil];
                 if(!CGRectIntersectsRect(candidate,f) && (hit==switcher || [hit isDescendantOfView:switcher])) { found=YES;break; }
             }
@@ -152,6 +160,32 @@ static void RunTests(void) {
         }
         NSString *name=[NSString stringWithFormat:@"targets-%@-%.0f",compact.boolValue?@"compact":@"normal",scale.doubleValue*100];
         Check(name,good && distinct,@{@"closeFrames":frames,@"switchCenterAccessible":@(distinct)});Snapshot(m,name);
+    }
+    for(NSNumber *scale in @[@.50,@.75,@1,@1.2]) {
+        FMManager *m=Manager(NO,scale.doubleValue,667,ordinary,NO,YES,@"apps");
+        NSMutableArray<UIControl *> *buttons=[NSMutableArray array];
+        for(NSString *action in @[@"goHome",@"closeMultitaskGuest",@"openSettings",@"toggle"])
+            [buttons addObjectsFromArray:Actions(m,action)];
+        BOOL centersWork=buttons.count==4,blankIsInactive=YES;
+        for(UIControl *button in buttons) {
+            UIView *tile=button.subviews.firstObject;
+            if(!tile) {centersWork=NO;continue;}
+            CGRect visible=Frame(tile,m);
+            CGPoint center=CGPointMake(CGRectGetMidX(visible),CGRectGetMidY(visible));
+            UIView *hit=[m.overlayView hitTest:center withEvent:nil];
+            centersWork &= hit==button || [hit isDescendantOfView:button];
+            CGPoint outside[]={CGPointMake(CGRectGetMinX(visible)-1,center.y),
+                               CGPointMake(CGRectGetMaxX(visible)+1,center.y),
+                               CGPointMake(center.x,CGRectGetMinY(visible)-1),
+                               CGPointMake(center.x,CGRectGetMaxY(visible)+1)};
+            for(NSUInteger i=0;i<4;i++) {
+                hit=[m.overlayView hitTest:outside[i] withEvent:nil];
+                for(UIControl *candidate in buttons)
+                    blankIsInactive &= hit!=candidate && ![hit isDescendantOfView:candidate];
+            }
+        }
+        Check([NSString stringWithFormat:@"normal-footer-icon-only-%.0f",scale.doubleValue*100],
+              centersWork && blankIsInactive,@{@"iconCentersWork":@(centersWork),@"surroundingBlankInactive":@(blankIsInactive)});
     }
     for(NSNumber *left in @[@NO,@YES]) {
         UIEdgeInsets insets=UIEdgeInsetsMake(0,59,21,35);FMManager *m=Manager(NO,1,375,insets,left.boolValue,NO,@"apps");
@@ -203,6 +237,43 @@ static void RunTests(void) {
         BOOL removed=YES;for(UIView *v in Views(stack)) if([v isKindOfClass:UILabel.class]) {NSString *t=((UILabel *)v).text;removed &= ![t containsString:@"圆形微珠"] && ![t containsString:@"闲置贴边待命"];}
         Check([@"removed-native-category-" stringByAppendingString:category],removed,nil);Snapshot(m,[@"settings-native-" stringByAppendingString:category]);
     }
+    // Recent ordering is opt-in, uses scoped identities, and never modifies
+    // the saved manual order. Only reopening resets scroll, not row refresh.
+    FMManager *recency=Manager(NO,1,667,ordinary,NO,YES,@"apps");
+    NSArray *manual=[recency orderedAppsForMenu];
+    id manualOrderBefore=[prefs objectForKey:@"LCFloatingMenu.menuOrder"];
+    NSDictionary *second=FixtureApps[2],*third=FixtureApps[3];
+    [prefs setObject:@[third[@"identity"],second[@"identity"]] forKey:@"LCFloatingMenu.recentOpenedAppKeys"];
+    Check(@"recent-off-keeps-manual-order",[recency orderedAppsForMenu].firstObject==manual.firstObject,nil);
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.recentAppsFirst"];
+    NSArray *ordered=[recency orderedAppsForMenu];
+    Check(@"recent-on-moves-opened-to-front",ordered.count==manual.count &&
+          ordered[0]==third && ordered[1]==second,nil);
+    Check(@"recent-on-keeps-manual-preference",
+          (manualOrderBefore==nil && [prefs objectForKey:@"LCFloatingMenu.menuOrder"]==nil) ||
+          [manualOrderBefore isEqual:[prefs objectForKey:@"LCFloatingMenu.menuOrder"]],nil);
+    FixtureCurrent=YES;
+    [recency rememberCurrentApp];
+    NSArray *savedRecent=[prefs objectForKey:@"LCFloatingMenu.recentOpenedAppKeys"];
+    Check(@"recent-current-becomes-first",[savedRecent.firstObject isEqual:FixtureApps[0][@"identity"]] &&
+          [recency orderedAppsForMenu].firstObject==FixtureApps[0],nil);
+    FixtureCurrent=NO;
+    [prefs setObject:@(93) forKey:@"LCFloatingMenu.appsScrollOffset"];
+    recency.appsScrollOffset=51;
+    [recency loadAppsScroll];
+    Check(@"recent-on-open-resets-scroll",fabs(recency.appsScrollOffset)<.01,nil);
+    recency.appsScrollOffset=65;
+    [recency persistAppsScroll];
+    Check(@"recent-on-does-not-overwrite-saved-scroll",
+          [[prefs objectForKey:@"LCFloatingMenu.appsScrollOffset"] doubleValue]==93,nil);
+    [prefs setObject:@NO forKey:@"LCFloatingMenu.recentAppsFirst"];
+    [recency loadAppsScroll];
+    Check(@"recent-off-restores-scroll",fabs(recency.appsScrollOffset-93)<.01 &&
+          [recency orderedAppsForMenu].firstObject==manual.firstObject,nil);
+    FixtureWidth=402;
+    FMManager *portrait=Manager(NO,1,874,UIEdgeInsetsMake(62,0,34,0),NO,YES,@"apps");
+    Snapshot(portrait,@"normal-portrait");
+    FixtureWidth=667;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3.8*NSEC_PER_SEC),dispatch_get_main_queue(),^{
         UIView *bead=[legacy.orb viewWithTag:9202];
         Check(@"legacy-auto-fade-ignored",bead && CGAffineTransformIsIdentity(bead.transform) && bead.alpha>=.99,@{@"alpha":@(bead.alpha),@"transform":NSStringFromCGAffineTransform(bead.transform)});

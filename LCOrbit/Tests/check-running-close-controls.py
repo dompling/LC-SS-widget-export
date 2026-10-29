@@ -9,7 +9,7 @@ assert "closeGuest:target error:&error" in src, "close must use the exact app id
 assert "close.frame=CGRectMake(41,0,44,44)" not in compact, "compact close button must not be outside clipped viewport"
 assert "[close.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-2]" in compact, "compact badge must stay inside the upper-right viewport edge"
 assert "[close.widthAnchor constraintEqualToConstant:closeSize]" in compact, "compact close target must follow effective scale"
-assert "44/MAX(.70,self.panelContentScale?:1)" in src, "normal close targets must preserve 44 screen points"
+assert "48/MAX(.50,self.panelContentScale?:1)" in src, "enlarged normal close targets must preserve 48 screen points independently of switching"
 assert "[close.topAnchor constraintEqualToAnchor:container.topAnchor]" in compact, "compact badge must sit at the top-right corner"
 assert "height:63+closeSize" not in compact, "running apps must not add a close row"
 close=src[src.index("- (void)closeApp:"):src.index("- (void)restart {",src.index("- (void)closeApp:"))]
@@ -41,4 +41,13 @@ assert "drawer.transform=CGAffineTransformMakeScale(sx,sy)" not in src, "drawer 
 assert "(self.left?safe.left:safe.right)+(small?0:10)" in src, "drawer must dock to visible safe edge"
 assert "button.userInteractionEnabled=!self.isOpen" in src, "hidden bead must not intercept drawer taps"
 assert "self.dismissLayer.userInteractionEnabled=NO" in src, "closing transition must not accept duplicate taps"
-print("Running-task controls and side-notch drawer: PASS")
+assert 'recentAppsFirst' in src and 'recentOpenedAppKeys' in src, "opt-in recently opened ordering must persist separate from manual order"
+assert 'if(BoolPref(@"recentAppsFirst",NO)) return;' in src, "recent-mode must not save old scroll"
+assert 'self.appsScrollOffset=0;' in src, "recent-mode opening should reset saved scroll"
+assert '[self orderedAppsForMenu]' in src, "only launcher should use recent sort"
+assert 'slider.minimumValue=.50;slider.maximumValue=1.20;' in src, "menu scale must allow 50%"
+assert 'Clamp(FloatPref(@"panelScale",1.0),.50,1.20)' in src, "50% menu scale must not get clamped up"
+assert 'if(actualScale<=.50) break;' in src, "panel fit must accommodate 50% scale"
+assert '[backing.widthAnchor constraintEqualToConstant:54]' in compact, "compact icon backing must be smaller than row"
+assert '[icon.widthAnchor constraintEqualToConstant:46]' in compact, "compact icon should have more breathing room"
+print("Running-task controls, compact tiles and 50% menu scale: PASS")
