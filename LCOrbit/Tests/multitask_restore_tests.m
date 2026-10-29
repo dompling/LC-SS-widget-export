@@ -97,7 +97,7 @@ static BOOL UIInterfaceOrientationIsLandscape(NSInteger orientation) { return or
 @end
 @compatibility_alias NSLayoutConstraint OrbitConstraint;
 
-static char SnapshotKey,ConstraintsKey;
+static char SnapshotKey,ConstraintsKey,GuestOrientationKey;
 static IMP OriginalVertical;
 static IMP OriginalPiPStopped;
 static NSUInteger NativePiPStops,PiPRestores;
