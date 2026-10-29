@@ -1,0 +1,68 @@
+name: Publish verified LCFloatingMenu version (release request)
+run-name: LCFloatingMenu publish request - ${{ github.sha }}
+on:
+  push:
+    branches:
+      - lcss-original
+    paths:
+      - '.github/release-requests/*.txt'
+permissions:
+  contents: write
+concurrency:
+  group: lcfm-version-publisher
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Compile, verify, create tag and publish Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^#define FM_MENU_VERSION @"\([^"]*\)".*$/\1/p' LCFloatingMenu/LCFloatingMenu.m | head -n 1)"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid source version"; exit 1; }
+          REQUEST=".github/release-requests/$VERSION.txt"
+          test -s "$REQUEST" || { echo "::error::Expected release request $REQUEST"; exit 1; }
+          NOTES="LCFloatingMenu/RELEASE_NOTES_$VERSION.md"
+          test -s "$NOTES" || { echo "::error::Missing release notes $NOTES"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag $VERSION already exists; refusing to overwrite published version"
+            exit 1
+          fi
+          LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
+          LCOrbit/Tests/verify.sh dist/LCFloatingMenu.dylib
+          test -s dist/LCFloatingMenu.dylib
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" -m "LCFloatingMenu $VERSION"
+          git push origin "refs/tags/$VERSION"
+          gh release create "$VERSION" dist/LCFloatingMenu.dylib \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "LCFloatingMenu $VERSION" \
+            --notes-file "$NOTES" --latest=false
+          printf 'FM_VERSION=%s\nFM_COMMIT=%s\nFM_TAG=%s\n' "$VERSION" "$GITHUB_SHA" "$VERSION" > dist/latest-info.txt
+          CURRENT="$(gh release view fm-latest --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null | sed -n 's/^FM_VERSION=//p' | head -n 1 || true)"
+          if [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            IFS=. read -r a b c <<< "$CURRENT"
+            IFS=. read -r x y z <<< "$VERSION"
+            if (( 10#$a > 10#$x || (10#$a == 10#$x && 10#$b > 10#$y) || (10#$a == 10#$x && 10#$b == 10#$y && 10#$c > 10#$z) )); then
+              echo "Keeping newer fm-latest=$CURRENT"
+              exit 0
+            fi
+          fi
+          if gh release view fm-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload fm-latest dist/LCFloatingMenu.dylib dist/latest-info.txt --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit fm-latest --repo "$GITHUB_REPOSITORY" \
+              --title "LCFloatingMenu latest ($VERSION)" \
+              --notes-file dist/latest-info.txt --prerelease --latest=false
+          else
+            gh release create fm-latest dist/LCFloatingMenu.dylib dist/latest-info.txt \
+              --repo "$GITHUB_REPOSITORY" --title "LCFloatingMenu latest ($VERSION)" \
+              --notes-file dist/latest-info.txt --prerelease --latest=false
+          fi
