@@ -9,7 +9,7 @@ import sys
 source=(Path(sys.argv[1])/'LCOrbit/Core/LCOrbitMultitaskUI.m').read_text()
 parts=[]
 for signature in ['static BOOL OrbitValidFrame(', 'static UIEdgeInsets PortraitInsets(',
-                  'static BOOL FullscreenGeometry(', 'static void ApplyGeometry(',
+                  'static void RememberGuestOrientation(', 'static BOOL FullscreenGeometry(', 'static void ApplyGeometry(',
                   'static void ConfigureSafeArea(', 'static void UpdateScene(',
                   'static void SceneSettings(', 'static void FinalSceneSettings(',
                   'static void InitialSceneSettings(', 'static void PresenterReady(']:
