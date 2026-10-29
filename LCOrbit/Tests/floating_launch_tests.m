@@ -117,6 +117,8 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 @property(nonatomic,strong) UIWindowScene *appearanceScene;
 @property(nonatomic,strong) id appearanceRegistration,settingsNavigation,settingsScreen,settingsScroll;
 @property(nonatomic,strong) id appsScroll,overlayView,orb,panel,dismissLayer;
+@property(nonatomic,strong) NSTimer *orbUpdateTimer;
+@property(nonatomic,weak) UIView *orbUpdateLine;
 @property BOOL appsScrollRestorePending,isOpen,launchPending,launchMultitaskMode,launchSystemMenuMode;
 @property NSUInteger launchGeneration;
 + (instancetype)shared;
@@ -128,6 +130,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 - (void)refreshUI;
 - (void)requestAppsRefresh;
 - (void)installIfPossible;
+- (void)checkOrbUpdateIfNeeded;
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
 @end
 @interface FMManager (LaunchInvalidation)
@@ -142,6 +145,7 @@ static FMManager *Manager;
 - (void)refreshUI {}
 - (void)requestAppsRefresh {}
 - (void)installIfPossible {}
+- (void)checkOrbUpdateIfNeeded {}
 - (void)showMessage:(NSString *)title details:(NSString *)detail { Warnings++; }
 #include "launch.inc"
 @end
