@@ -98,7 +98,16 @@ static BOOL RefreshSawProtectedContent;
 - (void)pictureInPictureController:(id)controller failedToStartPictureInPictureWithError:(NSError *)error;
 @end
 @interface AVPictureInPictureVideoCallViewController : UIViewController @end
-@implementation AVPictureInPictureVideoCallViewController @end
+@implementation AVPictureInPictureVideoCallViewController
+- (instancetype)init {
+    if((self=[super init])) {
+        // Reproduce iOS AVKit's as-yet-unlaid-out container at PiP arm time.
+        self.view.frame=CGRectZero;
+        self.view.bounds=CGRectZero;
+    }
+    return self;
+}
+@end
 @interface AVPictureInPictureControllerContentSource : NSObject
 @property(nonatomic,strong) UIView *source;
 @property(nonatomic,strong) UIViewController *video;
@@ -249,6 +258,9 @@ int main(void) {@autoreleasepool {
         Expect(controller.contentSource.source==scene.view && manager.displayingVC==scene,@"AVKit source belongs to exact active task");
         Expect(CGSizeEqualToSize(manager.pipVideoCallViewController.preferredContentSize,scene.view.bounds.size),@"prepared PiP preserves source aspect ratio");
         Expect(hosting.boolValue?manager.pipVideoCallContentView!=scene.contentView:manager.pipVideoCallContentView==scene.contentView,@"hosting API uses a wrapper while legacy API retains content directly");
+        if(hosting.boolValue)
+            Expect(CGSizeEqualToSize(manager.pipVideoCallContentView.bounds.size,scene.view.bounds.size),
+                   @"automatic PiP wrapper starts at Guest dimensions even if AVKit has zero bounds");
         [Driver reconcile];Expect(Creations==1 && StartCalls==0,@"repeated foreground reconciliation is idempotent");
         [OptedIn removeAllObjects];[Driver reconcile];
         Expect(!controller.contentSource && !controller.delegate && !controller.canStartPictureInPictureAutomaticallyFromInline && NativeEmpty(),@"turning off an armed task releases source and native bindings");
