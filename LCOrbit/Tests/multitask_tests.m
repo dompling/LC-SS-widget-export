@@ -16,6 +16,18 @@ static NSUInteger AutomaticRefreshes;
 + (void)refresh { AutomaticRefreshes++; }
 @end
 static void (^Pending)(NSNumber *,NSError *);
+@interface PiPManager : NSObject
+@property(nonatomic) BOOL active;
+@property(nonatomic) NSUInteger stops;
++ (instancetype)shared;
+- (BOOL)isPiP;
+- (void)stopPiP;
+@end
+@implementation PiPManager
++ (instancetype)shared { static PiPManager *manager;static dispatch_once_t once;dispatch_once(&once,^{manager=[self new];});return manager; }
+- (BOOL)isPiP { return self.active; }
+- (void)stopPiP { self.stops++;self.active=NO; }
+@end
 
 @implementation LCOrbitHost
 + (NSUserDefaults *)hostDefaults { return Defaults; }
@@ -117,6 +129,16 @@ int main(void) {
         Hooks=YES;
         Expect([bridge setEnabled:YES error:&error] && [bridge isEnabled],@"host can persist fullscreen mode");
         Expect([Defaults integerForKey:@"LCMultitaskMode"]==1,@"enabling plugin never overwrites LC native-window preference");
+        PiPManager *pip=[PiPManager shared];
+        Expect(![bridge isPiPActive] && ![bridge stopPiPIfActive:&error] && pip.stops==0,
+            @"PiP close rejects idle state without affecting a Guest");
+        pip.active=YES;
+        Expect([bridge isPiPActive] && [bridge stopPiPIfActive:&error] && !pip.active && pip.stops==1,
+            @"host close stops only the currently active AVKit PiP session");
+        pip.active=YES;Host=NO;
+        Expect(![bridge isPiPActive] && ![bridge stopPiPIfActive:&error] && pip.active && pip.stops==1,
+            @"Guest overlay cannot stop the host's active PiP");
+        Host=YES;pip.active=NO;
         [bridge setEnabled:YES error:&error];
         Expect([Defaults integerForKey:@"LCMultitaskMode"]==1,@"startup reactivation never overwrites user preference");
         [Defaults setInteger:0 forKey:@"LCMultitaskMode"];
