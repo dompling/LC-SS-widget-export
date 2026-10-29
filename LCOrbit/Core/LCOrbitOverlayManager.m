@@ -20,6 +20,29 @@
 }
 @end
 
+@interface LCOrbitOverlayViewController : UIViewController
+@property(nonatomic,weak) LCOrbitOverlayManager *manager;
+@end
+@implementation LCOrbitOverlayViewController
+- (BOOL)shouldAutorotate { return YES; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    __weak typeof(self) weakSelf=self;
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+        [weakSelf.manager updateFrame];
+        [NSNotificationCenter.defaultCenter postNotificationName:@"LCOrbitOverlayLayoutDidChangeNotification" object:nil];
+    } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+        [weakSelf.manager updateFrame];
+        [NSNotificationCenter.defaultCenter postNotificationName:@"LCOrbitOverlayLayoutDidChangeNotification" object:nil];
+    }];
+}
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self.manager updateFrame];
+}
+@end
+
 @implementation LCOrbitOverlayManager {
     UIWindow *_window;
     NSMutableDictionary<NSString *,UIView *> *_modules;
@@ -50,7 +73,8 @@
         window.frame=frame;
         window.backgroundColor=UIColor.clearColor;
         window.windowLevel=UIWindowLevelNormal+75;
-        UIViewController *vc=[UIViewController new];
+        LCOrbitOverlayViewController *vc=[LCOrbitOverlayViewController new];
+        vc.manager=self;
         vc.view.backgroundColor=UIColor.clearColor;
         window.rootViewController=vc;
         // Publish the reference before the visibility notification can fire.

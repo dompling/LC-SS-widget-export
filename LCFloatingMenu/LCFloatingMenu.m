@@ -490,6 +490,8 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,assign) BOOL orbFaded;
 @property(nonatomic,assign) CGFloat orbNormalAlpha;
 @property(nonatomic,strong) id screenTouchObserver;
+@property(nonatomic,strong) id orientationObserver;
+@property(nonatomic,strong) id layoutChangeObserver;
 @property(nonatomic,copy) NSString *page;
 @property(nonatomic,strong) NSArray<NSDictionary*> *apps;
 + (instancetype)shared;
@@ -583,18 +585,53 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [weakSelf wakeOrb];
         }];
     }
+    if(!self.orientationObserver) {
+        __weak typeof(self) weakSelf=self;
+        self.orientationObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            [weakSelf handleOrientationOrLayoutChange];
+        }];
+    }
+    if(!self.layoutChangeObserver) {
+        __weak typeof(self) weakSelf=self;
+        self.layoutChangeObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitOverlayLayoutDidChangeNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            [weakSelf handleOrientationOrLayoutChange];
+        }];
+    }
     FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu context=%@",
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
     [self scheduleAppearanceCheck];
+}
+- (void)handleOrientationOrLayoutChange {
+    [self refreshLayoutForOrientation];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.12*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        [self refreshLayoutForOrientation];
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        [self refreshLayoutForOrientation];
+    });
+}
+- (void)refreshLayoutForOrientation {
+    if(!self.window) return;
+    UIWindowScene *scene=self.window.windowScene?:[self foregroundScene];
+    if(!scene) return;
+    CGRect sceneBounds=scene.coordinateSpace.bounds;
+    if(!isfinite(sceneBounds.size.width) || !isfinite(sceneBounds.size.height) ||
+       sceneBounds.size.width<=0 || sceneBounds.size.height<=0) return;
+    [self.orbitContext.overlays updateFrame];
+    if(self.settingsWindow) {
+        self.settingsWindow.frame=sceneBounds;
+        [self updateSettingsContent];
+    } else {
+        [self draw];
+    }
 }
 - (CGFloat)orbWidth { return 16*FMOrbScale(); }
 - (CGFloat)orbHeight { return 72*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
-    UIEdgeInsets safe=self.window.safeAreaInsets;
-    CGFloat x=self.left?safe.left:b.size.width-safe.right-w;
+    CGFloat x=self.left?0:b.size.width-w;
     CGFloat top=MAX(25,self.window.safeAreaInsets.top+6);
     CGFloat bottom=MAX(24,self.window.safeAreaInsets.bottom+8);
     CGFloat latest=b.size.height-h-bottom;
@@ -863,8 +900,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         self.orb.alpha=self.orbNormalAlpha?:0.72;
         CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
         CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
-        UIEdgeInsets safe=self.window.safeAreaInsets;
-        CGFloat minX=safe.left+orbW*.5,maxX=MAX(minX,w-safe.right-orbW*.5);
+        CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
         CGFloat minY=MAX(60,safe.top+6)+orbH/2;
         CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
         self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
@@ -1840,6 +1876,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     settings.hidden=YES;
     settings.rootViewController=nil;
     if(restoreKey) [prior makeKeyWindow];
+    if(self.screenTouchObserver) {
+        [NSNotificationCenter.defaultCenter removeObserver:self.screenTouchObserver];
+        self.screenTouchObserver=nil;
+    }
+    if(self.orientationObserver) {
+        [NSNotificationCenter.defaultCenter removeObserver:self.orientationObserver];
+        self.orientationObserver=nil;
+    }
+    if(self.layoutChangeObserver) {
+        [NSNotificationCenter.defaultCenter removeObserver:self.layoutChangeObserver];
+        self.layoutChangeObserver=nil;
+    }
     [self.orbitContext.overlays unmountModule:@"FloatingMenu"];
     self.overlayView=nil;
     self.window=nil;
