@@ -1,0 +1,5 @@
+LCFloatingMenu v1.0.6 formal release request
+
+Source: PR #2, merge commit 75d1fdd358c23b7e6bd4443fd38cfd50b486a12c
+Verified: macOS-15 GitHub Actions run 40852703059 (success)
+Publish: compile and verify arm64 dylib, create annotated 1.0.6 tag, upload GitHub Release and refresh fm-latest.
