@@ -114,6 +114,7 @@ static BOOL RefreshSawProtectedContent;
 @property(nonatomic,weak) id delegate;
 @property(nonatomic,strong) id pendingStopDelegate;
 @property(nonatomic) BOOL canStartPictureInPictureAutomaticallyFromInline,active;
+@property(nonatomic) NSInteger controlsStyle;
 + (BOOL)isPictureInPictureSupported;
 - (instancetype)initWithContentSource:(id)source;
 - (BOOL)isPictureInPictureActive;
@@ -245,6 +246,7 @@ int main(void) {@autoreleasepool {
         AVPictureInPictureController *controller=Arm(hosting.boolValue);PiPManager *manager=[PiPManager shared];
         FixtureScene *scene=CurrentWindow.appSceneVC;
         Expect(controller && controller.canStartPictureInPictureAutomaticallyFromInline && !controller.active,@"opt-in arms native auto-start without entering PiP");
+        Expect(controller.controlsStyle==1,@"automatic PiP matches LC manual video-call controls for native close/restore");
         Expect(StartCalls==0 && NativeEvents.count==0 && scene.contentView.superview==scene.view,@"arming does not start, invoke lifecycle, or move content");
         Expect(controller.contentSource.source==scene.view && manager.displayingVC==scene,@"AVKit source belongs to exact active task");
         Expect(CGSizeEqualToSize(manager.pipVideoCallViewController.preferredContentSize,scene.view.bounds.size),@"prepared PiP preserves source aspect ratio");
