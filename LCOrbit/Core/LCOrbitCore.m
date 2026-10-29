@@ -3,6 +3,7 @@
 #import "LCOrbitOverlayManager.h"
 #import "LCOrbitEventBus.h"
 #import "LCOrbitStorage.h"
+#import "LCOrbitGuestFullscreenProbe.h"
 #import <objc/message.h>
 
 @implementation LCOrbitContext
@@ -139,7 +140,12 @@ __attribute__((constructor)) static void LCOrbitEntry(void) {
     // Classic single-task Guests are not LiveProcess and still bootstrap.
     SEL process=NSSelectorFromString(@"isLiveProcess");
     if([NSUserDefaults respondsToSelector:process] &&
-       ((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,process)) return;
+       ((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,process)) {
+        // LiveProcess runs a Guest, not the LC host. The probe observes UIKit
+        // fullscreen requests only and does not install the floating menu.
+        [LCOrbitGuestFullscreenProbe installIfLiveProcess];
+        return;
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         LCOrbitCore *core=[LCOrbitCore sharedCore];
         LCFloatingMenuRegisterWithOrbit(core);

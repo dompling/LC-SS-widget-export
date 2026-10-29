@@ -1,10 +1,14 @@
 #import <Foundation/Foundation.h>
 #import <objc/message.h>
 #import "LCOrbitHost.h"
+#import "LCOrbitGuestFullscreenProbe.h"
 
 static NSUserDefaults *Defaults;
 static BOOL LiveProcess;
-static NSUInteger Dispatches, Instances, Registrations, Starts;
+static NSUInteger Dispatches, Instances, Registrations, Starts, ProbeCalls;
+@implementation LCOrbitGuestFullscreenProbe
++ (void)installIfLiveProcess { ProbeCalls++; }
+@end
 @implementation LCOrbitHost
 + (NSUserDefaults *)hostDefaults { return Defaults; }
 + (NSString *)appGroupPath { return nil; }
@@ -42,6 +46,7 @@ int main(void) {
         LCOrbitEntry();
         EXPECT(Dispatches==0,"host-managed child does not schedule bootstrap work");
         EXPECT(Instances==0 && Registrations==0 && Starts==0,"host-managed child does not create core, modules or lifecycle observers");
+        EXPECT(ProbeCalls==1,"LiveProcess takes the diagnostics-only path without installing the menu");
         LiveProcess=NO;
         LCOrbitEntry();
         EXPECT(Starts==1 && Registrations==1,"LC host still starts its own menu runtime");
@@ -52,6 +57,7 @@ int main(void) {
         LiveProcess=NO;
         LCOrbitEntry();
         EXPECT(Starts==2 && Registrations==2,"classic single-task plugin behavior remains available without host takeover");
+        EXPECT(ProbeCalls==2,"host and classic Guest never install the LiveProcess-only probe");
         [Defaults removePersistentDomainForName:suite];
         fprintf(stdout,"Bootstrap behavior tests: %u assertions, %u failures\n",assertions,failures);
         return failures?1:0;
