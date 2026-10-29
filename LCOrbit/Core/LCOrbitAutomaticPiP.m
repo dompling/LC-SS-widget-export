@@ -261,6 +261,11 @@ typedef id (*PiPControllerInitializer)(id __attribute__((ns_consumed)),SEL,id) _
     if(!controller || !PiPMethod(controller,@"setCanStartPictureInPictureAutomaticallyFromInline:",'v',"B") ||
        !PiPMethod(controller,@"setContentSource:",'v',"@") || !PiPMethod(controller,@"setDelegate:",'v',"@") ||
        !PiPMethod(controller,@"isPictureInPictureActive",'B',"") || !PiPMethod(controller,@"stopPictureInPicture",'v',"")) return;
+    // Match LC's manual video-call PiP controls so AVKit can expose its
+    // system close/restore affordances. This is an undocumented setting:
+    // never make PiP preparation fail if iOS stops accepting it.
+    @try { [controller setValue:@1 forKey:@"controlsStyle"]; }
+    @catch(NSException *exception) { PiPLog(@"auto-pip-controls-unavailable",exception.name); }
     LCOrbitAutomaticPiPDelegate *forwarder=[LCOrbitAutomaticPiPDelegate new];
     forwarder.owner=self;forwarder.manager=manager;
     PiPObject(controller,@"setDelegate:",forwarder);
