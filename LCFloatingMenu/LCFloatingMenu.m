@@ -1283,7 +1283,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
     // Compact drawer has exactly one footer control: LC home.
-    NSUInteger compactActions=1;
+    NSUInteger compactActions=1+([LCOrbitMultitask isPiPActive]?1:0);
     CGFloat actualScale=small?MIN(Clamp(FloatPref(@"panelScale",1.0),.50,1.20),
                                    (usableWidth-20)/pw):1;
     if(!isfinite(actualScale) || actualScale<.50) return;
@@ -1295,7 +1295,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         self.panelContentScale=actualScale;
         BOOL tight=available/actualScale<360;
         self.panelShowsHeader=small && !compact && !tight;
-        footerHeight=compact?(tight?MAX(50,44/actualScale)+4:10+compactActions*63+3):
+        footerHeight=compact?(tight?MAX(50,44/actualScale)*compactActions+4:10+compactActions*63+3):
                               (small?44:(tight?MAX(60,44/actualScale)+8:74));
         top=compact?shoulder+8:(self.panelShowsHeader?64+shoulder:shoulder+6);
         bottom=footerHeight+6+shoulder;
@@ -1627,13 +1627,17 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL compact=BoolPref(@"compactMode",NO);
     NSMutableArray<NSArray*> *items=[NSMutableArray array];
     if(compact) {
-        // Compact mode exposes only the return-home control in its footer.
-        // Per-running-app close badges in the icon list are unaffected.
         [items addObject:@[@"house.fill",NSStringFromSelector(@selector(compactReturnHome)),@"返回首页"]];
+        // AVKit's PiP close affordance varies across iOS versions. Give the
+        // compact drawer an explicit stop control only while PiP is active.
+        if([LCOrbitMultitask isPiPActive])
+            [items addObject:@[@"pip.exit",NSStringFromSelector(@selector(closePictureInPicture)),@"关闭画中画"]];
     } else {
         if([LCOrbitMultitask isEnabled]) {
             [items addObject:@[@"house.fill",NSStringFromSelector(@selector(goHome)),@"返回 LC，保留运行任务"]];
             [items addObject:@[@"xmark.circle",NSStringFromSelector(@selector(closeMultitaskGuest)),@"关闭当前任务"]];
+            if([LCOrbitMultitask isPiPActive])
+                [items addObject:@[@"pip.exit",NSStringFromSelector(@selector(closePictureInPicture)),@"关闭画中画"]];
         }
         if(!FMHostUI()) {
             if(BoolPref(@"showRestart",YES))
@@ -1659,7 +1663,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         separator.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
         [footer addSubview:separator];
     }
-    CGFloat slot=compact?height-4:footer.bounds.size.width/items.count;
+    CGFloat slot=compact?(height-4)/MAX(1,items.count):footer.bounds.size.width/items.count;
     for(NSUInteger i=0;i<items.count;i++) {
         NSArray *spec=items[i];
         CGRect hit=compact?
@@ -2849,6 +2853,17 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)closeTaskFromButton:(UIControl *)sender {
     NSDictionary *app=objc_getAssociatedObject(sender,@selector(closeTaskFromButton:));
     [self closeApp:app sender:sender collapse:NO];
+}
+- (void)closePictureInPicture {
+    NSError *error=nil;
+    if(![LCOrbitMultitask stopPiPIfActive:&error]) {
+        FMLog(@"pip-close-rejected",error.localizedDescription?:@"not-active");
+        [self showMessage:@"关闭画中画失败" details:error.localizedDescription?:@"画中画可能已经结束。"];
+        return;
+    }
+    FMLog(@"pip-close-requested",nil);
+    self.isOpen=NO;
+    [self draw];
 }
 - (void)closeMultitaskGuest {
     for(NSDictionary *app in self.apps)
