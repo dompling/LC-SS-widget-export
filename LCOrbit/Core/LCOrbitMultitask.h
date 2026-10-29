@@ -17,6 +17,9 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 + (BOOL)launchGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)isCurrentGuest:(NSDictionary *)guest;
 + (BOOL)togglePiPForActiveWindow:(NSError * _Nullable * _Nullable)error;
+// Close the actual AVKit PiP session, not the running Guest process.
++ (BOOL)isPiPActive;
++ (BOOL)stopPiPIfActive:(NSError * _Nullable * _Nullable)error;
 + (BOOL)automaticPiPEnabledForGuest:(NSDictionary *)guest;
 + (BOOL)setAutomaticPiPEnabled:(BOOL)enabled forGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
 + (nullable NSDictionary *)activeGuestForAutomaticPiP;
