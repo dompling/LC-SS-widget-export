@@ -24,7 +24,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.5"
+#define FM_MENU_VERSION @"1.0.6"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -781,7 +781,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     [self cancelOrbFade];
     self.orbFaded=NO;
-    if(self.orb && !self.isOpen) self.orb.alpha=self.orbNormalAlpha?:.72;
+    if(self.orb && !self.isOpen) self.orb.alpha=1;
     line.backgroundColor=[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1];
     line.layer.shadowColor=[UIColor colorWithRed:1 green:.09 blue:.16 alpha:1].CGColor;
     line.layer.shadowOpacity=.85;
@@ -919,7 +919,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         FloatPref(@"idleAlpha",.72);
     self.orbNormalAlpha=Clamp(alpha,.25,1);
     self.orbFaded=NO;
-    button.alpha=self.isOpen?0:self.orbNormalAlpha;
+    button.alpha=self.isOpen?0:(self.orbUpdateAvailable?1:self.orbNormalAlpha);
     button.userInteractionEnabled=!self.isOpen;
     button.accessibilityElementsHidden=self.isOpen;
     button.accessibilityLabel=@"LC 悬浮菜单";
