@@ -89,7 +89,9 @@ jobs:
           path: ${{ env.scheme }}+SideStore.ipa
 
       - name: Publish LC+SS standalone IPA to Releases
-        if: success()
+        # Never publish on pull-request validation or ordinary source pushes.
+        # Formal distribution is explicitly requested via a dispatch input.
+        if: success() && github.event_name == 'workflow_dispatch' && inputs.release__nightly
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
