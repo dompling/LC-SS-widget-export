@@ -211,11 +211,17 @@ static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfac
     if(!isfinite(safe.top) || !isfinite(safe.left) || !isfinite(safe.bottom) || !isfinite(safe.right) ||
        safe.top<0 || safe.left<0 || safe.bottom<0 || safe.right<0 ||
        safe.top+safe.bottom>bounds.size.height || safe.left+safe.right>bounds.size.width) return NO;
+    // LC's AppSceneViewController swaps the logical frame again whenever
+    // the Guest orientation is landscape. Normalize the frame according to
+    // the *physical host orientation*, but report the Guest's independent
+    // orientation. Swapping here for a portrait-host/landscape-Guest would
+    // double-rotate the remote content and defeat fullscreen.
     *frame=(CGRect){CGPointZero,bounds.size};
+    if(UIInterfaceOrientationIsLandscape(direction))
+        frame->size=CGSizeMake(bounds.size.height,bounds.size.width);
     UIInterfaceOrientation guest=(UIInterfaceOrientation)[objc_getAssociatedObject(window,&GuestOrientationKey) integerValue];
     if(UIInterfaceOrientationIsLandscape(guest) && !UIInterfaceOrientationIsLandscape(direction))
         direction=guest;
-    if(UIInterfaceOrientationIsLandscape(direction)) frame->size=CGSizeMake(bounds.size.height,bounds.size.width);
     *orientation=direction;*insets=safe;
     return YES;
 }
