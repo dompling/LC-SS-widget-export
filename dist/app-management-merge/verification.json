@@ -1,0 +1,77 @@
+{
+  "scope": "Consolidate application management only; retain preference keys, callback implementations, theme and floating-menu appearance.",
+  "binary": "dist/LCFloatingMenu.dylib",
+  "binarySHA256": "4bb1c8f0f3ed3cdb4cd0237a3b0f0d52438feb54bd5d7811751a01f6749bcc11",
+  "behavior": {
+    "suites": 19,
+    "assertions": 29127,
+    "failures": 0
+  },
+  "uikit": {
+    "count": 66,
+    "failures": 0,
+    "sourceSHA256": {
+      "LCFloatingMenu/LCFloatingMenu.m": "44af8de7519e95b448168fcf8380d7f41bb9f9b8e9ef3196719dc09afd19d9ef",
+      "LCOrbit/Core/LCOrbitAutomaticPiP.m": "0aa50b2dd6ed83f9b448e9a34b2bb96f5293bc0c46c0b8d43f216ca3db2e268d",
+      "LCOrbit/Core/LCOrbitCore.h": "33a63505eeade7b1bd884cfb5716b82cfd3dd9bac2e7942849578bba7ea14475",
+      "LCOrbit/Core/LCOrbitCore.m": "65b33b7b4e5c3f3cd89a89a12b29a3d8696b6e9b8a8c05402a6c0c14488f2733",
+      "LCOrbit/Core/LCOrbitEventBus.h": "10c7fe8f2b407d9bb950d36ea675dfa41034fac4768fb22385d2f1775328a8eb",
+      "LCOrbit/Core/LCOrbitEventBus.m": "fe45e29931cc10bd091d2a8e6fbddb550c38ca5648e1783c0bdc172527ae3145",
+      "LCOrbit/Core/LCOrbitGuestService.h": "b27fd1d980d978c2671f5a056f43b2a3b9c74cb2030b10253728e2707455b677",
+      "LCOrbit/Core/LCOrbitGuestService.m": "7dd0a4078eb46f610c532c515f39997deecb8d95958c47b2c61cce39437e547f",
+      "LCOrbit/Core/LCOrbitHost.h": "9565a5fde75d97de9b5ee9130eae36a11b46774e3bfe05ce82e9cfeef75620b7",
+      "LCOrbit/Core/LCOrbitHost.m": "af226d67594d89bd09db914d2e7da415462f64197c93c9461ea5edff69b079d3",
+      "LCOrbit/Core/LCOrbitHostSettings.h": "dbd70640dd598ffc3452e8b19da8afeee7edb4df917935296a81be90e366bf4d",
+      "LCOrbit/Core/LCOrbitHostSettings.m": "e4efeb5085ba1230aeb3fe89711810d997e50fd1fe118c04ce7d05051aa86d58",
+      "LCOrbit/Core/LCOrbitLog.h": "20fad75897086d2e9934c614a67efeca23aecc4cbb9bf725271371ee846d4b9a",
+      "LCOrbit/Core/LCOrbitLog.m": "2c299e3e26b27c3e9293998be749bb6dd2eca51b486ee1f3104577a18955243f",
+      "LCOrbit/Core/LCOrbitLogViewer.h": "990ebe6437a66666c0c9a95641409648dd4949f5c0bf4a54fa05959ee8cd74a3",
+      "LCOrbit/Core/LCOrbitLogViewer.m": "3f6b2111cb4695ef7869a688c5f63207f078ea744a4b432a9f83a428a018e8f5",
+      "LCOrbit/Core/LCOrbitMultitask.h": "15bc7217abac01a8f004abef40879e9bf35d716d883e813bfe06767028b51883",
+      "LCOrbit/Core/LCOrbitMultitask.m": "e73c96d3556a071bf344697313ade0e79b7f748611c63d0625f32be26c6b0626",
+      "LCOrbit/Core/LCOrbitMultitaskUI.m": "2ffe678d3d33d4dc6b2b22f51a8e749576566dec2c67e4459da15e285c8f29c7",
+      "LCOrbit/Core/LCOrbitOverlayManager.h": "07f0f85e5d28d492bc5629bccb81165eceaec7685f2a45378aea389a92dd1f3c",
+      "LCOrbit/Core/LCOrbitOverlayManager.m": "20d6768ea7904ce5c499846bef2a41800dd48b8b448c8f62d7bb5cb588032e7c",
+      "LCOrbit/Core/LCOrbitSharedTweaksViewController.h": "b9ba148b6c5a197a7fc80b884e9a0c9fb8625a6a28a2ed573396766973354c55",
+      "LCOrbit/Core/LCOrbitSharedTweaksViewController.m": "94123debd11662d13468d1def32cb2a8a2b24c52d0ccb57b1f5851d6aadd8573",
+      "LCOrbit/Core/LCOrbitStorage.h": "0fb900efda88427a9c474a16e5bb4d87a9cdbf3700e66e0b992f3fcb0e721204",
+      "LCOrbit/Core/LCOrbitStorage.m": "57097e9252b13d176e0fc08af4fc6e552d9f30f19942464c61c644c8505ce5a5",
+      "LCOrbit/Core/LCOrbitTweakAudit.h": "daa92283238c781e4454fc8f0cfe3042fd39677b5b600bd609cb579773e8a1dd",
+      "LCOrbit/Core/LCOrbitTweakAudit.m": "b9c8b8ee76b2f8650ef37f84f6bf2a2e63a4a689f6dd333f3312b9e59ea4170d",
+      "LCOrbit/Core/LCOrbitTweakCenter.h": "6955795ebe367016c1def704c402fdd10191f66e728872d60cefaf561a5f38fa",
+      "LCOrbit/Core/LCOrbitTweakCenter.m": "007b7deca914eba44d0c83ef45820c7ac16978a9c00b615aeec4116e2c285993",
+      "LCOrbit/Core/LCOrbitTweakCenterViews.h": "f9af129e43e303c24c69dafba7fe6a8725be3dcef2dcf227825dc73afbe44615",
+      "LCOrbit/Core/LCOrbitTweakCenterViews.m": "4d46335377ed66b03be354421b487c81e84c5ac25693e1666ade0cacbe6a9c11",
+      "LCOrbit/Core/LCOrbitTweakSync.h": "70f45d1673f58bb42e30e1d167d6a95f265508562f93b61b2c91507c5803d15c",
+      "LCOrbit/Core/LCOrbitTweakSync.m": "bc7abf2b9400ff30fd078c62f8a0d1903cae3bbf3ac101859c37629c42195b48",
+      "LCOrbit/SDK/LCOrbitModule.h": "c79d14bd0c36ac16195d00f03f552d7f92e4199871c01a0514d25b5ffd81f8a8"
+    },
+    "runtime": "26.5"
+  },
+  "redEvidence": {
+    "count": 60,
+    "failures": [
+      "app-management-one-record-per-app",
+      "app-management-controls-share-target"
+    ],
+    "path": "/tmp/LCOrbit-app-management-merge-red"
+  },
+  "independentReview": {
+    "verdict": "APPROVE",
+    "newIssues": 0,
+    "scope": "Compare this change to /tmp/LCFloatingMenu-before-app-management-merge-20261029.m"
+  },
+  "staticAnalysis": {
+    "newDiagnostics": 0,
+    "existingDiagnostics": [
+      {
+        "type": "Nullability",
+        "method": "launchGuestPath:containerUUID:",
+        "description": "Nullable uuid passed to isEqualToString:, unchanged from baseline."
+      }
+    ]
+  },
+  "limitations": [
+    "UIKit uses synthetic host/task boundaries and layer-rendered snapshots; actual LC device appearance and OS automatic PiP remain device checks."
+  ]
+}

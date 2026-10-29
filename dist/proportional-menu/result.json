@@ -1,6 +1,77 @@
 {
   "results": [
     {
+      "name": "bead-inward-hit-right-70",
+      "passed": true,
+      "details": {
+        "inside": "{625, 333.5}",
+        "frame": "{{655.79999999999995, 308.30000000000001}, {11.200000000000045, 50.399999999999977}}",
+        "hit": 1,
+        "outsideMiss": 1,
+        "outside": "{621, 333.5}"
+      }
+    },
+    {
+      "name": "bead-inward-hit-right-100",
+      "passed": true,
+      "details": {
+        "inside": "{625, 333.5}",
+        "frame": "{{651, 297.5}, {16, 72}}",
+        "hit": 1,
+        "outsideMiss": 1,
+        "outside": "{621, 333.5}"
+      }
+    },
+    {
+      "name": "bead-inward-hit-right-190",
+      "passed": true,
+      "details": {
+        "inside": "{625, 333.5}",
+        "frame": "{{636.60000000000002, 265.10000000000002}, {30.399999999999977, 136.79999999999995}}",
+        "hit": 1,
+        "outsideMiss": 1,
+        "outside": "{621, 333.5}"
+      }
+    },
+    {
+      "name": "bead-inward-hit-left-70",
+      "passed": true,
+      "details": {
+        "inside": "{42, 333.5}",
+        "frame": "{{0, 308.30000000000001}, {11.199999999999999, 50.399999999999977}}",
+        "hit": 1,
+        "outsideMiss": 1,
+        "outside": "{46, 333.5}"
+      }
+    },
+    {
+      "name": "bead-inward-hit-left-100",
+      "passed": true,
+      "details": {
+        "inside": "{42, 333.5}",
+        "frame": "{{0, 297.5}, {16, 72}}",
+        "hit": 1,
+        "outsideMiss": 1,
+        "outside": "{46, 333.5}"
+      }
+    },
+    {
+      "name": "bead-inward-hit-left-190",
+      "passed": true,
+      "details": {
+        "inside": "{42, 333.5}",
+        "frame": "{{0, 265.10000000000002}, {30.399999999999999, 136.79999999999995}}",
+        "hit": 1,
+        "outsideMiss": 1,
+        "outside": "{46, 333.5}"
+      }
+    },
+    {
+      "name": "bead-16-by-72-proportion",
+      "passed": true,
+      "details": "{{0, 0}, {16, 72}}"
+    },
+    {
       "name": "short-normal-320",
       "passed": true,
       "details": {
@@ -37,12 +108,22 @@
       }
     },
     {
+      "name": "targets-normal-50",
+      "passed": true,
+      "details": {
+        "switchCenterAccessible": true,
+        "closeFrames": [
+          "{{613, 218.70000000000005}, {48, 48}}"
+        ]
+      }
+    },
+    {
       "name": "targets-normal-75",
       "passed": true,
       "details": {
         "switchCenterAccessible": true,
         "closeFrames": [
-          "{{610, 212.65999999999997}, {48, 48}}"
+          "{{610, 218.89999999999998}, {48, 48}}"
         ]
       }
     },
@@ -62,7 +143,17 @@
       "details": {
         "switchCenterAccessible": true,
         "closeFrames": [
-          "{{604.60000000000002, 138.80000000000001}, {48, 48}}"
+          "{{604.60000000000002, 158}, {48, 48}}"
+        ]
+      }
+    },
+    {
+      "name": "targets-compact-50",
+      "passed": true,
+      "details": {
+        "switchCenterAccessible": true,
+        "closeFrames": [
+          "{{648.5, 234.01999999999998}, {16, 16}}"
         ]
       }
     },
@@ -97,12 +188,30 @@
       }
     },
     {
+      "name": "normal-footer-icon-only-50",
+      "passed": true,
+      "details": {
+        "iconCentersWork": true,
+        "surroundingBlankInactive": true
+      }
+    },
+    {
+      "name": "manual-pip-button-removed-50",
+      "passed": true,
+      "details": {}
+    },
+    {
       "name": "normal-footer-icon-only-75",
       "passed": true,
       "details": {
         "iconCentersWork": true,
         "surroundingBlankInactive": true
       }
+    },
+    {
+      "name": "manual-pip-button-removed-75",
+      "passed": true,
+      "details": {}
     },
     {
       "name": "normal-footer-icon-only-100",
@@ -113,6 +222,11 @@
       }
     },
     {
+      "name": "manual-pip-button-removed-100",
+      "passed": true,
+      "details": {}
+    },
+    {
       "name": "normal-footer-icon-only-120",
       "passed": true,
       "details": {
@@ -121,9 +235,14 @@
       }
     },
     {
+      "name": "manual-pip-button-removed-120",
+      "passed": true,
+      "details": {}
+    },
+    {
       "name": "horizontal-safe-handle-0",
       "passed": true,
-      "details": "{{616, 155.5}, {16, 64}}"
+      "details": "{{616, 151.5}, {16, 72}}"
     },
     {
       "name": "horizontal-safe-content-0",
@@ -133,7 +252,7 @@
     {
       "name": "horizontal-safe-handle-1",
       "passed": true,
-      "details": "{{59, 155.5}, {16, 64}}"
+      "details": "{{59, 151.5}, {16, 72}}"
     },
     {
       "name": "horizontal-safe-content-1",
@@ -188,9 +307,19 @@
       }
     },
     {
+      "name": "drag-capsule-not-trapezoid",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "drag-crosses-screen-without-flip",
+      "passed": true,
+      "details": {}
+    },
+    {
       "name": "legacy-round-orb-ignored",
       "passed": true,
-      "details": "{{651, 301.5}, {16, 64}}"
+      "details": "{{651, 297.5}, {16, 72}}"
     },
     {
       "name": "removed-controls-settings",
@@ -218,11 +347,69 @@
       "details": {}
     },
     {
+      "name": "auto-pip-real-apps-only",
+      "passed": true,
+      "details": {
+        "switchCount": 2,
+        "longNameDoesNotOverlap": true
+      }
+    },
+    {
+      "name": "auto-pip-default-off",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "auto-pip-exact-app-action",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "auto-pip-rejected-save-restores-switch",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "recent-off-keeps-manual-order",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "recent-on-moves-opened-to-front",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "recent-on-keeps-manual-preference",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "recent-current-becomes-first",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "recent-on-open-resets-scroll",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "recent-on-does-not-overwrite-saved-scroll",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "name": "recent-off-restores-scroll",
+      "passed": true,
+      "details": {}
+    },
+    {
       "name": "cancelled-pan-restores-position",
       "passed": true,
       "details": {
-        "saved": "{{651, 301.5}, {16, 64}}",
-        "actual": "{{651, 301.5}, {16, 64}}",
+        "saved": "{{651, 297.5}, {16, 72}}",
+        "actual": "{{651, 297.5}, {16, 72}}",
         "positionWrites": 0
       }
     },
@@ -236,12 +423,13 @@
     }
   ],
   "kind": "production-uikit-synthetic-host-fixtures",
-  "count": 31,
+  "count": 58,
   "failures": 0,
   "runtime": "26.5",
   "limitation": "Real UIKit simulator; synthetic host window dimensions and task state. Does not validate LC SwiftUI host integration, hardware sensor occlusion or actual guest process closure.",
   "sourceSHA256": {
-    "LCFloatingMenu/LCFloatingMenu.m": "6498b9c6663a2eba56175bfaff5b30ccd87abbc64790e9ae73b80ff9c9c06757",
+    "LCFloatingMenu/LCFloatingMenu.m": "50374aea0a5f2ec7998a8f1b81aa70edfb3eb3d80d385f594d0d9efbbd04daea",
+    "LCOrbit/Core/LCOrbitAutomaticPiP.m": "0aa50b2dd6ed83f9b448e9a34b2bb96f5293bc0c46c0b8d43f216ca3db2e268d",
     "LCOrbit/Core/LCOrbitCore.h": "33a63505eeade7b1bd884cfb5716b82cfd3dd9bac2e7942849578bba7ea14475",
     "LCOrbit/Core/LCOrbitCore.m": "65b33b7b4e5c3f3cd89a89a12b29a3d8696b6e9b8a8c05402a6c0c14488f2733",
     "LCOrbit/Core/LCOrbitEventBus.h": "10c7fe8f2b407d9bb950d36ea675dfa41034fac4768fb22385d2f1775328a8eb",
@@ -256,15 +444,15 @@
     "LCOrbit/Core/LCOrbitLog.m": "2c299e3e26b27c3e9293998be749bb6dd2eca51b486ee1f3104577a18955243f",
     "LCOrbit/Core/LCOrbitLogViewer.h": "990ebe6437a66666c0c9a95641409648dd4949f5c0bf4a54fa05959ee8cd74a3",
     "LCOrbit/Core/LCOrbitLogViewer.m": "3f6b2111cb4695ef7869a688c5f63207f078ea744a4b432a9f83a428a018e8f5",
-    "LCOrbit/Core/LCOrbitMultitask.h": "1f84bb52ead2aeb1fe56af7ea73527db1ed26600ee723643d3dd4482829960b9",
-    "LCOrbit/Core/LCOrbitMultitask.m": "f917826cd2687bfb8f15fabd32bbb6f0b6990d1103d8d5e716be05f17c8f781f",
-    "LCOrbit/Core/LCOrbitMultitaskUI.m": "c2ecf36554bb5166f61da827a93a49d5cc4eaf4d174a8d98a53b85259afbaab1",
+    "LCOrbit/Core/LCOrbitMultitask.h": "15bc7217abac01a8f004abef40879e9bf35d716d883e813bfe06767028b51883",
+    "LCOrbit/Core/LCOrbitMultitask.m": "e73c96d3556a071bf344697313ade0e79b7f748611c63d0625f32be26c6b0626",
+    "LCOrbit/Core/LCOrbitMultitaskUI.m": "2ffe678d3d33d4dc6b2b22f51a8e749576566dec2c67e4459da15e285c8f29c7",
     "LCOrbit/Core/LCOrbitOverlayManager.h": "07f0f85e5d28d492bc5629bccb81165eceaec7685f2a45378aea389a92dd1f3c",
     "LCOrbit/Core/LCOrbitOverlayManager.m": "20d6768ea7904ce5c499846bef2a41800dd48b8b448c8f62d7bb5cb588032e7c",
     "LCOrbit/Core/LCOrbitSharedTweaksViewController.h": "b9ba148b6c5a197a7fc80b884e9a0c9fb8625a6a28a2ed573396766973354c55",
     "LCOrbit/Core/LCOrbitSharedTweaksViewController.m": "94123debd11662d13468d1def32cb2a8a2b24c52d0ccb57b1f5851d6aadd8573",
     "LCOrbit/Core/LCOrbitStorage.h": "0fb900efda88427a9c474a16e5bb4d87a9cdbf3700e66e0b992f3fcb0e721204",
-    "LCOrbit/Core/LCOrbitStorage.m": "fcfa9c089a37c901c7f331b27071d9edac6186d1bae1fe4361ccd75d0670e79f",
+    "LCOrbit/Core/LCOrbitStorage.m": "57097e9252b13d176e0fc08af4fc6e552d9f30f19942464c61c644c8505ce5a5",
     "LCOrbit/Core/LCOrbitTweakAudit.h": "daa92283238c781e4454fc8f0cfe3042fd39677b5b600bd609cb579773e8a1dd",
     "LCOrbit/Core/LCOrbitTweakAudit.m": "b9c8b8ee76b2f8650ef37f84f6bf2a2e63a4a689f6dd333f3312b9e59ea4170d",
     "LCOrbit/Core/LCOrbitTweakCenter.h": "6955795ebe367016c1def704c402fdd10191f66e728872d60cefaf561a5f38fa",

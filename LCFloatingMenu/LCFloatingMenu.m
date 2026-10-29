@@ -11,6 +11,7 @@
 #import "../LCOrbit/Core/LCOrbitGuestService.h"
 #import "../LCOrbit/Core/LCOrbitMultitask.h"
 #import "../LCOrbit/Core/LCOrbitHostSettings.h"
+#import "../LCOrbit/Core/LCOrbitPluginUpdater.h"
 #import "../LCOrbit/Core/LCOrbitTweakAudit.h"
 #import "../LCOrbit/Core/LCOrbitTweakSync.h"
 #import "../LCOrbit/Core/LCOrbitSharedTweaksViewController.h"
@@ -924,6 +925,34 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     if(action) [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return row;
 }
+// A restrained emerald status light, not a large success badge.
+// The outer halo breathes subtly; the solid center always stays readable.
+static UIView *FMRunningBreathingLight(CGFloat size) {
+    UIView *light=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    light.userInteractionEnabled=NO;
+    light.accessibilityIdentifier=@"fm.running.breathing-light";
+    UIView *halo=[[UIView alloc] initWithFrame:CGRectInset(light.bounds,1,1)];
+    halo.layer.cornerRadius=CGRectGetWidth(halo.bounds)*.5;
+    halo.backgroundColor=[UIColor colorWithRed:.16 green:.79 blue:.41 alpha:.28];
+    [light addSubview:halo];
+    CGFloat coreSize=MAX(5,MIN(7,size*.50));
+    UIView *core=[[UIView alloc] initWithFrame:CGRectMake((size-coreSize)*.5,(size-coreSize)*.5,coreSize,coreSize)];
+    core.backgroundColor=[UIColor colorWithRed:.19 green:.88 blue:.47 alpha:1];
+    core.layer.cornerRadius=coreSize*.5;
+    core.layer.shadowColor=core.backgroundColor.CGColor;
+    core.layer.shadowRadius=2;
+    core.layer.shadowOpacity=.30;
+    core.layer.shadowOffset=CGSizeZero;
+    [light addSubview:core];
+    if(!UIAccessibilityIsReduceMotionEnabled()) {
+        CABasicAnimation *breath=[CABasicAnimation animationWithKeyPath:@"opacity"];
+        breath.fromValue=@.18;breath.toValue=@.78;
+        breath.duration=1.85;breath.autoreverses=YES;breath.repeatCount=HUGE_VALF;
+        breath.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [halo.layer addAnimation:breath forKey:@"fm.running.breath"];
+    }
+    return light;
+}
 - (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
     UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
     box.layer.cornerRadius=size*.22;box.clipsToBounds=YES;
@@ -943,13 +972,17 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
-    if(current || blocked) {
+    if(current) {
+        CGFloat side=MIN(13,MAX(10,size*.30));
+        UIView *light=FMRunningBreathingLight(side);
+        light.frame=CGRectMake(size-side,size-side,side,side);
+        [box addSubview:light];
+    } else if(blocked) {
         CGFloat side=MIN(size*.45,MAX(13,MIN(18,size*.36)));
-        UIImageView *mark=[[UIImageView alloc] initWithImage:
-            [UIImage systemImageNamed:current?@"checkmark.circle.fill":@"exclamationmark.circle.fill"]];
+        UIImageView *mark=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"exclamationmark.circle.fill"]];
         mark.frame=CGRectMake(size-side-1,size-side-1,side,side);
         mark.backgroundColor=FMThemeColor(FMColorSurface);
-        mark.tintColor=current?FMAccent():FMThemeColor(FMColorSecondary);
+        mark.tintColor=FMThemeColor(FMColorSecondary);
         mark.layer.cornerRadius=side*.5;mark.clipsToBounds=YES;
         mark.userInteractionEnabled=NO;
         [box addSubview:mark];
@@ -982,7 +1015,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL running=[LCOrbitMultitask isRunningGuest:app];
     UIImageView *arrow=[[UIImageView alloc] initWithImage:
-        [UIImage systemImageNamed:current?@"checkmark":@"chevron.right"]];
+        [UIImage systemImageNamed:@"chevron.right"]];
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
     arrow.tintColor=FMThemeColor(FMColorText);
     arrow.contentMode=UIViewContentModeScaleAspectFit;
@@ -2738,72 +2771,67 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     self.checkingUpdate=YES;
     self.updateStatusLabel.text=@"正在检查最新发布版…";
     NSMutableURLRequest *request=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:FMUpdateAPI]];
-    request.timeoutInterval=12;
+    request.timeoutInterval=15;
     [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"LCFloatingMenu/1.0" forHTTPHeaderField:@"User-Agent"];
     __weak typeof(self) weakSelf=self;
-    [[[NSURLSession sharedSession] dataTaskWithRequest:request
-        completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) strongSelf=weakSelf;
-            if(!strongSelf) return;
-            strongSelf.checkingUpdate=NO;
-            strongSelf.updateStatusLabel.text=@"检查微珠最新发布版";
-            if(error) {
-                [strongSelf presentUpdateResult:@"检查更新失败"
-                    message:error.localizedDescription?:@"无法连接 GitHub，请检查网络。"
-                    showRepository:YES];
-                return;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
+        dispatch_async(dispatch_get_main_queue(),^{
+            typeof(self) owner=weakSelf;
+            if(!owner) return;
+            owner.checkingUpdate=NO;
+            owner.updateStatusLabel.text=@"检查微珠最新发布版";
+            if(error || [(NSHTTPURLResponse *)response statusCode]!=200) {
+                [owner presentUpdateResult:@"检查更新失败" message:error.localizedDescription?:@"无法获取 GitHub 最新发布信息。" showRepository:YES];return;
             }
-            NSInteger status=[(NSHTTPURLResponse *)response statusCode];
-            if(status==404) {
-                [strongSelf presentUpdateResult:@"暂无微珠最新版"
-                    message:@"fm-latest Release 尚未发布成功，请前往 GitHub 查看构建状态。"
-                    showRepository:YES];
-                return;
-            }
-            if(status!=200) {
-                [strongSelf presentUpdateResult:@"检查更新失败"
-                    message:[NSString stringWithFormat:@"GitHub 返回 HTTP %ld，请稍后重试。",(long)status]
-                    showRepository:YES];
-                return;
-            }
-            NSDictionary *json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
-            NSString *body=[json isKindOfClass:NSDictionary.class]?json[@"body"]:nil;
-            NSArray *assets=[json isKindOfClass:NSDictionary.class]?json[@"assets"]:nil;
-            NSString *latestCommit=nil,*latestVersion=nil,*latestBuild=nil;
+            NSDictionary *json=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if(![json isKindOfClass:NSDictionary.class]) return;
+            NSString *body=json[@"body"];
+            NSString *version=nil,*commit=nil;
             if([body isKindOfClass:NSString.class]) for(NSString *line in [body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-                if([line hasPrefix:@"FM_COMMIT="]) latestCommit=[line substringFromIndex:10];
-                else if([line hasPrefix:@"FM_VERSION="]) latestVersion=[line substringFromIndex:11];
-                else if([line hasPrefix:@"FM_BUILD="]) latestBuild=[line substringFromIndex:9];
+                if([line hasPrefix:@"FM_VERSION="]) version=[line substringFromIndex:11];
+                if([line hasPrefix:@"FM_COMMIT="]) commit=[line substringFromIndex:10];
             }
-            BOOL hasBinary=NO;
-            if([assets isKindOfClass:NSArray.class]) for(id item in assets) {
-                if([item isKindOfClass:NSDictionary.class] &&
-                   [item[@"name"] isEqual:@"LCFloatingMenu-latest.dylib"]) {hasBinary=YES;break;}
+            NSDictionary *asset=nil;
+            for(id item in json[@"assets"]) if([item isKindOfClass:NSDictionary.class] &&
+                [item[@"name"] isEqualToString:@"LCFloatingMenu.dylib"]) {asset=item;break;}
+            NSString *digest=asset[@"digest"],*link=asset[@"browser_download_url"];
+            if(commit.length!=40 || !version.length || ![link hasPrefix:@"https://github.com/dompling/LC-SS-widget-export/releases/download/"] ||
+               ![digest isKindOfClass:NSString.class] || digest.length!=71) {
+                [owner presentUpdateResult:@"发布信息不完整" message:@"缺少版本、下载地址或 SHA-256 校验值，已取消更新。" showRepository:YES];return;
             }
-            if(latestCommit.length!=40 || !hasBinary) {
-                [strongSelf presentUpdateResult:@"发布信息尚不完整"
-                    message:@"最新 Release 缺少有效构建标识或 dylib 下载文件。"
-                    showRepository:YES];
-                return;
+            if([version compare:FM_MENU_VERSION options:NSNumericSearch]!=NSOrderedDescending) {
+                [owner presentUpdateResult:@"已是最新版本" message:[NSString stringWithFormat:@"当前 v%@，最新 v%@。",FM_MENU_VERSION,version] showRepository:NO];return;
             }
-            NSString *installed=FM_BUILD_COMMIT;
-            NSString *version=latestVersion.length?latestVersion:@"未知";
-            NSString *build=latestBuild.length?latestBuild:@"?";
-            if(installed.length!=40) {
-                [strongSelf presentUpdateResult:@"当前构建未标记版本"
-                    message:[NSString stringWithFormat:@"GitHub 最新版 v%@（Build %@），请到仓库下载。",version,build]
-                    showRepository:YES];
-            } else if([installed caseInsensitiveCompare:latestCommit]==NSOrderedSame) {
-                [strongSelf presentUpdateResult:@"已是最新发布版"
-                    message:[NSString stringWithFormat:@"当前版本 v%@（%@）与最新微珠构建一致。",FM_MENU_VERSION,FMCommitSummary()]
-                    showRepository:NO];
-            } else {
-                [strongSelf presentUpdateResult:@"发现新构建"
-                    message:[NSString stringWithFormat:@"当前 v%@（%@），最新发布 v%@（Build %@，%@）。前往 GitHub 下载 dylib 并重新签名安装。",FM_MENU_VERSION,FMCommitSummary(),version,build,[latestCommit substringToIndex:7]]
-                    showRepository:YES];
+            if(!FMHostUI()) {
+                [owner presentUpdateResult:@"发现新版本" message:@"请返回 LC 主界面，在微珠设置中心安装更新。" showRepository:YES];return;
             }
+            UIAlertController *confirm=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"升级微珠至 v%@？",version]
+                message:@"将下载并校验官方 dylib，备份旧版后替换 LC 私有插件。更新后仍需在 LC 原生 Tweaks 页面重新签名，并重启相关应用。不会自动替换共享或专属插件副本。"
+                preferredStyle:UIAlertControllerStyleAlert];
+            [confirm addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+            [confirm addAction:[UIAlertAction actionWithTitle:@"下载并安装" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                if(owner.checkingUpdate) return;
+                owner.checkingUpdate=YES;
+                owner.updateStatusLabel.text=@"下载并校验插件中…";
+                NSMutableURLRequest *download=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:link]];
+                download.timeoutInterval=40;
+                [[[NSURLSession sharedSession] dataTaskWithRequest:download completionHandler:^(NSData *binary,NSURLResponse *resp,NSError *err) {
+                    NSError *installError=nil;
+                    BOOL success=NO;
+                    if(!err && [(NSHTTPURLResponse *)resp statusCode]==200 && binary.length>0)
+                        success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:digest error:&installError];
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        owner.checkingUpdate=NO;
+                        owner.updateStatusLabel.text=@"检查微珠最新发布版";
+                        [owner presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
+                            message:success?@"已备份旧插件并安装新版本。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
+                            (installError.localizedDescription?:err.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
+                            showRepository:!success];
+                    });
+                }] resume];
+            }]];
+            if(owner.view.window) [owner presentViewController:confirm animated:YES completion:nil];
         });
     }] resume];
 }

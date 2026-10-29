@@ -212,6 +212,9 @@ static NSString *HumanSize(NSNumber *size) {
 }
 - (void)refresh {
     self.backups=[LCOrbitTweakCenter backupsForPlugin:self.name];
+    __weak typeof(self) weakSelf=self;
+    self.navigationItem.rightBarButtonItem=self.backups.count?
+        [[UIBarButtonItem alloc] initWithTitle:@"清空备份" style:UIBarButtonItemStylePlain target:weakSelf action:@selector(clearBackups)]:nil;
     [self.table reloadData];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {return 3;}
@@ -265,6 +268,27 @@ static NSString *HumanSize(NSNumber *size) {
             NSString *result=work();[weakSelf refresh];PresentResult(weakSelf,@"操作结果",result);
         }]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)clearBackups {
+    if(!self.backups.count) return;
+    [self confirmTitle:@"删除所有历史备份？"
+        message:[NSString stringWithFormat:@"将删除 %@ 的 %lu 个私有及共享备份，无法恢复。当前插件不受影响。",self.name,(unsigned long)self.backups.count]
+        destructive:YES action:^NSString *{ return [LCOrbitTweakCenter deleteAllBackups:self.name]; }];
+}
+- (NSArray<UITableViewRowAction *> *)tableView:(UITableView *)tableView editActionsForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if(indexPath.section!=2) return @[];
+    NSDictionary *backup=self.backups[(NSUInteger)indexPath.row];
+    NSString *filename=backup[@"file"];
+    BOOL shared=[backup[@"shared"] boolValue];
+    __weak typeof(self) weakSelf=self;
+    UITableViewRowAction *remove=[UITableViewRowAction rowActionWithStyle:UITableViewRowActionStyleDestructive
+        title:@"删除" handler:^(UITableViewRowAction *action,NSIndexPath *index) {
+            [weakSelf confirmTitle:@"删除此备份？" message:@"该操作无法撤销，但不影响当前插件。"
+                destructive:YES action:^NSString *{
+                    return [LCOrbitTweakCenter deleteBackup:weakSelf.name backup:filename shared:shared];
+                }];
+        }];
+    return @[remove];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
