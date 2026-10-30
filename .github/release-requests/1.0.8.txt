@@ -1,0 +1,7 @@
+LCFloatingMenu v1.0.8 formal release request
+
+Version: 1.0.8
+Source: lcss-original, landscape-right video orientation mode and zero-delay orb drag drawer gesture
+Validation: https://github.com/dompling/LC-SS-widget-export/actions/runs/41024717802 (success)
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.8.md
+Publish: verify and compile arm64 LCFloatingMenu.dylib, create annotated 1.0.8 tag, GitHub Release, and refresh fm-latest.
