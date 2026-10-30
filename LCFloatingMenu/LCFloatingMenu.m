@@ -364,57 +364,56 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
     if(pullDist <= 0.01) {
         return FMSideNotchPath(bounds, dockLeft, YES, YES);
     }
-    CGFloat detachDist = 52.0 * FMOrbScale();
-    CGFloat t = Clamp(pullDist / detachDist, 0.0, 1.0);
+    // iOS PiP 风格：边缘 tab 拉出时头部逐渐膨胀成圆球，颈部收窄
+    // t 范围 [0,1]，0=未拉伸，1=满拉伸
+    CGFloat t = Clamp(pullDist / MAX(maxPull, 1.0), 0.0, 1.0);
     CGFloat cy = h * 0.5;
+    CGFloat scale = FMOrbScale();
     
-    // 水滴头部饱满膨胀：从微珠宽度(8pt半径)平滑膨胀为饱满大圆水珠(20pt半径，直径40pt)
-    CGFloat targetR = 20.0 * FMOrbScale();
-    CGFloat r = (8.0 * FMOrbScale()) * (1.0 - t) + targetR * t;
-    CGFloat headCenterX = r + 2.0;
+    // 头部半径：从微珠宽度一半(8pt)膨胀到饱满球体(18pt)
+    CGFloat r0 = 8.0 * scale;
+    CGFloat r1 = 18.0 * scale;
+    CGFloat headR = r0 + (r1 - r0) * t;
     
-    // 连接处变小收窄：从初始微珠高度 h 迅速收缩收窄，拉出越远连接处越小，临界断裂前形成极细液丝
-    CGFloat baseHeight = h * pow(1.0 - t, 2.0) + (3.0 * FMOrbScale()) * (1.0 - t);
-    CGFloat baseTopY = cy - baseHeight * 0.5;
-    CGFloat baseBottomY = cy + baseHeight * 0.5;
+    // 边缘连接处(颈部)高度：从微珠全高逐渐收窄到很小的连接点
+    CGFloat neckH = h * (1.0 - t * 0.85);
+    CGFloat neckHalf = neckH * 0.5;
+    CGFloat neckTopY = cy - neckHalf;
+    CGFloat neckBottomY = cy + neckHalf;
     
-    // 腰身液态内凹收缩 (Metaball 颈部受表面张力作用收窄)
-    CGFloat waistHalf = MIN(baseHeight * 0.5, r) * pow(1.0 - t, 1.2) + (1.5 * FMOrbScale()) * (1.0 - t);
+    // 头部球心 X：靠近拉出侧（远离边缘侧）
+    // dockLeft=NO 时边缘在右(x=w)，头部在左侧
+    CGFloat headCX = headR + 1.0;
+    CGFloat headTopY = cy - headR;
+    CGFloat headBottomY = cy + headR;
     
-    CGFloat cp1X = w - (w - headCenterX) * 0.40;
-    CGFloat cp1Y = cy - waistHalf * 0.85;
-    
-    CGFloat cp2X = headCenterX + (w - headCenterX) * 0.28;
-    CGFloat cp2Y = cy - waistHalf;
+    // 颈部控制点：平滑 S 形过渡
+    CGFloat neckMidX = headCX + (w - headCX) * (0.35 + 0.25 * t);
     
     UIBezierPath *path = [UIBezierPath bezierPath];
-    // 1. 边缘连接处上端点
-    [path moveToPoint:CGPointMake(w, baseTopY)];
     
-    // 2. 颈部向内凹陷收窄平滑过渡至大圆球上切点
-    [path addCurveToPoint:CGPointMake(headCenterX, cy - r)
-            controlPoint1:CGPointMake(cp1X, cp1Y)
-            controlPoint2:CGPointMake(cp2X, cp2Y)];
-            
-    // 3. 头部饱满大圆弧 (使用三次贝塞尔参数 0.55228475 保证完美圆球切线)
-    CGFloat k = r * 0.55228475;
-    [path addCurveToPoint:CGPointMake(headCenterX - r, cy)
-            controlPoint1:CGPointMake(headCenterX - k, cy - r)
-            controlPoint2:CGPointMake(headCenterX - r, cy - k)];
-    [path addCurveToPoint:CGPointMake(headCenterX, cy + r)
-            controlPoint1:CGPointMake(headCenterX - r, cy + k)
-            controlPoint2:CGPointMake(headCenterX - k, cy + r)];
-            
-    // 4. 下侧颈部对称延展回收缩的边缘连接处
-    CGFloat cp3X = cp2X;
-    CGFloat cp3Y = cy + waistHalf;
-    CGFloat cp4X = cp1X;
-    CGFloat cp4Y = cy + waistHalf * 0.85;
-    [path addCurveToPoint:CGPointMake(w, baseBottomY)
-            controlPoint1:CGPointMake(cp3X, cp3Y)
-            controlPoint2:CGPointMake(cp4X, cp4Y)];
-            
-    // 5. 闭合回到边缘连接处
+    // 起点：边缘(右侧x=w)连接处上端
+    [path moveToPoint:CGPointMake(w, neckTopY)];
+    
+    // 上侧颈部：从边缘弯向头部上切点
+    [path addCurveToPoint:CGPointMake(headCX, headTopY)
+            controlPoint1:CGPointMake(neckMidX, neckTopY)
+            controlPoint2:CGPointMake(headCX + headR * 0.15, headTopY - headR * 0.05)];
+    
+    // 头部圆弧：完美半圆（三次贝塞尔近似）
+    CGFloat k = headR * 0.55228475;
+    [path addCurveToPoint:CGPointMake(headCX - headR, cy)
+            controlPoint1:CGPointMake(headCX - k, headTopY)
+            controlPoint2:CGPointMake(headCX - headR, cy - k)];
+    [path addCurveToPoint:CGPointMake(headCX, headBottomY)
+            controlPoint1:CGPointMake(headCX - headR, cy + k)
+            controlPoint2:CGPointMake(headCX - k, headBottomY)];
+    
+    // 下侧颈部：对称回到边缘连接处下端
+    [path addCurveToPoint:CGPointMake(w, neckBottomY)
+            controlPoint1:CGPointMake(headCX + headR * 0.15, headBottomY + headR * 0.05)
+            controlPoint2:CGPointMake(neckMidX, neckBottomY)];
+    
     [path closePath];
     
     if(dockLeft) {
@@ -1097,8 +1096,8 @@ static id FMLayoutChangeObserver=nil;
 - (CGFloat)orbWidth { return 16*FMOrbScale(); }
 - (CGFloat)orbHeight { return 72*FMOrbScale(); }
 // 水滴拉拽时容器需容纳向外膨胀的头部大圆，避免被容器边界裁切或残留额外圆形
-- (CGFloat)orbMaxPull { return 56.0*FMOrbScale(); }
-- (CGFloat)orbDetachDist { return 52.0*FMOrbScale(); }
+- (CGFloat)orbMaxPull { return 52.0*FMOrbScale(); }
+- (CGFloat)orbDetachDist { return 40.0*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -1479,9 +1478,14 @@ static id FMLayoutChangeObserver=nil;
 
 - (void)springRestoreOrbToFrame:(CGRect)targetFrame completion:(void (^)(void))completion {
     UIView *bead=[self.orb viewWithTag:9202];
+    if(!bead || !self.orb) { if(completion) completion(); return; }
     UIBezierPath *notchPath=FMSideNotchPath(CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height),self.left,YES,YES);
     CGPathRef destPath=notchPath.CGPath;
     
+    // 先无动画将 bead 尺寸对齐到目标 frame，避免路径与 bounds 不匹配导致崩溃
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    bead.frame=CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height);
     CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
     CAShapeLayer *rim=nil;
     for(CALayer *layer in bead.layer.sublayers) {
@@ -1489,20 +1493,28 @@ static id FMLayoutChangeObserver=nil;
             rim=(CAShapeLayer *)layer; break;
         }
     }
+    // 先拍平当前路径动画，避免 from 路径与当前 bounds 不匹配
+    if([mask isKindOfClass:CAShapeLayer.class]) {
+        [mask removeAnimationForKey:@"fm.orb.shoulders"];
+        mask.frame=bead.bounds;
+        mask.path=destPath;
+    }
+    if(rim) {
+        [rim removeAnimationForKey:@"fm.orb.shoulders"];
+        rim.frame=bead.bounds;
+        rim.path=destPath;
+    }
+    [self.orb.layer removeAnimationForKey:@"fm.orb.shoulders"];
+    self.orb.layer.shadowPath=destPath;
+    [CATransaction commit];
     
-    FMAnimateOrbPath(mask,@"path",destPath,YES);
-    FMAnimateOrbPath(rim,@"path",destPath,YES);
-    FMAnimateOrbPath(self.orb.layer,@"shadowPath",destPath,YES);
-    
-    [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0.3
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.4
         options:UIViewAnimationOptionBeginFromCurrentState animations:^{
             self.orb.frame=targetFrame;
             bead.frame=self.orb.bounds;
             self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
+            if(self.orbAppPreviewView) self.orbAppPreviewView.center=self.orbUpdateLine.center;
         } completion:^(BOOL finished) {
-            mask.path=destPath;
-            if(rim) rim.path=destPath;
-            self.orb.layer.shadowPath=destPath;
             if(completion) completion();
         }];
 }
@@ -1603,8 +1615,9 @@ static id FMLayoutChangeObserver=nil;
             self.orb.frame=targetFrame;
             
             CGFloat tProgress=Clamp(pullDist / maxPull, 0.0, 1.0);
-            CGFloat headR=(8.0*FMOrbScale())*(1.0-tProgress) + (20.0*FMOrbScale())*tProgress;
-            CGFloat headCenterX=_panOriginalLeft ? (currentW - headR - 2.0) : (headR + 2.0);
+            CGFloat scale=FMOrbScale();
+            CGFloat headR=(8.0*scale)*(1.0-tProgress) + (18.0*scale)*tProgress;
+            CGFloat headCenterX=_panOriginalLeft ? (currentW - headR - 1.0) : (headR + 1.0);
             CGPoint headCenter=CGPointMake(headCenterX,self.orbHeight * 0.5);
             self.orbUpdateLine.center=headCenter;
             
@@ -1720,35 +1733,20 @@ static id FMLayoutChangeObserver=nil;
 // 重置水滴形变、边框、阴影与内部图层到标准边缘微珠状态，确保不会残留独立圆形/圆锥/错位图层
 - (void)resetDropletVisualStateAnimated:(BOOL)animated {
     if(!self.orb) return;
-    UIView *bead=[self.orb viewWithTag:9202];
-    CGRect targetFrame=self.orb.frame;
-    CGFloat needW=self.orbWidth;
-    if(animated && fabs(CGRectGetWidth(targetFrame)-needW)>0.5) {
-        targetFrame.size.width=needW;
-        targetFrame.origin.x=self.left?0:self.window.bounds.size.width-needW;
-    } else if(fabs(CGRectGetWidth(targetFrame)-needW)>0.5) {
-        targetFrame.size.width=needW;
-        targetFrame.origin.x=self.left?0:self.window.bounds.size.width-needW;
-    }
     self.pullDistCache=0;
-    [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.3
-        options:UIViewAnimationOptionBeginFromCurrentState
-        animations:^{
-            self.orbUpdateLine.alpha=1;
-            if(self.orbAppPreviewView) {
-                self.orbAppPreviewView.alpha=0;
-                self.orbAppPreviewView.transform=CGAffineTransformIdentity;
-            }
-        } completion:nil];
-    if(bead) {
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        bead.frame=CGRectMake(0,0,needW,self.orbHeight);
-        [CATransaction commit];
-    }
+    CGRect targetFrame=_panOriginalOrbFrame;
+    if(CGRectIsEmpty(targetFrame)) targetFrame=[self orbFrame];
+    
+    // 立刻恢复视觉状态
+    [UIView animateWithDuration:0.22 animations:^{
+        self.orbUpdateLine.alpha=1;
+        if(self.orbAppPreviewView) {
+            self.orbAppPreviewView.alpha=0;
+            self.orbAppPreviewView.transform=CGAffineTransformIdentity;
+        }
+    }];
+    
     [self springRestoreOrbToFrame:targetFrame completion:^{
-        self.orbUpdateLine.center=CGPointMake(CGRectGetWidth(targetFrame)*0.5,CGRectGetHeight(targetFrame)*0.5);
-        if(self.orbAppPreviewView) self.orbAppPreviewView.center=self.orbUpdateLine.center;
         [self scheduleOrbFade];
     }];
 }
