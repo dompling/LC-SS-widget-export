@@ -3176,7 +3176,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             owner.updateStatusLabel.text=@"检查微珠最新发布版";
             [owner afterUpdatePrompt:prompt perform:^{
                 [weakSelf presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
-                    message:success?@"已备份旧插件并安装新版本。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
+                    message:success?@"已校验并替换旧插件。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
                     (installError.localizedDescription?:error.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
                     showRepository:!success];
             }];
@@ -3191,7 +3191,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if([self.automaticallyOfferedVersions containsObject:version]) return;
         [self.automaticallyOfferedVersions addObject:version];
     }
-    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验并备份旧插件。安装完成后，请在 LC 原生 Tweaks 页面重新签名并重启相关应用。",release[@"notes"]];
+    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验新插件并原子替换旧版本。校验或替换失败时保留旧插件。安装完成后，请在 LC 原生 Tweaks 页面重新签名并重启相关应用。",release[@"notes"]];
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"发现微珠新版本 v%@",version]
         message:message preferredStyle:UIAlertControllerStyleAlert];
     __weak typeof(self) weakSelf=self;
