@@ -42,41 +42,69 @@ static NSString *SharedTweakRoot(void) {
     NSString *group=[LCOrbitHost appGroupPath];
     return group.length?[group stringByAppendingPathComponent:@"LiveContainer/Tweaks"]:nil;
 }
-static NSString *BackupRoot(void) {
-    NSString *group=[LCOrbitHost appGroupPath];
-    return group.length?[group stringByAppendingPathComponent:@"LiveContainer/LCFloatingMenu/TweakBackups"]:nil;
+static NSString *const AutomaticPluginNamesKey=@"LCFloatingMenu.autoSyncSharedPluginNames";
+static NSArray<NSString *> *AutomaticPluginNames(void) {
+    NSMutableOrderedSet<NSString *> *names=[NSMutableOrderedSet orderedSet];
+    for(id name in [[LCOrbitStorage preferences] arrayForKey:AutomaticPluginNamesKey])
+        if(ManageableName(name)) [names addObject:name];
+    return names.array;
 }
-static NSString *BackupPath(NSString *name) {
-    return [BackupRoot() stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"%@.%@.bak",name,NSUUID.UUID.UUIDString]];
+static BOOL SyncError(NSError **error,NSString *message) {
+    if(error) *error=[NSError errorWithDomain:@"LCOrbitTweakSync" code:1
+        userInfo:@{NSLocalizedDescriptionKey:message}];
+    return NO;
 }
 
 @implementation LCOrbitTweakSync
-+ (BOOL)automaticSyncEnabled {
-    return [[LCOrbitStorage preferences] boolForKey:@"LCFloatingMenu.autoSyncSharedTweaks"];
++ (BOOL)automaticSyncEnabled { return AutomaticPluginNames().count>0; }
++ (BOOL)automaticSyncEnabledForPlugin:(NSString *)name {
+    return ManageableName(name) && [AutomaticPluginNames() containsObject:name];
 }
-+ (void)setAutomaticSyncEnabled:(BOOL)enabled {
-    [self setAutomaticSyncEnabled:enabled error:nil];
-}
-+ (BOOL)setAutomaticSyncEnabled:(BOOL)enabled error:(NSError **)error {
++ (BOOL)setAutomaticSyncEnabled:(BOOL)enabled forPlugin:(NSString *)name error:(NSError **)error {
     @synchronized(self) {
-        if(![LCOrbitHost isHostUI]) {
-            if(error) *error=[NSError errorWithDomain:@"LCOrbitTweakSync" code:1
-                userInfo:@{NSLocalizedDescriptionKey:@"请从 LC 主界面调整自动同步。"}];
-            return NO;
+        if(![LCOrbitHost isHostUI]) return SyncError(error,@"请从 LC 主界面调整自动共享。");
+        if(!ManageableName(name)) return SyncError(error,@"插件名称无效，未修改自动共享配置。");
+        if(enabled) {
+            NSString *source=[HostTweaksPath() stringByAppendingPathComponent:name];
+            NSString *disabled=[source stringByAppendingString:@".disabled"];
+            BOOL active=RegularFile(source),inactive=RegularFile(disabled);
+            if((!active && !inactive) || (active && inactive) ||
+               (ExistsWithoutFollowingLinks(source) && !active) ||
+               (ExistsWithoutFollowingLinks(disabled) && !inactive))
+                return SyncError(error,@"只有安全的本地插件可开启自动共享。");
         }
-        if([self automaticSyncEnabled]==enabled) return YES;
-        [[LCOrbitStorage preferences] setBool:enabled forKey:@"LCFloatingMenu.autoSyncSharedTweaks"];
+        NSMutableOrderedSet<NSString *> *names=[NSMutableOrderedSet orderedSetWithArray:AutomaticPluginNames()];
+        if([names containsObject:name]==enabled) return YES;
+        if(enabled) [names addObject:name];else [names removeObject:name];
+        [[LCOrbitStorage preferences] setObject:names.array forKey:AutomaticPluginNamesKey];
         NSError *writeError=[LCOrbitStorage lastError];
         if(writeError) { if(error) *error=writeError;return NO; }
-        [LCOrbitTweakAudit appendEvent:enabled?@"automatic-sync enabled":@"automatic-sync disabled"];
+        [LCOrbitTweakAudit appendEvent:[NSString stringWithFormat:@"automatic-sync plugin=%@ %@",name,enabled?@"enabled":@"disabled"]];
+        return YES;
+    }
+}
++ (void)setAutomaticSyncEnabled:(BOOL)enabled { [self setAutomaticSyncEnabled:enabled error:nil]; }
++ (BOOL)setAutomaticSyncEnabled:(BOOL)enabled error:(NSError **)error {
+    // Legacy callers cannot opt every plugin in. Only explicit names authorize
+    // automatic sharing; an old global=true preference is deliberately ignored.
+    @synchronized(self) {
+        if(![LCOrbitHost isHostUI]) return SyncError(error,@"请从 LC 主界面调整自动共享。");
+        if(enabled) return [self automaticSyncEnabled] || SyncError(error,@"请在插件详情中逐个开启自动共享。");
+        if(![self automaticSyncEnabled]) return YES;
+        [[LCOrbitStorage preferences] setObject:@[] forKey:AutomaticPluginNamesKey];
+        NSError *writeError=[LCOrbitStorage lastError];
+        if(writeError) { if(error) *error=writeError;return NO; }
+        [LCOrbitTweakAudit appendEvent:@"automatic-sync all-explicit-selections disabled"];
         return YES;
     }
 }
 + (NSString *)syncAutomaticallyIfNeeded {
     @synchronized(self) {
-        if(![LCOrbitHost isHostUI] || ![self automaticSyncEnabled]) return @"";
-        NSArray<NSString *> *names=[self eligibleNames];
+        if(![LCOrbitHost isHostUI]) return @"";
+        NSSet<NSString *> *selected=[NSSet setWithArray:AutomaticPluginNames()];
+        if(!selected.count) return @"";
+        NSMutableArray<NSString *> *names=[NSMutableArray array];
+        for(NSString *name in [self eligibleNames]) if([selected containsObject:name]) [names addObject:name];
         if(!names.count) return @"";
         NSString *report=[self applyShare:YES names:names];
         [LCOrbitTweakAudit appendEvent:[@"automatic-sync " stringByAppendingString:report]];
@@ -144,8 +172,8 @@ static NSString *BackupPath(NSString *name) {
 + (NSString *)applyShare:(BOOL)share names:(NSArray<NSString *> *)requested {
     @synchronized(self) {
     if(![LCOrbitHost isHostUI]) return @"只能从 LiveContainer 主界面管理共享插件。";
-    NSString *privateRoot=HostTweaksPath(), *sharedRoot=SharedTweakRoot(), *backups=BackupRoot();
-    if(!privateRoot.length || !sharedRoot.length || !backups.length)
+    NSString *privateRoot=HostTweaksPath(), *sharedRoot=SharedTweakRoot();
+    if(!privateRoot.length || !sharedRoot.length)
         return @"无法访问私有插件目录或共享目录。";
     if(![requested isKindOfClass:NSArray.class] || requested.count==0)
         return @"尚未选择插件。";
@@ -194,16 +222,6 @@ static NSString *BackupPath(NSString *name) {
                 [results addObject:[NSString stringWithFormat:@"%@：复制校验失败",name]];
                 continue;
             }
-            if(ExistsWithoutFollowingLinks(to)) {
-                NSString *backup=BackupPath(name);
-                if(![fm createDirectoryAtPath:backups withIntermediateDirectories:YES attributes:nil error:nil] ||
-                   ![fm copyItemAtPath:to toPath:backup error:nil]) {
-                    failed++;
-                    [fm removeItemAtPath:temporary error:nil];
-                    [results addObject:[NSString stringWithFormat:@"%@：旧版本备份失败",name]];
-                    continue;
-                }
-            }
             if(rename(temporary.fileSystemRepresentation,to.fileSystemRepresentation)!=0) {
                 failed++;
                 [fm removeItemAtPath:temporary error:nil];
@@ -219,21 +237,15 @@ static NSString *BackupPath(NSString *name) {
                 [results addObject:[NSString stringWithFormat:@"%@：没有可取消的共享副本",name]];
                 continue;
             }
-            if(![fm createDirectoryAtPath:backups withIntermediateDirectories:YES attributes:nil error:nil]) {
+            // Removing a regular shared copy is atomic; unlink failure leaves
+            // it in place. Private originals and historical backups stay intact.
+            if(unlink(actual.fileSystemRepresentation)!=0) {
                 failed++;
-                [results addObject:[NSString stringWithFormat:@"%@：无法创建撤销备份目录",name]];
-                continue;
-            }
-            NSString *backup=BackupPath([item[@"sharedDisabled"] boolValue]?
-                [name stringByAppendingString:@".disabled"]:name);
-            // Backups live on the same App Group filesystem: move is atomic.
-            if(rename(actual.fileSystemRepresentation,backup.fileSystemRepresentation)!=0) {
-                failed++;
-                [results addObject:[NSString stringWithFormat:@"%@：无法移走共享副本",name]];
+                [results addObject:[NSString stringWithFormat:@"%@：无法移除共享副本",name]];
                 continue;
             }
             done++;
-            [results addObject:[NSString stringWithFormat:@"%@：已取消共享（已备份）",name]];
+            [results addObject:[NSString stringWithFormat:@"%@：已取消共享",name]];
         }
     }
     NSString *report=[NSString stringWithFormat:

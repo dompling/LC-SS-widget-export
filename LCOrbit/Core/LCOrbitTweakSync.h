@@ -8,7 +8,11 @@ NS_ASSUME_NONNULL_BEGIN
 // Backwards-compatible one-tap sync of all loaded private global dylibs.
 + (NSArray<NSString *> *)eligibleNames;
 + (NSString *)copyLoadedTweaksToShared;
-// Opt-in automatic sharing of eligible loaded private plugins. Defaults off.
+// Automatic sharing is explicitly authorized per local plugin, default off.
+// Legacy global opt-in is ignored; turning one plugin off keeps shared copies.
++ (BOOL)automaticSyncEnabledForPlugin:(NSString *)name;
++ (BOOL)setAutomaticSyncEnabled:(BOOL)enabled forPlugin:(NSString *)name error:(NSError * _Nullable * _Nullable)error;
+// Aggregate used by lifecycle triggers: YES when at least one name is selected.
 + (BOOL)automaticSyncEnabled;
 + (void)setAutomaticSyncEnabled:(BOOL)enabled;
 + (BOOL)setAutomaticSyncEnabled:(BOOL)enabled error:(NSError * _Nullable * _Nullable)error;

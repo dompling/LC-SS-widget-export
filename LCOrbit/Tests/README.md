@@ -10,16 +10,16 @@
 - The current guest remains visible and favoritable, but tapping its switcher entry must not restart it. The explicit Restart action is separate.
 - Old basename-based preferences remain readable during migration.
 - App-specific tweak assignment uses the complete installed inventory, not the quick-launch subset. Validate the target against the current installed path and preserve existing manually selected folders, source files and backups. Management remains restricted to the opted-in LC host UI.
-- Preserve global sharing, batch revocation, enabled/disabled states, backup restoration and file details when changing app discovery. These operations must not rewrite unrelated app flags.
+- Preserve global sharing, batch revocation, enabled/disabled states and file details when changing app discovery. These operations must not rewrite unrelated app flags.
 - Keep the compact management interface. Diagnostics belong in logs, not additional instruction banners.
-- Automatic sharing is opt-in and host-only. It must preserve disabled copies, validate updates, keep backups and avoid duplicate writes across concurrent triggers.
+- Automatic sharing is host-only and opt-in separately for each plugin. It must preserve disabled copies, validate updates, avoid persistent plugin history backups, and avoid duplicate writes across concurrent triggers.
 - Host fullscreen multitasking must reuse existing windows, preserve other task processes and retain LC cleanup. Never silently restart the host when the requested multitask launch is rejected.
 
 ## Suites
 
 - `sh LCOrbit/Tests/run-guest-tests.sh`: executes production scanning and menu selection against real temporary plists, including all app states, shared/private roots, container fallback, namesake collisions, original identity, stale selection and blocked launches.
 - `sh LCOrbit/Tests/run-jit-favorites-tests.sh`: executes production `visibleApps`, `favorites` and `pinApp` methods. It verifies all-app visibility, actual preference persistence, independent same-name favorites, legacy preferences, removal and the existing four-item limit.
-- `sh LCOrbit/Tests/run-tweak-center-tests.sh`: executes the production inventory, shared-file manager and assignment service. It loads only two no-op test dylibs from a temporary fixture and checks batch sharing/revocation, byte preservation, enabled/disabled states, current and legacy backups, restoration, file metadata and per-app assignments for JIT, manual-signing, hidden and locked apps.
+- `sh LCOrbit/Tests/run-tweak-center-tests.sh`: executes the production inventory, shared-file manager and assignment service. It loads only two no-op test dylibs from a temporary fixture and checks batch sharing/revocation, byte preservation, enabled/disabled states, historical backup preservation, file metadata and per-app assignments for JIT, manual-signing, hidden and locked apps.
 - `sh LCOrbit/Tests/run-multitask-tests.sh`: executes the production host adapter against LC launch/presentation boundary doubles. Checks host-only mode, native preference isolation, failed JSON saves, extension and container ownership, launch arguments, duplicate-request rejection, async failure recovery, live-task reuse, return-home behavior, close-current isolation and preservation of user-owned LC settings across repeated toggles. Also checks independent menu choice, system-menu launch/reuse without fullscreen enforcement, overlay visibility, plugin-disable preference retention and native-minimize task identity.
 - `sh LCOrbit/Tests/run-multitask-hook-tests.sh`: executes the production runtime signature guard against real Objective-C methods, rejecting incompatible return/argument ABIs before hook installation.
 - `sh LCOrbit/Tests/run-multitask-restore-tests.sh`: executes the production restore path together with LC's real geometry methods. Checks normalized saved frame, restored remote-content dimensions and subsequent native scene updates, using small UIKit geometry/animation boundaries.
@@ -63,3 +63,11 @@ Application management cases also check one record per App, shared App identity 
 These are **real UIKit simulator tests with synthetic host-window geometry and task fixtures**. They verify coordinate conversion, view layout, control routing and production action handling, but do not prove LC's actual SwiftUI tab-bar placement, physical sensor occlusion, remote scene integration or real task process termination. PNGs use UIKit layer rendering; they show synthetic layout, not hardware screenshots. The simulator suite remains an explicit check because some build machines have no iOS Simulator runtime.
 
 Reduce Motion docking is reported separately as a production source contract: the docking method must consult `UIAccessibilityIsReduceMotionEnabled()`. This check does not claim to toggle the simulator accessibility C function or verify animation timing.
+
+## GitHub 访问与凭据回归
+
+`sh LCOrbit/Tests/run-github-access-tests.sh` 编译实际 LCOrbitGitHub.m，使用内存 Keychain、签名 entitlement 和网络 session 边界，检查显式宿主 app-ID 访问组、Guest 匿名与禁止读写、保存失败保留、空 Token 保留、非法输入、HTTPS API 白名单、同源重定向、无缓存/cookie/credentialstore 会话、网络错误脱敏。测试不访问真实 Keychain 或联网。UIKit suite 另验证入口、密文输入不预填、保存清除、账号校验及旧回调失效。真实 LC 签名下的 Keychain 读写与 GitHub 实际认证连接需要真机测试。
+
+## 更新说明与跳过策略
+
+`sh LCOrbit/Tests/run-update-release-tests.sh` 使用实际发布模型验证 GitHub JSON/本地缓存类型、数值版本比较、精确版本跳过、官方资源路径、SHA-256 和提交标记，保留公开说明并过滤内部元数据。UIKit suite 另检查设置首页自动提示、两按钮、跳过持久化/失败、手动绕过、页面不可见保护、延迟结果缓存和原有下载/安装边界。下载和安装在夹具中替换，不触碰真实插件。

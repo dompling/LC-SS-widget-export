@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
+#import <objc/runtime.h>
 #import "LCOrbitHost.h"
 #import "LCOrbitGuestService.h"
 #import "LCOrbitTweakCenter.h"
@@ -8,10 +9,12 @@
 #import "LCOrbitStorage.h"
 @interface LCOrbitTweakSync (SaveContract)
 + (BOOL)setAutomaticSyncEnabled:(BOOL)enabled error:(NSError **)error;
++ (BOOL)automaticSyncEnabledForPlugin:(NSString *)name;
++ (BOOL)setAutomaticSyncEnabled:(BOOL)enabled forPlugin:(NSString *)name error:(NSError **)error;
 @end
 
 // Replace only the LC runtime and audit presentation. Production scanner,
-// shared-file operations, metadata writes and backup restoration run unchanged.
+// shared-file operations and metadata writes run unchanged.
 static NSString *Home, *Group;
 static BOOL HostMode=YES;
 static NSUserDefaults *Defaults;
@@ -65,91 +68,105 @@ static NSDictionary *Find(NSArray *list,NSString *field,NSString *value) {
     for(NSDictionary *item in list) if([item[field] isEqual:value]) return item;
     return nil;
 }
-static NSDictionary *Backup(NSString *name,BOOL shared) {
-    for(NSDictionary *item in [LCOrbitTweakCenter backupsForPlugin:name])
-        if([item[@"shared"] boolValue]==shared) return item;
-    return nil;
+static BOOL FailStageCopy;
+@implementation NSFileManager (StagingFailureBoundary)
+- (BOOL)orbit_copyItemAtPath:(NSString *)source toPath:(NSString *)destination error:(NSError **)error {
+    if(FailStageCopy && [destination hasSuffix:@".tmp"]) {
+        if(error) *error=[NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteNoPermissionError userInfo:nil];
+        return NO;
+    }
+    return [self orbit_copyItemAtPath:source toPath:destination error:error];
 }
+@end
 static void TestAutomaticSync(NSFileManager *fm,NSString *suite) {
-    BOOL available=[LCOrbitTweakSync respondsToSelector:@selector(syncAutomaticallyIfNeeded)] &&
-        [LCOrbitTweakSync respondsToSelector:@selector(automaticSyncEnabled)] &&
-        [LCOrbitTweakSync respondsToSelector:@selector(setAutomaticSyncEnabled:)];
-    Check(available,@"automatic sharing service is available");
+    BOOL available=[LCOrbitTweakSync respondsToSelector:@selector(automaticSyncEnabledForPlugin:)] &&
+        [LCOrbitTweakSync respondsToSelector:@selector(setAutomaticSyncEnabled:forPlugin:error:)];
+    Check(available,@"per-plugin automatic sharing API is available");
     if(!available) return;
     NSString *source=[Root(NO,@"Tweaks") stringByAppendingPathComponent:@"A.dylib"];
+    NSString *sourceB=[Root(NO,@"Tweaks") stringByAppendingPathComponent:@"B.dylib"];
     NSString *destination=[Root(YES,@"Tweaks") stringByAppendingPathComponent:@"A.dylib"];
+    NSString *destinationB=[Root(YES,@"Tweaks") stringByAppendingPathComponent:@"B.dylib"];
     NSString *unloaded=[Root(NO,@"Tweaks") stringByAppendingPathComponent:@"Unloaded.dylib"];
     NSString *linked=[Root(NO,@"Tweaks") stringByAppendingPathComponent:@"Linked.dylib"];
-    Check([Bytes(source) writeToFile:unloaded atomically:YES],@"fixture creates unloaded private plugin");
-    Check([fm createSymbolicLinkAtPath:linked withDestinationPath:source error:nil],@"fixture creates linked private plugin");
-    Check(![LCOrbitTweakSync automaticSyncEnabled],@"automatic sharing defaults off");
+    [Bytes(source) writeToFile:unloaded atomically:YES];
+    [fm createSymbolicLinkAtPath:linked withDestinationPath:source error:nil];
+    Check(![LCOrbitTweakSync automaticSyncEnabled] && ![LCOrbitTweakSync automaticSyncEnabledForPlugin:@"A.dylib"],@"per-plugin automatic sharing defaults off");
+    [[LCOrbitStorage preferences] setBool:YES forKey:@"LCFloatingMenu.autoSyncSharedTweaks"];
     [LCOrbitTweakSync syncAutomaticallyIfNeeded];
-    Check(!Exists(destination),@"disabled automatic sharing never writes shared files");
-    [LCOrbitTweakSync setAutomaticSyncEnabled:YES];
+    Check(![LCOrbitTweakSync automaticSyncEnabled] && !Exists(destination) && !Exists(destinationB),@"old global opt-in never auto-enrolls local plugins");
+    NSError *legacyError=nil;
+    Check(![LCOrbitTweakSync setAutomaticSyncEnabled:YES error:&legacyError] && legacyError!=nil &&
+        ![LCOrbitTweakSync automaticSyncEnabled],@"legacy enable call cannot authorize all plugins");
+    NSError *error=nil;
+    Check([LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"A.dylib" error:&error],@"local plugin can individually opt in");
+    Check([LCOrbitTweakSync automaticSyncEnabled] && [LCOrbitTweakSync automaticSyncEnabledForPlugin:@"A.dylib"] && ![LCOrbitTweakSync automaticSyncEnabledForPlugin:@"B.dylib"],@"selection is isolated per local plugin");
     NSUserDefaults *sameSuite=[[NSUserDefaults alloc] initWithSuiteName:suite];
     NSUserDefaults *previous=Defaults;Defaults=sameSuite;
-    Check([LCOrbitTweakSync automaticSyncEnabled],@"automatic sharing persists across defaults instances");
-    Defaults=previous;
+    Check([LCOrbitTweakSync automaticSyncEnabledForPlugin:@"A.dylib"],@"per-plugin opt-in persists across defaults instances");Defaults=previous;
+    Check(![LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"Linked.dylib" error:&error] &&
+        ![LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"../A.dylib" error:&error] &&
+        ![LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"Missing.dylib" error:&error],@"invalid linked or missing sources cannot enroll");
+    Check([LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"Unloaded.dylib" error:&error],@"ordinary local plugin may opt in before its next host load");
     [LCOrbitTweakSync syncAutomaticallyIfNeeded];
-    Check([Bytes(source) isEqual:Bytes(destination)],@"enabled automatic sharing creates shared copy");
-    Check(!Exists([Root(YES,@"Tweaks") stringByAppendingPathComponent:@"Unloaded.dylib"]),@"automatic sharing never copies an unloaded private plugin");
-    Check(!Exists([Root(YES,@"Tweaks") stringByAppendingPathComponent:@"Linked.dylib"]),@"automatic sharing never follows private plugin symlinks");
-    NSArray *before=[LCOrbitTweakCenter backupsForPlugin:@"A.dylib"];
+    Check([Bytes(source) isEqual:Bytes(destination)] && !Exists(destinationB),@"automatic sharing copies only explicitly selected loaded plugin");
+    Check(!Exists([Root(YES,@"Tweaks") stringByAppendingPathComponent:@"Unloaded.dylib"]),@"selected unloaded plugin is not copied until host loads it");
+    Check([LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"B.dylib" error:&error],@"second plugin can independently opt in");
     [LCOrbitTweakSync syncAutomaticallyIfNeeded];
-    Check([LCOrbitTweakCenter backupsForPlugin:@"A.dylib"].count==before.count,@"unchanged automatic sync creates no redundant backup");
-    NSData *original=Bytes(source);
-    NSMutableData *updated=[original mutableCopy];
-    [updated appendData:[@"updated fixture" dataUsingEncoding:NSUTF8StringEncoding]];
-    Check([updated writeToFile:source atomically:YES],@"fixture replaces installed private plugin");
+    Check([Bytes(sourceB) isEqual:Bytes(destinationB)],@"second selected plugin synchronizes independently");
+    [LCOrbitTweakSync setAutomaticSyncEnabled:NO forPlugin:@"A.dylib" error:nil];
+    Check(Exists(destination) && [LCOrbitTweakSync automaticSyncEnabled] && ![LCOrbitTweakSync automaticSyncEnabledForPlugin:@"A.dylib"],@"turning one plugin off preserves shared copy and other opt-ins");
+    NSData *original=Bytes(source),*originalB=Bytes(sourceB);
+    NSMutableData *updated=[original mutableCopy];[updated appendData:[@"updated fixture" dataUsingEncoding:NSUTF8StringEncoding]];
+    NSMutableData *updatedB=[originalB mutableCopy];[updatedB appendData:[@"updated B" dataUsingEncoding:NSUTF8StringEncoding]];
+    [updated writeToFile:source atomically:YES];[updatedB writeToFile:sourceB atomically:YES];
+    [LCOrbitTweakSync syncAutomaticallyIfNeeded];
+    Check([Bytes(destination) isEqual:original] && [Bytes(destinationB) isEqual:updatedB],@"disabled A cannot update while selected B continues updating");
+    [LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"A.dylib" error:nil];
+    FailStageCopy=YES;[LCOrbitTweakSync syncAutomaticallyIfNeeded];FailStageCopy=NO;
+    Check([Bytes(destination) isEqual:original],@"failed staged copy preserves existing shared bytes");
+    BOOL noTemporaryFiles=YES;
+    for(NSString *name in [fm contentsOfDirectoryAtPath:Root(YES,@"Tweaks") error:nil])
+        if([name hasSuffix:@".tmp"]) noTemporaryFiles=NO;
+    Check(noTemporaryFiles,@"failed staging leaves no orphan temporary shared files");
     dispatch_apply(8,dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^(size_t index) {
-        (void)index;
-        [LCOrbitTweakSync syncAutomaticallyIfNeeded];
+        (void)index;[LCOrbitTweakSync syncAutomaticallyIfNeeded];
     });
-    Check([Bytes(destination) isEqual:updated],@"automatic sharing replaces outdated bytes after plugin update");
-    Check([LCOrbitTweakCenter backupsForPlugin:@"A.dylib"].count==before.count+1,@"concurrent automatic updates preserve exactly one former-version backup");
-    BOOL backedUpOriginal=NO;
+    Check([Bytes(destination) isEqual:updated],@"concurrent automatic updates leave complete verified bytes");
     NSString *backupRoot=[Group stringByAppendingPathComponent:@"LiveContainer/LCFloatingMenu/TweakBackups"];
-    for(NSString *file in [fm contentsOfDirectoryAtPath:backupRoot error:nil])
-        if([Bytes([backupRoot stringByAppendingPathComponent:file]) isEqual:original]) backedUpOriginal=YES;
-    Check(backedUpOriginal,@"automatic replacement backup retains original bytes");
+    Check(!Exists(backupRoot),@"automatic sharing does not create persistent history backups");
     NSString *disabled=[destination stringByAppendingString:@".disabled"];
-    Check([fm moveItemAtPath:destination toPath:disabled error:nil],@"fixture disables shared plugin");
-    [original writeToFile:source atomically:YES];
+    [fm moveItemAtPath:destination toPath:disabled error:nil];[original writeToFile:source atomically:YES];
     [LCOrbitTweakSync syncAutomaticallyIfNeeded];
     Check(!Exists(destination) && [Bytes(disabled) isEqual:updated],@"automatic sharing preserves intentionally disabled shared copy");
     HostMode=NO;
-    [LCOrbitTweakSync setAutomaticSyncEnabled:NO];
-    Check([LCOrbitTweakSync automaticSyncEnabled],@"guest cannot change host automatic-sharing preference");
-    [fm removeItemAtPath:disabled error:nil];
-    [LCOrbitTweakSync syncAutomaticallyIfNeeded];
-    Check(!Exists(destination),@"guest cannot trigger automatic sharing");
-    HostMode=YES;
+    Check(![LCOrbitTweakSync setAutomaticSyncEnabled:NO forPlugin:@"A.dylib" error:&error] && [LCOrbitTweakSync automaticSyncEnabledForPlugin:@"A.dylib"],@"guest cannot change host per-plugin opt-in");
+    [fm removeItemAtPath:disabled error:nil];[LCOrbitTweakSync syncAutomaticallyIfNeeded];
+    Check(!Exists(destination),@"guest cannot trigger automatic sharing");HostMode=YES;
     NSString *outside=[Home stringByAppendingPathComponent:@"outside-file"];
     NSData *sentinel=[@"outside untouched" dataUsingEncoding:NSUTF8StringEncoding];
-    Check([sentinel writeToFile:outside atomically:YES] &&
-        [fm createSymbolicLinkAtPath:destination withDestinationPath:outside error:nil],@"fixture links shared destination outside tweak directory");
+    [sentinel writeToFile:outside atomically:YES];[fm createSymbolicLinkAtPath:destination withDestinationPath:outside error:nil];
     [LCOrbitTweakSync syncAutomaticallyIfNeeded];
-    Check([Bytes(outside) isEqual:sentinel] &&
-        [[fm destinationOfSymbolicLinkAtPath:destination error:nil] isEqual:outside],@"automatic sharing rejects linked shared destination");
+    Check([Bytes(outside) isEqual:sentinel] && [[fm destinationOfSymbolicLinkAtPath:destination error:nil] isEqual:outside],@"automatic sharing rejects linked shared destination");
     [fm removeItemAtPath:destination error:nil];
-    [LCOrbitTweakSync setAutomaticSyncEnabled:NO];
-    Check(![LCOrbitTweakSync automaticSyncEnabled],@"automatic sharing can be disabled persistently");
-    [LCOrbitTweakSync syncAutomaticallyIfNeeded];
-    Check(!Exists(destination),@"turning automatic sharing off prevents later updates");
-    [LCOrbitTweakSync setAutomaticSyncEnabled:YES];
     NSString *config=[[LCOrbitStorage rootPath] stringByAppendingPathComponent:@"config.json"];
-    NSData *good=[NSData dataWithContentsOfFile:config];
-    [@"broken JSON" writeToFile:config atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    BOOL supportsError=[LCOrbitTweakSync respondsToSelector:@selector(setAutomaticSyncEnabled:error:)];
-    Check(supportsError,@"automatic-sync save reports persistence failure to its switch controller");
+    NSData *good=Bytes(config);[@"broken JSON" writeToFile:config atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSString *beforeAudit=LatestAudit;NSError *saveError=nil;
-    if(supportsError) Check(![LCOrbitTweakSync setAutomaticSyncEnabled:NO error:&saveError] && saveError!=nil,@"invalid JSON rejects switch save with an error");
-    [LCOrbitTweakSync setAutomaticSyncEnabled:NO];
-    Check([LCOrbitTweakSync automaticSyncEnabled] && [LatestAudit isEqual:beforeAudit],@"rejected save retains effective sync state without false disabled audit");
-    [good writeToFile:config atomically:YES];[LCOrbitTweakSync setAutomaticSyncEnabled:NO];
-    [fm removeItemAtPath:[Root(YES,@"Tweaks") stringByAppendingPathComponent:@"B.dylib"] error:nil];
-    [fm removeItemAtPath:unloaded error:nil];
-    [fm removeItemAtPath:linked error:nil];
+    Check(![LCOrbitTweakSync setAutomaticSyncEnabled:NO forPlugin:@"A.dylib" error:&saveError] && saveError!=nil,@"invalid JSON rejects individual switch save with error");
+    Check([LCOrbitTweakSync automaticSyncEnabledForPlugin:@"A.dylib"] && [LatestAudit isEqual:beforeAudit],@"failed save retains effective choice without false success log");
+    [good writeToFile:config atomically:YES];
+    for(NSString *name in @[@"A.dylib",@"B.dylib",@"Unloaded.dylib"])
+        [LCOrbitTweakSync setAutomaticSyncEnabled:NO forPlugin:name error:nil];
+    Check(![LCOrbitTweakSync automaticSyncEnabled],@"no selected plugins disables automatic trigger");
+    [LCOrbitTweakSync syncAutomaticallyIfNeeded];Check(!Exists(destination),@"disabled selections cannot recreate shared copy");
+    NSString *sourceOff=[source stringByAppendingString:@".disabled"];
+    [fm moveItemAtPath:source toPath:sourceOff error:nil];
+    Check([LCOrbitTweakSync setAutomaticSyncEnabled:YES forPlugin:@"A.dylib" error:&error],@"disabled local plugin can retain a future-update opt-in");
+    [LCOrbitTweakSync syncAutomaticallyIfNeeded];
+    Check(!Exists(destination) && Exists(sourceOff),@"auto opt-in does not enable or copy disabled local plugin");
+    [LCOrbitTweakSync setAutomaticSyncEnabled:NO forPlugin:@"A.dylib" error:nil];
+    [fm moveItemAtPath:sourceOff toPath:source error:nil];
+    [fm removeItemAtPath:destinationB error:nil];[fm removeItemAtPath:unloaded error:nil];[fm removeItemAtPath:linked error:nil];
 }
 int main(int argc,const char **argv) {
     @autoreleasepool {
@@ -169,7 +186,11 @@ int main(int argc,const char **argv) {
                 handles[i]=dlopen(target.fileSystemRepresentation,RTLD_NOW|RTLD_LOCAL);
                 NSCAssert(handles[i]!=NULL,@"fixture dylib load");
             }
+            Method copy=class_getInstanceMethod(NSFileManager.class,@selector(copyItemAtPath:toPath:error:));
+            Method failedCopy=class_getInstanceMethod(NSFileManager.class,@selector(orbit_copyItemAtPath:toPath:error:));
+            method_exchangeImplementations(copy,failedCopy);
             TestAutomaticSync(fm,suite);
+            method_exchangeImplementations(copy,failedCopy);
             NSString *locked=Install(YES,@"Locked.app",@{@"isLocked":@YES});
             NSString *hidden=Install(NO,@"Hidden.app",@{@"isHidden":@YES});
             NSData *lockedBefore=Bytes([locked stringByAppendingPathComponent:@"LCAppInfo.plist"]);
@@ -184,22 +205,22 @@ int main(int argc,const char **argv) {
             for(NSString *name in names) {
                 Check(!Exists([Root(YES,@"Tweaks") stringByAppendingPathComponent:name]),[@"batch revocation removes only shared copy: " stringByAppendingString:name]);
                 Check(Exists([Root(NO,@"Tweaks") stringByAppendingPathComponent:name]),[@"batch revocation keeps private original: " stringByAppendingString:name]);
-                NSDictionary *saved=Backup(name,YES);Check(saved!=nil,[@"legacy sync backup appears in history: " stringByAppendingString:name]);
-                if(saved) [LCOrbitTweakCenter restorePlugin:name backup:saved[@"file"] shared:YES];
-                Check([Bytes([Root(NO,@"Tweaks") stringByAppendingPathComponent:name]) isEqual:Bytes([Root(YES,@"Tweaks") stringByAppendingPathComponent:name])],[@"restore revoked shared copy: " stringByAppendingString:name]);
             }
+            NSString *historyRoot=[Group stringByAppendingPathComponent:@"LiveContainer/LCFloatingMenu/TweakBackups"];
+            Check(!Exists(historyRoot),@"manual share and revoke do not create persistent history backups");
+            Directory(historyRoot);NSString *historical=[historyRoot stringByAppendingPathComponent:@"existing.bak"];
+            [@"keep historical file" writeToFile:historical atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            [LCOrbitTweakSync applyShare:YES names:names];
+            [LCOrbitTweakSync applyShare:NO names:@[@"B.dylib"]];
+            Check([Bytes(historical) isEqual:[@"keep historical file" dataUsingEncoding:NSUTF8StringEncoding]] &&
+                [fm contentsOfDirectoryAtPath:historyRoot error:nil].count==1,@"sharing never deletes historical backup files or adds new ones");
+            [LCOrbitTweakSync applyShare:YES names:@[@"B.dylib"]];
             [LCOrbitTweakCenter setPlugin:@"A.dylib" enabled:NO shared:YES];
             Check(!Exists([Root(YES,@"Tweaks") stringByAppendingPathComponent:@"A.dylib"]) && Exists([Root(YES,@"Tweaks") stringByAppendingPathComponent:@"A.dylib.disabled"]),@"shared disable uses LC disabled suffix");
             Check([Find([LCOrbitTweakSync pluginInventory],@"name",@"A.dylib")[@"sharedDisabled"] boolValue],@"disabled plugin remains in management list");
             [LCOrbitTweakCenter setPlugin:@"A.dylib" enabled:YES shared:YES];
             Check([LCOrbitTweakCenter pluginInfo:@"A.dylib" shared:YES][@"enabled"]!=nil && [[LCOrbitTweakCenter pluginInfo:@"A.dylib" shared:YES][@"enabled"] boolValue],@"plugin re-enable and file info remain available");
             NSData *original=Bytes([Root(YES,@"Tweaks") stringByAppendingPathComponent:@"A.dylib"]);
-            [LCOrbitTweakCenter backupPlugin:@"A.dylib" shared:YES];
-            NSDictionary *saved=Backup(@"A.dylib",YES);Check(saved!=nil,@"manual backup is listed");
-            [fm removeItemAtPath:[Root(YES,@"Tweaks") stringByAppendingPathComponent:@"A.dylib"] error:nil];
-            [@"replacement" writeToFile:[Root(YES,@"Tweaks") stringByAppendingPathComponent:@"A.dylib"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
-            if(saved) [LCOrbitTweakCenter restorePlugin:@"A.dylib" backup:saved[@"file"] shared:YES];
-            Check([original isEqual:Bytes([Root(YES,@"Tweaks") stringByAppendingPathComponent:@"A.dylib"])],@"restore replaces changed plugin with backed-up bytes");
             NSDictionary *details=[LCOrbitTweakCenter pluginInfo:@"A.dylib" shared:YES];
             Check([details[@"path"] hasSuffix:@"/LiveContainer/Tweaks/A.dylib"] && [details[@"size"] unsignedIntegerValue]==original.length,@"details report actual file path and size");
             NSString *privateJIT=Install(NO,@"JIT.app",@{@"isJITNeeded":@YES});

@@ -61,7 +61,7 @@ The manager shows ordinary global .dylib files found in the host's private `Docu
 
 Tap individual rows to select them. The **top-right 操作 menu** provides **全选可共享插件**, **全选已共享插件**, **共享选中**, **取消共享选中**, **清空选择**, and **刷新插件列表**. Share/revoke actions require confirmation and report per-file results. TweakLoader.dylib is explicitly excluded. Other file types, symlinks, and per-app tweak folders are never modified.
 
-Sharing copies only confirmed host-loaded private global dylibs, verifies copied contents, and backs up the former shared version before replacement. Revoking moves **only the shared copy** into `AppGroup/LiveContainer/LCFloatingMenu/TweakBackups` so it can be recovered. Private originals are never deleted. All changes are logged in `tweaks.log`; Guest processes already running must be relaunched. Copying preserves the dylib bytes but does not itself create a valid shared-Guest code signature.
+Sharing copies only confirmed host-loaded private global dylibs and verifies each temporary copy before atomically replacing the shared version. Revoking removes **only the shared copy**. Private originals are never deleted. All changes are logged in `tweaks.log`; Guest processes already running must be relaunched. Copying preserves the dylib bytes but does not itself create a valid shared-Guest code signature.
 
 
 ## Developer host UI mode (no LC app changes)
@@ -115,9 +115,9 @@ JSON 仅存放插件自身配置，不包含 LC 证书、系统多任务偏好�
 
 ## 自动同步共享插件
 
-在 **LC 主界面 → 微珠 → 设置 → 插件管理中心** 开启 **自动同步到共享插件**（默认关闭）。开启后立即同步；以后替换私有全局插件并重新打开 LC，或从后台回到 LC 时，自动检查和更新共享副本。从微珠启动 App 前也会等待本次自动同步完成。
+在 **LC 主界面 → 微珠 → 设置 → 插件管理中心 → 对应插件详情** 为需要的插件单独开启 **自动共享**（默认关闭）。开启后立即同步；以后替换私有全局插件并重新打开 LC，或从后台回到 LC 时，自动检查和更新已选插件的共享副本。从微珠启动 App 前也会等待本次自动同步完成。旧全局开关不会自动授权所有插件。
 
-只处理宿主已加载、符合现有共享条件的私有全局 `.dylib`，包括微珠自身；不处理 TweakLoader、符号链接或未加载文件。共享副本相同时不重复复制；替换旧版前备份并校验复制结果。已停用的共享副本保持停用。关闭开关停止后续自动同步，已共享的文件保留，仍可手动取消共享。
+只处理宿主已加载、符合现有共享条件的私有全局 `.dylib`，包括微珠自身；不处理 TweakLoader、符号链接或未加载文件。共享副本相同时不重复复制；替换旧版前校验临时副本并原子替换。已停用的共享副本保持停用。关闭开关停止后续自动同步，已共享的文件保留，仍可手动取消共享。
 
 自动同步沿用原有文件共享和签名要求，不会热更新已运行的进程。更新本地插件后重启 LC 让宿主加载新版；已经运行的 Guest 也需要重启才能加载更新后的共享插件。同步结果写入 Tweak 加载日志。开关开启时，手动取消共享的文件可能在下次同步时重新共享；要长期保留停用状态，请停用共享副本或关闭自动同步。
 
@@ -201,12 +201,12 @@ JSON 仅存放插件自身配置，不包含 LC 证书、系统多任务偏好�
 
 路径：LC 主界面 → 微珠 → 设置 → 管理与支持 → **插件管理中心**。
 
-- 右上角「操作」保留多选、批量共享、取消共享和刷新；列表右侧详情按钮可检查私有 / 共享副本的实际路径、大小、文件状态，单独启停、手动备份及恢复历史备份。
+- 右上角「操作」保留多选、批量共享、取消共享和刷新；列表右侧详情按钮可检查私有 / 共享副本的实际路径、大小、文件状态，单独启停并设置该插件的自动共享。
 - 头部「按 App 分配插件」展示符合基本启动条件的私有与共享 Guest；点进 App 勾选插件并保存。
 - 使用 LC 原生的 `LCAppInfo.plist → LCTweakFolder` 与 `TweakLoader` 递归加载。每个 App 拥有自己的 `Orbit-<digest>` 文件夹，放在该 App 所属的私有或共享 Tweaks 根目录；目标源码来源只能是普通 `.dylib` 文件，原始签名字节保留。
 - **全局已启用的 dylib 始终会加载到同一作用域的其他 Guest**：按 App 分配并不构成排他隔离。要按 App 独享，应先在插件详情中停用对应全局副本（原名变成 `.dylib.disabled`），然后将它分配到目标 App。管理器保护私有根目录中的 `LCFloatingMenu.dylib` 和 `TweakLoader.dylib`，防止自我失联。
 - 如果 App 已在 LC 原生设置中选择了非 Orbit 专属插件文件夹，不会强行覆盖。先在原设置取消选择再分配。
-- 保存分配前备份 App 信息 `LCAppInfo.plist` 和原托管目录；批量创建临时目录、逐文件内容校验，再切换目录和配置。启停与恢复也有备份。备份保留在 private `Documents/LCFloatingMenu` 或共享 App Group `LiveContainer/LCFloatingMenu` 下。
+- 保存分配前备份 App 信息 `LCAppInfo.plist` 和原托管目录；批量创建临时目录、逐文件内容校验，再切换目录和配置。插件启停不再创建历史备份。备份保留在 private `Documents/LCFloatingMenu` 或共享 App Group `LiveContainer/LCFloatingMenu` 下。
 - **写入后至少重启 Guest，建议先关闭再重开 LC 宿主，以免 LC UI 内存中的 App 配置写回覆盖磁盘修改**。这不是运行时卸载插件，也不会绕过签名或文件访问权限。初次发布仍需真机验证。
 
 ## LCOrbit modular runtime (Stage 1)
@@ -234,3 +234,17 @@ LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
 - Appearance monitoring now has cancellation and generation checks; Scene disconnect releases the module layer.
 - Shared `LCOrbitGuestService` now owns Guest inventory and classic launch/SideStore bridging.
 - Binary checks were extended. Real-device behavior and LC tweak signing still require verification.
+
+### GitHub 访问配置
+
+LC 主界面中进入 **微珠设置 → 版本与更新 → GitHub 访问**。填写个人访问 Token，账号可选用于核对 Token 的实际用户；保存后可“验证连接”。Token 输入不回显，留空保留原 Token；“清除凭据”恢复匿名请求。后台更新提示和手动检测更新共用配置，公开插件文件下载及 SHA-256 校验流程保持不变。
+
+账号和 Token 保存在 LC 签名的 application-identifier 私有 Keychain 组，不写入 Documents/LCOrbit/config.json 或日志，不随普通 JSON 导出。Keychain 权限或签名异常会明确失败，不回退到共享组或明文文件。Guest 中的请求仍匿名，配置入口只在 LC 宿主出现。同进程注入代码共享宿主权限，不能把插件视作针对任意同进程代码的安全沙箱。重新签名若更换 App ID 或签名团队，可能需要重新填写凭据。
+
+认证采用 GitHub 官方 [Bearer Token](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api)，验证使用 [GET /user](https://docs.github.com/en/rest/users/users#get-the-authenticated-user)，无需为验证账号授予仓库写权限。
+
+### 设置页更新提示
+
+LC 宿主检测到新版本后，进入微珠设置首页会自动显示版本号及更新说明，提供“跳过此版本”和“下载更新”两个按钮。同一次设置会话里，同一版本只自动弹出一次；跳过精确版本的记录保存在 `LCFloatingMenu.skippedUpdateVersion` 配置中，更高版本仍会提示，手动“检测更新”可再次查看已跳过的版本。
+
+说明优先使用 latest Release 的正文；如果 `fm-latest` 只有内部版本标记，则读取同版本 tag 的公开 Release 正文。暂时无法获取说明时明确显示缺失提示。下载继续使用官方公开 dylib，执行既有 SHA-256 校验、备份和替换；安装后仍需通过 LC 原生 Tweaks 重新签名并重启。

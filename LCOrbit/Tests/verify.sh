@@ -62,7 +62,7 @@ grep -Fq 'if(![LCOrbitHost isHostUI])' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 grep -Fq 'name isEqualToString:@"TweakLoader.dylib"' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 grep -Fq 'RegularFile(privatePath)' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 grep -Fq 'contentsEqualAtPath:from andPath:temporary' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
-grep -Fq 'copyItemAtPath:to toPath:backup' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
+grep -Fq 'automaticSyncEnabledForPlugin:' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 grep -Fq 'openSharedTweaks' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'manual-sync' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 # Shared tweaks must have a standalone, host-only manager with explicit batch controls.
@@ -75,7 +75,7 @@ grep -Fq 'action:@selector(confirmTweakSync)' "$ROOT/LCFloatingMenu/LCFloatingMe
 }
 grep -Fq 'pluginInventory' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 grep -Fq 'applyShare:(BOOL)share names:' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
-grep -Fq 'rename(actual.fileSystemRepresentation,backup.fileSystemRepresentation)' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
+grep -Fq 'unlink(actual.fileSystemRepresentation)' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 grep -Fq 'TweakLoader.dylib' "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m"
 grep -Fq 'confirmShare:(BOOL)share' "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m"
 grep -Fq '全选可共享插件' "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m"

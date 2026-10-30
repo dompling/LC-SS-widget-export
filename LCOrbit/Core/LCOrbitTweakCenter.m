@@ -32,17 +32,6 @@ static NSString *TCRoot(BOOL shared) {
     if(!base.length) return nil;
     return [base stringByAppendingPathComponent:shared?@"LiveContainer/Tweaks":@"Documents/Tweaks"];
 }
-static NSString *TCBackupRoot(BOOL shared) {
-    NSString *base=shared?[LCOrbitHost appGroupPath]:TCHome();
-    if(!base.length) return nil;
-    return [base stringByAppendingPathComponent:shared?
-        @"LiveContainer/LCFloatingMenu/PluginBackups":@"Documents/LCFloatingMenu/PluginBackups"];
-}
-static NSString *TCOldSyncBackupRoot(void) {
-    NSString *group=[LCOrbitHost appGroupPath];
-    return group.length?[group stringByAppendingPathComponent:
-        @"LiveContainer/LCFloatingMenu/TweakBackups"]:nil;
-}
 static NSString *TCAppBackupRoot(BOOL shared) {
     NSString *base=shared?[LCOrbitHost appGroupPath]:TCHome();
     if(!base.length) return nil;
@@ -239,89 +228,6 @@ static NSString *TCResult(NSString *action,NSString *message) {
              @"path":file,@"size":attrs[NSFileSize]?:@0,
              @"date":attrs[NSFileModificationDate]?:NSDate.distantPast};
 }
-+ (NSArray<NSDictionary *> *)backupsForPlugin:(NSString *)name {
-    if(![LCOrbitHost isHostUI] || !TCName(name)) return @[];
-    NSMutableArray *result=[NSMutableArray array];
-    for(NSNumber *shared in @[@NO,@YES]) {
-        NSArray *roots=shared.boolValue?
-            @[TCBackupRoot(YES),TCOldSyncBackupRoot()]:@[TCBackupRoot(NO)];
-        for(NSString *root in roots) {
-            if(!root.length) continue;
-            for(NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:root error:nil]?:@[]) {
-                if(![file hasPrefix:[name stringByAppendingString:@"."]] || ![file hasSuffix:@".bak"]) continue;
-                NSString *path=[root stringByAppendingPathComponent:file];
-                if(!TCRegular(path)) continue;
-                NSDictionary *attrs=[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil]?:@{};
-                [result addObject:@{@"file":file,@"shared":shared,
-                    @"size":attrs[NSFileSize]?:@0,@"date":attrs[NSFileModificationDate]?:NSDate.distantPast}];
-            }
-        }
-    }
-    [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
-        return [b[@"date"] compare:a[@"date"]];
-    }];
-    return result;
-}
-+ (NSString *)backupPlugin:(NSString *)name shared:(BOOL)shared {
-    if(![LCOrbitHost isHostUI] || !TCName(name)) return @"无效插件名称。";
-    NSString *source=TCFileInRoot(TCRoot(shared),name);
-    if(!source) return @"插件不存在或不是普通文件。";
-    NSString *backup=TCBackup(source,TCBackupRoot(shared),name);
-    return backup?TCResult(@"backup",[NSString stringWithFormat:@"%@ 已备份：%@",name,backup.lastPathComponent]):
-        @"备份失败，源文件未改动。";
-}
-+ (NSString *)restorePlugin:(NSString *)name backup:(NSString *)filename shared:(BOOL)shared {
-    if(![LCOrbitHost isHostUI] || !TCName(name) ||
-       ![filename isKindOfClass:NSString.class] ||
-       ![filename isEqualToString:filename.lastPathComponent] ||
-       ![filename hasPrefix:[name stringByAppendingString:@"."]] ||
-       ![filename hasSuffix:@".bak"]) return @"备份名称无效。";
-    NSString *root=TCBackupRoot(shared);
-    NSString *from=[root stringByAppendingPathComponent:filename];
-    if(shared && !TCRegular(from))
-        from=[TCOldSyncBackupRoot() stringByAppendingPathComponent:filename];
-    NSString *destination=TCFileInRoot(TCRoot(shared),name);
-    if(!destination) destination=[TCRoot(shared) stringByAppendingPathComponent:
-        [filename hasPrefix:[name stringByAppendingString:@".disabled."]]?
-        [name stringByAppendingString:@".disabled"]:name];
-    if(!TCRegular(from) || TCExists(destination) && !TCRegular(destination))
-        return @"备份不存在或目标文件类型不安全，未恢复。";
-    if(TCRegular(destination) && !TCBackup(destination,root,name))
-        return @"恢复前的安全备份失败，未修改。";
-    NSString *temporary=[destination stringByAppendingFormat:@".%@.tmp",NSUUID.UUID.UUIDString];
-    NSFileManager *fm=NSFileManager.defaultManager;
-    if(![fm copyItemAtPath:from toPath:temporary error:nil] ||
-       ![fm contentsEqualAtPath:from andPath:temporary] ||
-       rename(temporary.fileSystemRepresentation,destination.fileSystemRepresentation)!=0) {
-        [fm removeItemAtPath:temporary error:nil];return @"还原校验或写入失败。";
-    }
-    return TCResult(@"restore",[NSString stringWithFormat:@"%@ 已恢复备份，重新启动 Guest 后生效。",name]);
-}
-+ (NSString *)deleteBackup:(NSString *)name backup:(NSString *)filename shared:(BOOL)shared {
-    if(![LCOrbitHost isHostUI] || !TCName(name) ||
-       ![filename isKindOfClass:NSString.class] ||
-       ![filename isEqualToString:filename.lastPathComponent] ||
-       ![filename hasPrefix:[name stringByAppendingString:@"."]] ||
-       ![filename hasSuffix:@".bak"]) return @"无效备份名称，未删除。";
-    NSString *folder=TCBackupRoot(shared);
-    NSString *target=[folder stringByAppendingPathComponent:filename];
-    if(shared && !TCRegular(target)) target=[TCOldSyncBackupRoot() stringByAppendingPathComponent:filename];
-    if(!TCRegular(target)) return @"备份不存在或不是普通文件，未删除。";
-    NSError *error=nil;
-    if(![NSFileManager.defaultManager removeItemAtPath:target error:&error])
-        return [NSString stringWithFormat:@"删除失败：%@",error.localizedDescription?:@"未知错误"];
-    return TCResult(@"delete-backup",@"指定备份已删除，不影响当前插件。");
-}
-+ (NSString *)deleteAllBackups:(NSString *)name {
-    if(![LCOrbitHost isHostUI] || !TCName(name)) return @"无效插件名称。";
-    NSArray *files=[self backupsForPlugin:name];
-    NSUInteger success=0,failed=0;
-    for(NSDictionary *entry in files) {
-        NSString *result=[self deleteBackup:name backup:entry[@"file"] shared:[entry[@"shared"] boolValue]];
-        if([result containsString:@"已删除"]) success++; else failed++;
-    }
-    return [NSString stringWithFormat:@"已删除 %lu 个备份，失败 %lu 个。当前插件未改动。",(unsigned long)success,(unsigned long)failed];
-}
 + (NSString *)setPlugin:(NSString *)name enabled:(BOOL)enabled shared:(BOOL)shared {
     if(![LCOrbitHost isHostUI] || !TCName(name)) return @"无效插件名称。";
     if(!shared && !enabled && [name isEqualToString:@"LCFloatingMenu.dylib"])
@@ -330,7 +236,6 @@ static NSString *TCResult(NSString *action,NSString *message) {
     NSString *disabled=[active stringByAppendingString:@".disabled"];
     NSString *source=enabled?disabled:active,*target=enabled?active:disabled;
     if(!TCRegular(source) || TCExists(target)) return @"找不到待切换插件，或目标文件已存在。";
-    if(!TCBackup(source,TCBackupRoot(shared),name)) return @"启停前备份失败，未修改。";
     if(rename(source.fileSystemRepresentation,target.fileSystemRepresentation)!=0)
         return @"无法切换插件状态。";
     return TCResult(@"toggle",[NSString stringWithFormat:@"%@ 已%@。请重启 Guest；全局目录与专属目录彼此独立。",

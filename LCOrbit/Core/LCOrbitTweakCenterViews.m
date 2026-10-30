@@ -1,6 +1,7 @@
 #import "LCOrbitTweakCenterViews.h"
 #import "LCOrbitTweakCenter.h"
 #import "LCOrbitTweakSync.h"
+#import "LCOrbitHost.h"
 
 @interface TCTheme : NSObject
 @property(nonatomic,strong) UIColor *background,*surface,*text,*secondary,*accent;
@@ -197,7 +198,7 @@ static NSString *HumanSize(NSNumber *size) {
 @property(nonatomic,strong) TCTheme *theme;
 @property(nonatomic,copy) NSString *name;
 @property(nonatomic,strong) UITableView *table;
-@property(nonatomic,copy) NSArray<NSDictionary *> *backups;
+@property(nonatomic,assign) BOOL busy;
 - (instancetype)initWithName:(NSString *)name theme:(TCTheme *)theme;
 @end
 @implementation TCPluginDetailController
@@ -210,19 +211,19 @@ static NSString *HumanSize(NSNumber *size) {
     self.view.backgroundColor=self.theme.background;self.table=MakeTable(self,self.theme);
     self.table.rowHeight=64;[self refresh];
 }
-- (void)refresh {
-    self.backups=[LCOrbitTweakCenter backupsForPlugin:self.name];
-    __weak typeof(self) weakSelf=self;
-    self.navigationItem.rightBarButtonItem=self.backups.count?
-        [[UIBarButtonItem alloc] initWithTitle:@"清空备份" style:UIBarButtonItemStylePlain target:weakSelf action:@selector(clearBackups)]:nil;
-    [self.table reloadData];
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];[self refresh];
 }
+- (void)refresh { [self.table reloadData]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {return 3;}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section==0?3:section==1?4:(NSInteger)self.backups.count;
+    return section==0?3:section==1?1:2;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return @[@"插件信息",@"操作",@"历史备份"][section];
+    return @[@"插件信息",@"自动共享",@"操作"][section];
+}
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    return section==1?@"开启后立即同步此插件；更新本地插件并重新打开 LC 时，自动更新共享副本。关闭不会删除已共享文件。":nil;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     NSInteger section=indexPath.section,row=indexPath.row;
@@ -242,20 +243,56 @@ static NSString *HumanSize(NSNumber *size) {
         return c;
     }
     if(section==1) {
-        NSArray *labels=@[@"私有插件 · 启用/停用",@"共享插件 · 启用/停用",@"备份私有版本",@"备份共享版本"];
-        UITableViewCell *c=Cell(tableView,@"action",labels[(NSUInteger)row],
-            nil,self.theme);
-        c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return c;
+        BOOL local=[[LCOrbitTweakCenter pluginInfo:self.name shared:NO][@"exists"] boolValue];
+        BOOL enabled=[LCOrbitTweakSync automaticSyncEnabledForPlugin:self.name];
+        UITableViewCell *c=Cell(tableView,@"automaticSync",@"自动共享此插件",
+            local?@"同步本地插件到共享目录":@"开启需要本地插件副本",self.theme);
+        c.selectionStyle=UITableViewCellSelectionStyleNone;
+        UISwitch *toggle=[UISwitch new];
+        toggle.on=enabled;
+        toggle.enabled=!self.busy && [LCOrbitHost isHostUI] && (local || enabled);
+        toggle.onTintColor=[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0];
+        toggle.accessibilityLabel=[NSString stringWithFormat:@"%@，自动共享",self.name];
+        [toggle addTarget:self action:@selector(automaticSyncChanged:) forControlEvents:UIControlEventValueChanged];
+        c.accessoryView=toggle;
+        return c;
     }
-    NSDictionary *b=self.backups[(NSUInteger)row];
-    NSDateFormatter *format=[NSDateFormatter new];format.dateStyle=NSDateFormatterShortStyle;
-    format.timeStyle=NSDateFormatterShortStyle;
-    NSString *subtitle=[NSString stringWithFormat:@"%@ · %@ · %@",
-        [b[@"shared"] boolValue]?@"共享":@"私有",
-        HumanSize(b[@"size"]),[format stringFromDate:b[@"date"]]];
-    UITableViewCell *c=Cell(tableView,@"backup",b[@"file"],subtitle,self.theme);
-    c.textLabel.lineBreakMode=NSLineBreakByTruncatingMiddle;
-    c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return c;
+    NSArray *labels=@[@"私有插件 · 启用/停用",@"共享插件 · 启用/停用"];
+    UITableViewCell *c=Cell(tableView,@"action",labels[(NSUInteger)row],nil,self.theme);
+    c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    c.userInteractionEnabled=!self.busy;
+    return c;
+}
+- (void)automaticSyncChanged:(UISwitch *)sender {
+    if(self.busy || ![LCOrbitHost isHostUI]) {
+        sender.on=[LCOrbitTweakSync automaticSyncEnabledForPlugin:self.name];
+        return;
+    }
+    if(sender.on && ![[LCOrbitTweakCenter pluginInfo:self.name shared:NO][@"exists"] boolValue]) {
+        sender.on=[LCOrbitTweakSync automaticSyncEnabledForPlugin:self.name];
+        PresentResult(self,@"无法开启",@"只有本地插件可以开启自动共享。请先将插件安装到 LC 私有插件目录。");
+        return;
+    }
+    NSError *error=nil;
+    if(![LCOrbitTweakSync setAutomaticSyncEnabled:sender.on forPlugin:self.name error:&error]) {
+        sender.on=[LCOrbitTweakSync automaticSyncEnabledForPlugin:self.name];
+        PresentResult(self,@"配置未保存",error.localizedDescription?:@"自动共享设置保存失败，请重试。");
+        return;
+    }
+    if(!sender.on) { [self refresh];return; }
+    self.busy=YES;[self refresh];
+    __weak typeof(self) weakSelf=self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        NSString *report=[LCOrbitTweakSync syncAutomaticallyIfNeeded];
+        dispatch_async(dispatch_get_main_queue(),^{
+            TCPluginDetailController *target=weakSelf;
+            if(!target) return;
+            target.busy=NO;[target refresh];
+            if(report.length && [LCOrbitHost isHostUI] && target.view.window &&
+               target.navigationController.topViewController==target && !target.presentedViewController)
+                PresentResult(target,@"自动共享结果",report);
+        });
+    });
 }
 - (void)confirmTitle:(NSString *)title message:(NSString *)message destructive:(BOOL)destructive
               action:(NSString *(^)(void))work {
@@ -269,29 +306,9 @@ static NSString *HumanSize(NSNumber *size) {
         }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
-- (void)clearBackups {
-    if(!self.backups.count) return;
-    [self confirmTitle:@"删除所有历史备份？"
-        message:[NSString stringWithFormat:@"将删除 %@ 的 %lu 个私有及共享备份，无法恢复。当前插件不受影响。",self.name,(unsigned long)self.backups.count]
-        destructive:YES action:^NSString *{ return [LCOrbitTweakCenter deleteAllBackups:self.name]; }];
-}
-- (NSArray<UITableViewRowAction *> *)tableView:(UITableView *)tableView editActionsForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if(indexPath.section!=2) return @[];
-    NSDictionary *backup=self.backups[(NSUInteger)indexPath.row];
-    NSString *filename=backup[@"file"];
-    BOOL shared=[backup[@"shared"] boolValue];
-    __weak typeof(self) weakSelf=self;
-    UITableViewRowAction *remove=[UITableViewRowAction rowActionWithStyle:UITableViewRowActionStyleDestructive
-        title:@"删除" handler:^(UITableViewRowAction *action,NSIndexPath *index) {
-            [weakSelf confirmTitle:@"删除此备份？" message:@"该操作无法撤销，但不影响当前插件。"
-                destructive:YES action:^NSString *{
-                    return [LCOrbitTweakCenter deleteBackup:weakSelf.name backup:filename shared:shared];
-                }];
-        }];
-    return @[remove];
-}
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if(self.busy || ![LCOrbitHost isHostUI]) return;
     if(indexPath.section==0) {
         if(indexPath.row==0) return;
         BOOL shared=indexPath.row==2;
@@ -304,46 +321,27 @@ static NSString *HumanSize(NSNumber *size) {
                 [format stringFromDate:info[@"date"]],info[@"path"]]);
         return;
     }
-    if(indexPath.section==1) {
-        NSInteger row=indexPath.row;
-        BOOL shared=row==1 || row==3;
-        if(row>=2) {
-            [self confirmTitle:@"备份插件" message:nil
-                destructive:NO action:^NSString *{return [LCOrbitTweakCenter backupPlugin:self.name shared:shared];}];
-        } else {
-            UIAlertController *sheet=[UIAlertController alertControllerWithTitle:@"插件状态"
-                message:nil
-                preferredStyle:UIAlertControllerStyleActionSheet];
-            __weak typeof(self) weakSelf=self;
-            for(NSNumber *enabled in @[@YES,@NO]) {
-                BOOL on=enabled.boolValue;
-                [sheet addAction:[UIAlertAction actionWithTitle:on?@"启用":@"停用"
-                    style:on?UIAlertActionStyleDefault:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-                    [weakSelf confirmTitle:on?@"启用插件":@"停用插件"
-                        message:@"重启 App 后生效。"
-                        destructive:!on action:^NSString *{
-                            return [LCOrbitTweakCenter setPlugin:weakSelf.name enabled:on shared:shared];
-                        }];
-                }]];
-            }
-            [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-            if(sheet.popoverPresentationController) {
-                sheet.popoverPresentationController.sourceView=tableView;
-                sheet.popoverPresentationController.sourceRect=[tableView rectForRowAtIndexPath:indexPath];
-            }
-            [self presentViewController:sheet animated:YES completion:nil];
-        }
-    } else {
-        NSDictionary *b=self.backups[(NSUInteger)indexPath.row];
-        NSString *filename=b[@"file"];
-        BOOL shared=[b[@"shared"] boolValue];
-        [self confirmTitle:@"恢复插件备份"
-            message:[NSString stringWithFormat:@"恢复 %@ 的%@备份？",
-                self.name,shared?@"共享":@"私有"]
-            destructive:YES action:^NSString *{
-                return [LCOrbitTweakCenter restorePlugin:self.name backup:filename shared:shared];
-            }];
+    if(indexPath.section!=2) return;
+    BOOL shared=indexPath.row==1;
+    UIAlertController *sheet=[UIAlertController alertControllerWithTitle:@"插件状态" message:nil
+        preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) weakSelf=self;
+    for(NSNumber *enabled in @[@YES,@NO]) {
+        BOOL on=enabled.boolValue;
+        [sheet addAction:[UIAlertAction actionWithTitle:on?@"启用":@"停用"
+            style:on?UIAlertActionStyleDefault:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+            [weakSelf confirmTitle:on?@"启用插件":@"停用插件" message:@"重启 App 后生效。"
+                destructive:!on action:^NSString *{
+                    return [LCOrbitTweakCenter setPlugin:weakSelf.name enabled:on shared:shared];
+                }];
+        }]];
     }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    if(sheet.popoverPresentationController) {
+        sheet.popoverPresentationController.sourceView=tableView;
+        sheet.popoverPresentationController.sourceRect=[tableView rectForRowAtIndexPath:indexPath];
+    }
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 @end
 @implementation LCOrbitTweakCenterViews

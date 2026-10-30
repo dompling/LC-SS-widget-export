@@ -42,7 +42,7 @@ if device['state'] != 'Booted':
 command('xcrun', 'simctl', 'bootstatus', udid, '-b', stdout=subprocess.DEVNULL)
 sdk = capture('xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path')
 arch = capture('uname', '-m')
-core_names = ['LCOrbitCore', 'LCOrbitHost', 'LCOrbitGuestService', 'LCOrbitMultitask', 'LCOrbitAutomaticPiP', 'LCOrbitMultitaskUI', 'LCOrbitHostSettings', 'LCOrbitEventBus', 'LCOrbitOverlayManager', 'LCOrbitStorage', 'LCOrbitLog', 'LCOrbitTweakAudit', 'LCOrbitTweakSync', 'LCOrbitTweakCenter', 'LCOrbitTweakCenterViews', 'LCOrbitSharedTweaksViewController', 'LCOrbitLogViewer']
+core_names = ['LCOrbitCore', 'LCOrbitHost', 'LCOrbitGuestService', 'LCOrbitMultitask', 'LCOrbitAutomaticPiP', 'LCOrbitMultitaskUI', 'LCOrbitHostSettings', 'LCOrbitEventBus', 'LCOrbitOverlayManager', 'LCOrbitStorage', 'LCOrbitGitHub', 'LCOrbitUpdateRelease', 'LCOrbitPluginUpdater', 'LCOrbitLog', 'LCOrbitTweakAudit', 'LCOrbitTweakSync', 'LCOrbitTweakCenter', 'LCOrbitTweakCenterViews', 'LCOrbitSharedTweaksViewController', 'LCOrbitLogViewer']
 bundle_id = 'local.orbit.DrawerRegression'
 with tempfile.TemporaryDirectory(prefix='orbit-drawer-uikit-') as temporary:
     # Freeze unmodified production files so concurrent edits cannot change the
@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='orbit-drawer-uikit-') as temporary:
     app = Path(temporary) / 'DrawerRegression.app'
     app.mkdir()
     build = ['xcrun', 'clang', '-target', f'{arch}-apple-ios16.0-simulator', '-isysroot', sdk, '-fobjc-arc', '-O0', '-g', '-I', str(build_root)]
-    for framework in ['UIKit', 'Foundation', 'QuartzCore', 'CoreGraphics']:
+    for framework in ['UIKit', 'Foundation', 'QuartzCore', 'CoreGraphics', 'Security']:
         build.extend(['-framework', framework])
     build.extend(str(build_root / 'LCOrbit/Core' / f'{name}.m') for name in core_names)
     build.extend([str(build_root / 'LCFloatingMenu/LCFloatingMenu.m'), str(Path(__file__).parent / 'UIKitDrawer/main.m'), '-o', str(app / 'DrawerRegression')])

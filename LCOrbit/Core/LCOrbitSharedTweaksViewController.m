@@ -14,7 +14,6 @@
 @property(nonatomic,strong) UIColor *textColor;
 @property(nonatomic,strong) UIColor *secondaryColor;
 @property(nonatomic,strong) UIColor *accentColor;
-@property(nonatomic,strong) UISwitch *automaticSyncSwitch;
 @property(nonatomic,assign) BOOL busy;
 @end
 
@@ -134,7 +133,6 @@
     return valid;
 }
 - (void)updateActions {
-    self.automaticSyncSwitch.enabled=!self.busy && [LCOrbitHost isHostUI];
     NSUInteger available=0,shared=0;
     for(NSDictionary *item in self.inventory) {
         if([item[@"canShare"] boolValue]) available++;
@@ -189,47 +187,12 @@
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"操作" menu:menu];
     self.navigationItem.rightBarButtonItem.enabled=!self.busy;
 }
-- (void)automaticSyncChanged:(UISwitch *)sender {
-    if(self.busy || ![LCOrbitHost isHostUI]) {
-        sender.on=[LCOrbitTweakSync automaticSyncEnabled];
-        return;
-    }
-    NSError *error=nil;
-    if(![LCOrbitTweakSync setAutomaticSyncEnabled:sender.on error:&error]) {
-        sender.on=[LCOrbitTweakSync automaticSyncEnabled];
-        UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"配置未保存"
-            message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
-        if(!self.presentedViewController) [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    if(!sender.on) return;
-    self.busy=YES;
-    [self.table reloadData];
-    [self updateActions];
-    __weak typeof(self) weakSelf=self;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
-        NSString *report=[LCOrbitTweakSync syncAutomaticallyIfNeeded];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            LCOrbitSharedTweaksViewController *target=weakSelf;
-            if(!target) return;
-            target.busy=NO;
-            [target reloadInventory];
-            if(!report.length || !target.view.window || target.presentedViewController) return;
-            UIAlertController *done=[UIAlertController alertControllerWithTitle:@"自动同步结果"
-                message:report preferredStyle:UIAlertControllerStyleAlert];
-            [done addAction:[UIAlertAction actionWithTitle:@"知道了"
-                style:UIAlertActionStyleDefault handler:nil]];
-            [target presentViewController:done animated:YES completion:nil];
-        });
-    });
-}
 - (void)confirmShare:(BOOL)share {
     if(self.busy || ![LCOrbitHost isHostUI]) return;
     NSArray<NSString *> *names=[self selectedForShare:share];
     if(!names.count) return;
     NSString *message=[NSString stringWithFormat:@"共 %lu 个插件 · %@",
-        (unsigned long)names.count,share?@"保留旧版备份":@"保留私有插件及备份"];
+        (unsigned long)names.count,share?@"共享选中的本地插件":@"保留私有插件"];
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:
         share?@"确认批量共享？":@"确认取消共享？"
         message:message preferredStyle:UIAlertControllerStyleAlert];
@@ -261,37 +224,16 @@
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section==0?2:(NSInteger)self.inventory.count;
+    return section==0?1:(NSInteger)self.inventory.count;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return section==0?@"自动共享与 App 管理":(self.inventory.count?@"全局插件列表":@"暂无可管理的全局 dylib");
+    return section==0?@"App 管理":(self.inventory.count?@"全局插件列表":@"暂无可管理的全局 dylib");
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    return section==0?@"开启后立即同步；更新插件后重新打开 LC，自动更新共享副本。已停用的共享副本保持停用。":nil;
+    return section==0?@"在每个插件的详情中单独设置自动共享。关闭自动共享不会删除已有共享副本。":nil;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     if(indexPath.section==0) {
-        if(indexPath.row==0) {
-            static NSString *syncID=@"LCAutomaticTweakSyncCell";
-            UITableViewCell *cell=[tableView dequeueReusableCellWithIdentifier:syncID];
-            if(!cell) cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:syncID];
-            cell.textLabel.text=@"自动同步到共享插件";
-            cell.textLabel.textColor=self.textColor;
-            cell.textLabel.font=[UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-            cell.detailTextLabel.text=@"自动共享已加载的私有插件";
-            cell.detailTextLabel.textColor=self.secondaryColor;
-            cell.backgroundColor=self.surfaceColor;
-            cell.selectionStyle=UITableViewCellSelectionStyleNone;
-            UISwitch *toggle=[UISwitch new];
-            toggle.on=[LCOrbitTweakSync automaticSyncEnabled];
-            toggle.onTintColor=[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0];
-            toggle.enabled=!self.busy && [LCOrbitHost isHostUI];
-            toggle.accessibilityLabel=@"自动同步到共享插件";
-            [toggle addTarget:self action:@selector(automaticSyncChanged:) forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView=toggle;
-            self.automaticSyncSwitch=toggle;
-            return cell;
-        }
         static NSString *appID=@"LCTweakAppAssignmentCell";
         UITableViewCell *cell=[tableView dequeueReusableCellWithIdentifier:appID];
         if(!cell) cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:appID];
@@ -350,7 +292,6 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     if(self.busy) return;
     if(indexPath.section==0) {
-        if(indexPath.row==0) return;
         UIViewController *apps=[LCOrbitTweakCenterViews
             appAssignmentsWithBackground:self.backgroundColor surface:self.surfaceColor
             text:self.textColor secondary:self.secondaryColor accent:self.accentColor];

@@ -5,6 +5,12 @@
 #import "LCOrbit/Core/LCOrbitGuestService.h"
 #import "LCOrbit/Core/LCOrbitMultitask.h"
 #import "LCOrbit/Core/LCOrbitHost.h"
+#import "LCOrbit/Core/LCOrbitGitHub.h"
+#import "LCOrbit/Core/LCOrbitPluginUpdater.h"
+#import "LCOrbit/Core/LCOrbitTweakCenter.h"
+#import "LCOrbit/Core/LCOrbitTweakCenterViews.h"
+#import "LCOrbit/Core/LCOrbitSharedTweaksViewController.h"
+#import "LCOrbit/Core/LCOrbitTweakSync.h"
 
 // Only host/task/presentation boundaries are fixtures; layout and menu actions
 // below execute the real LCFloatingMenu and Core linked into this simulator app.
@@ -34,9 +40,25 @@
 - (void)sortDrag:(UILongPressGestureRecognizer *)gesture;
 - (void)pan:(UIPanGestureRecognizer *)gesture;
 @end
+@interface FMSettingsRootController : UIViewController
+- (void)tryAutomaticUpdatePrompt;
+- (void)checkForUpdates;
+- (void)rebuild;
+@end
+@interface FMSettingsSectionController : UIViewController
+- (instancetype)initWithSection:(NSString *)key;
+- (void)editGitHubCredentials;
+- (void)verifyGitHubConnection;
+- (void)clearGitHubCredentials;
+- (void)rebuild;
+@end
 @interface NSUserDefaults (DrawerFixture) @end
 @implementation NSUserDefaults (DrawerFixture)
 + (BOOL)isLiveProcess { return YES; } // Suppress injection bootstrap only.
+@end
+@interface LCOrbitTweakSync (PerPluginFixtureAPI)
++ (BOOL)automaticSyncEnabledForPlugin:(NSString *)name;
++ (BOOL)setAutomaticSyncEnabled:(BOOL)enabled forPlugin:(NSString *)name error:(NSError **)error;
 @end
 static NSArray *FixtureApps;
 static BOOL FixtureCurrent, FixtureRunning=YES, FixtureHost=YES;
@@ -46,6 +68,98 @@ static NSMutableDictionary *AutoPiPStates;
 static NSDictionary *LastAutoPiPTarget;
 static BOOL RejectAutoPiP;
 static UIAlertController *CapturedAlert;
+static NSUInteger UpdatePromptPresentations,DownloadResumes,UpdateInstalls;
+static BOOL RejectUpdateSkipSave;
+static NSURLRequest *DownloadRequest;
+static void (^DownloadCompletion)(NSData *,NSURLResponse *,NSError *);
+static NSString *InstalledUpdateDigest;
+static NSMutableDictionary *PluginAutoStates;
+static NSString *LastPluginAutoName;
+static NSUInteger PluginAutoSyncCalls,PluginAutoWrites;
+static BOOL RejectPluginAutoSave;
+@interface LCOrbitTweakSync (PluginManagementFixture) @end
+@implementation LCOrbitTweakSync (PluginManagementFixture)
++ (NSArray *)fixturePluginInventory {
+    return @[@{@"name":@"Local-A.dylib",@"private":@YES,@"shared":@YES,@"loaded":@YES,@"matches":@YES,@"canShare":@YES,@"canUnshare":@YES},
+        @{@"name":@"Shared-Only.dylib",@"private":@NO,@"shared":@YES,@"loaded":@NO,@"canShare":@NO,@"canUnshare":@YES}];
+}
++ (BOOL)fixtureAutomaticSyncEnabledForPlugin:(NSString *)name { return [PluginAutoStates[name] boolValue]; }
++ (BOOL)fixtureSetAutomaticSyncEnabled:(BOOL)enabled forPlugin:(NSString *)name error:(NSError **)error {
+    PluginAutoWrites++;
+    if(RejectPluginAutoSave) {
+        if(error) *error=[NSError errorWithDomain:@"DrawerFixture" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Fixture plugin write rejected"}];
+        return NO;
+    }
+    PluginAutoStates[name]=@(enabled);LastPluginAutoName=[name copy];return YES;
+}
++ (NSString *)fixtureSyncAutomaticallyIfNeeded {
+    @synchronized(self) { PluginAutoSyncCalls++; }
+    return @"Fixture plugin synced";
+}
+@end
+@interface LCOrbitTweakCenter (PluginManagementFixture) @end
+@implementation LCOrbitTweakCenter (PluginManagementFixture)
++ (NSDictionary *)fixturePluginInfo:(NSString *)name shared:(BOOL)shared {
+    BOOL exists=shared || [name isEqualToString:@"Local-A.dylib"];
+    return @{@"exists":@(exists),@"enabled":@YES,@"size":@1234,@"date":NSDate.distantPast,@"path":@"/fixture/plugin.dylib"};
+}
+@end
+static NSString *GitHubAccount;
+static BOOL GitHubHasToken;
+static NSUInteger GitHubCredentialReads,GitHubRequests,GitHubSaves,GitHubClears;
+static BOOL GitHubSavedEmptyToken;
+static NSString *GitHubRequestedURL;
+static NSMutableArray *GitHubCompletions;
+@interface FixtureDownloadTask : NSObject
+- (void)resume;
+@end
+@implementation FixtureDownloadTask
+- (void)resume { DownloadResumes++; }
+@end
+@interface FixtureDownloadSession : NSObject
+- (id)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *,NSURLResponse *,NSError *))completion;
+@end
+@implementation FixtureDownloadSession
+- (id)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *,NSURLResponse *,NSError *))completion {
+    DownloadRequest=request;DownloadCompletion=[completion copy];return [FixtureDownloadTask new];
+}
+@end
+@interface NSURLSession (DrawerUpdateFixture) @end
+@implementation NSURLSession (DrawerUpdateFixture)
++ (NSURLSession *)fixtureSharedSession { return (id)[FixtureDownloadSession new]; }
+@end
+@interface LCOrbitPluginUpdater (DrawerUpdateFixture) @end
+@implementation LCOrbitPluginUpdater (DrawerUpdateFixture)
++ (BOOL)fixtureInstallDownloadedPlugin:(NSData *)binary expectedSHA256:(NSString *)digest error:(NSError **)error {
+    UpdateInstalls++;InstalledUpdateDigest=digest;return YES;
+}
+@end
+@interface LCOrbitStorage (DrawerUpdateFixture) @end
+@implementation LCOrbitStorage (DrawerUpdateFixture)
++ (NSError *)fixtureLastError {
+    if(RejectUpdateSkipSave) return [NSError errorWithDomain:@"DrawerFixture" code:1
+        userInfo:@{NSLocalizedDescriptionKey:@"Fixture skip write failed"}];
+    return [self fixtureLastError];
+}
+@end
+@interface LCOrbitGitHub (DrawerFixture) @end
+@implementation LCOrbitGitHub (DrawerFixture)
++ (NSString *)fixtureAccountWithError:(NSError **)error { GitHubCredentialReads++;return GitHubAccount; }
++ (BOOL)fixtureHasTokenWithError:(NSError **)error { GitHubCredentialReads++;return GitHubHasToken; }
++ (BOOL)fixtureSaveAccount:(NSString *)account token:(NSString *)token error:(NSError **)error {
+    GitHubSaves++;GitHubAccount=[account copy];GitHubSavedEmptyToken=token.length==0;
+    if(token.length) GitHubHasToken=YES;return YES;
+}
++ (BOOL)fixtureClearCredentialsWithError:(NSError **)error {
+    GitHubClears++;GitHubAccount=nil;GitHubHasToken=NO;return YES;
+}
++ (NSMutableURLRequest *)fixtureRequestForURL:(NSURL *)url timeout:(NSTimeInterval)timeout error:(NSError **)error {
+    GitHubRequestedURL=url.absoluteString;return [NSMutableURLRequest requestWithURL:url];
+}
++ (void)fixturePerformRequest:(NSURLRequest *)request completion:(void (^)(NSData *,NSHTTPURLResponse *,NSError *))completion {
+    GitHubRequests++;[GitHubCompletions addObject:[completion copy]];
+}
+@end
 static NSMutableArray *Results;
 static NSMutableArray *Managers;
 static NSString *EvidencePath;
@@ -80,13 +194,18 @@ static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(c
 @implementation LCOrbitPreferences (DrawerFixture)
 - (void)fixtureSetObject:(id)object forKey:(NSString *)key {
     if([@[@"LCFloatingMenu.orbY",@"LCFloatingMenu.onLeft"] containsObject:key]) PositionWrites++;
+    if(RejectUpdateSkipSave && [key isEqualToString:@"LCFloatingMenu.skippedUpdateVersion"]) return;
     [self fixtureSetObject:object forKey:key];
 }
 @end
 @interface UIViewController (DrawerFixture) @end
 @implementation UIViewController (DrawerFixture)
 - (void)fixturePresent:(UIViewController *)controller animated:(BOOL)animated completion:(void (^)(void))completion {
-    if([controller isKindOfClass:UIAlertController.class]) { CapturedAlert=(UIAlertController *)controller;if(completion) completion();return; }
+    if([controller isKindOfClass:UIAlertController.class]) {
+        CapturedAlert=(UIAlertController *)controller;
+        for(UIAlertAction *action in CapturedAlert.actions) if([action.title isEqualToString:@"下载更新"]) UpdatePromptPresentations++;
+        if(completion) completion();return;
+    }
     [self fixturePresent:controller animated:animated completion:completion];
 }
 @end
@@ -126,6 +245,264 @@ static NSArray<UIControl *> *Actions(FMManager *m,NSString *action) {
 static void Check(NSString *name,BOOL passed,id details) {
     [Results addObject:@{@"name":name,@"passed":@(passed),@"details":details?:@{}}];
     NSLog(@"%@ %@ %@",passed?@"PASS":@"FAIL",name,details?:@"");
+}
+static void InvokeAlertAction(UIAlertController *alert,NSString *title) {
+    for(UIAlertAction *action in alert.actions) if([action.title isEqualToString:title]) {
+        void (^handler)(UIAlertAction *)=[action valueForKey:@"handler"];
+        if(handler) handler(action);return;
+    }
+}
+static void CompleteGitHub(NSString *login,NSInteger status) {
+    if(!GitHubCompletions.count) return;
+    void (^completion)(NSData *,NSHTTPURLResponse *,NSError *)=GitHubCompletions.firstObject;
+    [GitHubCompletions removeObjectAtIndex:0];
+    NSData *data=[NSJSONSerialization dataWithJSONObject:login?@{@"login":login}:@{} options:0 error:nil];
+    NSHTTPURLResponse *response=[[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://api.github.com/user"]
+        statusCode:status HTTPVersion:@"HTTP/1.1" headerFields:@{}];
+    completion(data,response,nil);
+}
+static NSDictionary *UpdateRelease(NSString *version) {
+    return @{@"version":version,@"commit":@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        @"downloadURL":@"https://github.com/dompling/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib",
+        @"sha256":@"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        @"notes":@"更新说明：改善设置中的更新提醒。"};
+}
+static void AttemptAutomaticUpdate(FMSettingsRootController *root) {
+    if([root respondsToSelector:@selector(tryAutomaticUpdatePrompt)]) [root tryAutomaticUpdatePrompt];
+}
+static void NotifyUpdate(NSDictionary *release) {
+    [NSUserDefaults.standardUserDefaults setObject:release forKey:@"LCFloatingMenu.updateIndicator.release"];
+    [NSNotificationCenter.defaultCenter postNotificationName:@"LCFloatingMenuUpdateReleaseAvailable" object:nil];
+}
+static void CompleteUpdateJSON(NSDictionary *json) {
+    if(!GitHubCompletions.count) return;
+    void (^completion)(NSData *,NSHTTPURLResponse *,NSError *)=GitHubCompletions.lastObject;
+    [GitHubCompletions removeLastObject];
+    completion([NSJSONSerialization dataWithJSONObject:json options:0 error:nil],
+        [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/fm-latest"]
+        statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}],nil);
+}
+static void CompleteUpdateRequest(NSString *version) {
+    NSDictionary *release=UpdateRelease(version);
+    NSString *body=[NSString stringWithFormat:@"FM_VERSION=%@\nFM_COMMIT=%@\n\n%@",version,release[@"commit"],release[@"notes"]];
+    NSDictionary *json=@{@"body":body,@"assets":@[@{@"name":@"LCFloatingMenu.dylib",@"digest":release[@"sha256"],
+        @"browser_download_url":release[@"downloadURL"]}]};
+    CompleteUpdateJSON(json);
+}
+static void SetUpdateRoot(UINavigationController *nav,UIViewController *root,UIWindow *window) {
+    [nav setViewControllers:@[root] animated:NO];
+    [root loadViewIfNeeded];[window layoutIfNeeded];[nav.view layoutIfNeeded];[root.view layoutIfNeeded];
+}
+static void RunPluginManagementTests(void) {
+    PluginAutoStates=[NSMutableDictionary dictionary];PluginAutoSyncCalls=0;PluginAutoWrites=0;
+    UIColor *background=UIColor.systemBackgroundColor,*surface=UIColor.secondarySystemGroupedBackgroundColor;
+    LCOrbitSharedTweaksViewController *manager=[[LCOrbitSharedTweaksViewController alloc]
+        initWithBackground:background surface:surface text:UIColor.labelColor secondary:UIColor.secondaryLabelColor accent:UIColor.systemBlueColor];
+    UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:manager];
+    UIWindow *window=[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+    window.rootViewController=nav;window.hidden=NO;[window layoutIfNeeded];[manager loadViewIfNeeded];
+    UITableView *inventory=[manager valueForKey:@"table"];
+    id<UITableViewDataSource> listData=inventory.dataSource;
+    UITableViewCell *assignment=[listData tableView:inventory cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]];
+    Check(@"plugin-manager-global-auto-switch-removed",[listData tableView:inventory numberOfRowsInSection:0]==1 &&
+          ![assignment.accessoryView isKindOfClass:UISwitch.class] && [assignment.textLabel.text isEqual:@"按 App 分配插件"],nil);
+    UIViewController *details=[LCOrbitTweakCenterViews pluginDetailsForName:@"Local-A.dylib"
+        background:background surface:surface text:UIColor.labelColor secondary:UIColor.secondaryLabelColor accent:UIColor.systemBlueColor];
+    SetUpdateRoot(nav,details,window);
+    UITableView *table=[details valueForKey:@"table"];
+    id<UITableViewDataSource> data=table.dataSource;
+    BOOL backupsRemoved=details.navigationItem.rightBarButtonItems.count==0;
+    for(NSInteger section=0;section<[data numberOfSectionsInTableView:table];section++) {
+        NSString *heading=[data tableView:table titleForHeaderInSection:section];
+        backupsRemoved &= ![heading containsString:@"备份"];
+        for(NSInteger row=0;row<[data tableView:table numberOfRowsInSection:section];row++) {
+            UITableViewCell *cell=[data tableView:table cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:section]];
+            backupsRemoved &= ![cell.textLabel.text containsString:@"备份"] && ![cell.textLabel.text containsString:@"恢复"];
+        }
+    }
+    Check(@"plugin-detail-backup-restore-clear-ui-removed",backupsRemoved,nil);
+    UITableViewCell *autoCell=[data tableView:table cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:1]];
+    UISwitch *toggle=[autoCell.accessoryView isKindOfClass:UISwitch.class]?(UISwitch *)autoCell.accessoryView:nil;
+    Check(@"plugin-detail-local-auto-sharing-switch",toggle && toggle.enabled && !toggle.on &&
+          [autoCell.textLabel.text containsString:@"自动共享"],nil);
+    UIViewController *shared=[LCOrbitTweakCenterViews pluginDetailsForName:@"Shared-Only.dylib"
+        background:background surface:surface text:UIColor.labelColor secondary:UIColor.secondaryLabelColor accent:UIColor.systemBlueColor];
+    [shared loadViewIfNeeded];UITableView *sharedTable=[shared valueForKey:@"table"];
+    UITableViewCell *sharedAuto=[sharedTable.dataSource tableView:sharedTable cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:1]];
+    UISwitch *sharedToggle=[sharedAuto.accessoryView isKindOfClass:UISwitch.class]?(UISwitch *)sharedAuto.accessoryView:nil;
+    Check(@"plugin-detail-shared-only-cannot-enable-auto-sharing",sharedToggle && !sharedToggle.enabled && !sharedToggle.on,nil);
+    SEL changed=NSSelectorFromString(@"automaticSyncChanged:");
+    if([details respondsToSelector:changed]) {
+        RejectPluginAutoSave=YES;toggle.on=YES;CapturedAlert=nil;
+        [toggle sendActionsForControlEvents:UIControlEventValueChanged];
+        Check(@"plugin-detail-auto-save-failure-rolls-back",!toggle.on && [CapturedAlert.title isEqual:@"配置未保存"],nil);
+        RejectPluginAutoSave=NO;CapturedAlert=nil;toggle.on=YES;
+        [toggle sendActionsForControlEvents:UIControlEventValueChanged];
+        NSUInteger writes=PluginAutoWrites;
+        [toggle sendActionsForControlEvents:UIControlEventValueChanged];
+        Check(@"plugin-detail-auto-toggle-targets-one-plugin-and-debounces",[LastPluginAutoName isEqual:@"Local-A.dylib"] &&
+              [PluginAutoStates[@"Local-A.dylib"] boolValue] && ![PluginAutoStates[@"Shared-Only.dylib"] boolValue] && PluginAutoWrites==writes,nil);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.2*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+            Check(@"plugin-detail-enabling-immediately-syncs",PluginAutoSyncCalls==1,nil);
+            UITableViewCell *refreshed=[data tableView:table cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:1]];
+            UISwitch *active=(UISwitch *)refreshed.accessoryView;
+            active.on=NO;CapturedAlert=nil;[active sendActionsForControlEvents:UIControlEventValueChanged];
+            Check(@"plugin-detail-disabling-keeps-shared-copy-without-sync",![PluginAutoStates[@"Local-A.dylib"] boolValue] && PluginAutoSyncCalls==1 &&
+                  [[LCOrbitTweakCenter pluginInfo:@"Local-A.dylib" shared:YES][@"exists"] boolValue],nil);
+            FixtureHost=NO;NSUInteger guestWrites=PluginAutoWrites;active.on=YES;
+            [active sendActionsForControlEvents:UIControlEventValueChanged];
+            Check(@"plugin-detail-guest-cannot-change-auto-sharing",PluginAutoWrites==guestWrites && !active.on,nil);
+            FixtureHost=YES;window.hidden=YES;window.rootViewController=nil;
+        });
+    } else {window.hidden=YES;window.rootViewController=nil;}
+}
+static void RunUpdatePromptTests(void) {
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    [prefs setObject:nil forKey:@"LCFloatingMenu.skippedUpdateVersion"];
+    [NSUserDefaults.standardUserDefaults setObject:UpdateRelease(@"1.0.8") forKey:@"LCFloatingMenu.updateIndicator.release"];
+    CapturedAlert=nil;UpdatePromptPresentations=0;GitHubCompletions=[NSMutableArray array];
+    FMSettingsRootController *root=[FMSettingsRootController new];
+    UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:root];
+    UIWindow *window=[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+    window.rootViewController=nav;window.hidden=NO;[window layoutIfNeeded];[root loadViewIfNeeded];
+    AttemptAutomaticUpdate(root);
+    NSArray *buttons=[CapturedAlert.actions valueForKey:@"title"];
+    Check(@"update-auto-prompt-has-notes-and-two-actions",[CapturedAlert.title containsString:@"1.0.8"] &&
+          [CapturedAlert.message containsString:@"改善设置中的更新提醒"] &&
+          [buttons isEqual:@[@"跳过此版本",@"下载更新"]],nil);
+    NSUInteger offered=UpdatePromptPresentations;
+    AttemptAutomaticUpdate(root);NotifyUpdate(UpdateRelease(@"1.0.8"));
+    Check(@"update-auto-same-version-once-per-controller",offered==1 && UpdatePromptPresentations==offered,nil);
+    InvokeAlertAction(CapturedAlert,@"跳过此版本");
+    Check(@"update-skip-persists-exact-version",[[prefs objectForKey:@"LCFloatingMenu.skippedUpdateVersion"] isEqual:@"1.0.8"],nil);
+    CapturedAlert=nil;
+    FMSettingsRootController *reopened=[FMSettingsRootController new];
+    SetUpdateRoot(nav,reopened,window);AttemptAutomaticUpdate(reopened);
+    Check(@"update-skipped-version-suppressed-after-reopen",!CapturedAlert,nil);
+    [reopened checkForUpdates];CompleteUpdateRequest(@"1.0.8");
+    dispatch_async(dispatch_get_main_queue(),^{
+        Check(@"update-manual-check-ignores-skipped-version",[CapturedAlert.title containsString:@"1.0.8"] &&
+              [[CapturedAlert.actions valueForKey:@"title"] containsObject:@"下载更新"],
+              @{@"hasWindow":@(reopened.view.window!=nil),@"isTop":@(nav.topViewController==reopened),
+                @"hidden":@(window.hidden),@"checking":[reopened valueForKey:@"checkingUpdate"],
+                @"pendingRequests":@(GitHubCompletions.count),@"title":CapturedAlert.title?:@""});
+        CapturedAlert=nil;NotifyUpdate(UpdateRelease(@"1.0.9"));AttemptAutomaticUpdate(reopened);
+        Check(@"update-new-version-still-offered",[CapturedAlert.title containsString:@"1.0.9"],nil);
+        RejectUpdateSkipSave=YES;InvokeAlertAction(CapturedAlert,@"跳过此版本");RejectUpdateSkipSave=NO;
+        Check(@"update-failed-skip-reports-error",[CapturedAlert.title isEqual:@"跳过未保存"],nil);
+        Check(@"update-failed-skip-not-persisted",[[prefs objectForKey:@"LCFloatingMenu.skippedUpdateVersion"] isEqual:@"1.0.8"],nil);
+        CapturedAlert=nil;
+        UIViewController *child=[UIViewController new];[nav pushViewController:child animated:NO];
+        NotifyUpdate(UpdateRelease(@"1.0.10"));AttemptAutomaticUpdate(reopened);
+        Check(@"update-notification-does-not-interrupt-child-page",!CapturedAlert,nil);
+        [nav popViewControllerAnimated:NO];[window layoutIfNeeded];[nav.view layoutIfNeeded];AttemptAutomaticUpdate(reopened);
+        Check(@"update-return-to-root-offers-late-version",[CapturedAlert.title containsString:@"1.0.10"],nil);
+        CapturedAlert=nil;window.hidden=YES;
+        NotifyUpdate(UpdateRelease(@"1.0.11"));AttemptAutomaticUpdate(reopened);
+        Check(@"update-hidden-window-does-not-prompt",!CapturedAlert,nil);
+        window.hidden=NO;
+        FixtureHost=NO;AttemptAutomaticUpdate(reopened);
+        Check(@"update-guest-does-not-auto-prompt",!CapturedAlert,nil);
+        FixtureHost=YES;
+        AttemptAutomaticUpdate(reopened);UIAlertController *downloadAlert=CapturedAlert;
+        NSUInteger downloadsBefore=DownloadResumes;
+        InvokeAlertAction(downloadAlert,@"下载更新");InvokeAlertAction(downloadAlert,@"下载更新");
+        Check(@"update-download-action-starts-once-without-second-confirmation",DownloadResumes==downloadsBefore+1 &&
+              [DownloadRequest.URL.absoluteString isEqual:UpdateRelease(@"1.0.11")[@"downloadURL"]] &&
+              ![DownloadRequest valueForHTTPHeaderField:@"Authorization"],nil);
+        CapturedAlert=nil;
+        if(DownloadCompletion) {
+            void (^completion)(NSData *,NSURLResponse *,NSError *)=DownloadCompletion;DownloadCompletion=nil;
+            completion([@"fixture-binary" dataUsingEncoding:NSUTF8StringEncoding],
+                [[NSHTTPURLResponse alloc] initWithURL:DownloadRequest.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}],nil);
+        }
+        dispatch_async(dispatch_get_main_queue(),^{
+            Check(@"update-download-uses-existing-digest-install-boundary",UpdateInstalls==1 &&
+                  [InstalledUpdateDigest isEqual:UpdateRelease(@"1.0.11")[@"sha256"]],nil);
+            // No metadata: fetch once, leave the root before completion. The
+            // late result is cacheable but cannot take over a child page.
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
+            NSUInteger before=GitHubRequests;
+            FMSettingsRootController *late=[FMSettingsRootController new];
+            SetUpdateRoot(nav,late,window);CapturedAlert=nil;
+            AttemptAutomaticUpdate(late);AttemptAutomaticUpdate(late);
+            Check(@"update-missing-metadata-fetches-once-per-controller",GitHubRequests==before+1,nil);
+            [nav pushViewController:[UIViewController new] animated:NO];CompleteUpdateRequest(@"1.0.12");
+            dispatch_async(dispatch_get_main_queue(),^{
+                NSDictionary *cached=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
+                Check(@"update-late-response-caches-without-presenting",!CapturedAlert && [cached[@"version"] isEqual:@"1.0.12"],nil);
+                [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
+                FMSettingsRootController *notesRoot=[FMSettingsRootController new];
+                SetUpdateRoot(nav,notesRoot,window);AttemptAutomaticUpdate(notesRoot);
+                NSDictionary *metadata=UpdateRelease(@"1.0.13");
+                CompleteUpdateJSON(@{@"body":[NSString stringWithFormat:@"FM_VERSION=1.0.13\nFM_COMMIT=%@\nFM_TAG=fm-latest",metadata[@"commit"]],
+                    @"assets":@[@{@"name":@"LCFloatingMenu.dylib",@"digest":metadata[@"sha256"],@"browser_download_url":metadata[@"downloadURL"]}]});
+                dispatch_async(dispatch_get_main_queue(),^{
+                    Check(@"update-metadata-only-fetches-version-tag-notes",[GitHubRequestedURL hasSuffix:@"/releases/tags/1.0.13"] && GitHubCompletions.count>0,nil);
+                    CompleteUpdateJSON(@{@"tag_name":@"1.0.13",@"body":@"# 独立版本说明\n这里是正式更新说明。"});
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        NSDictionary *enriched=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
+                        Check(@"update-version-tag-enriches-prompt-and-cache",[CapturedAlert.message containsString:@"正式更新说明"] &&
+                              [enriched[@"notes"] containsString:@"正式更新说明"],nil);
+                        // Two real checks finish out of order: the older
+                        // result must not rewind cache or visible prompts.
+                        [notesRoot checkForUpdates];
+                        FMSettingsRootController *fast=[FMSettingsRootController new];
+                        SetUpdateRoot(nav,fast,window);[fast checkForUpdates];
+                        CapturedAlert=nil;CompleteUpdateRequest(@"1.0.21");CompleteUpdateRequest(@"1.0.20");
+                        dispatch_async(dispatch_get_main_queue(),^{
+                            NSDictionary *newest=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
+                            Check(@"update-out-of-order-release-never-rewinds-cache-or-prompt",[newest[@"version"] isEqual:@"1.0.21"] &&
+                                  ![CapturedAlert.title containsString:@"1.0.20"],nil);
+                            // Same artifact with complete cached notes must
+                            // survive a later metadata-only fallback result.
+                            [fast checkForUpdates];
+                            NSDictionary *same=UpdateRelease(@"1.0.21");
+                            NSDictionary *(^metadataOnly)(NSString *)=^NSDictionary *(NSString *commit) {
+                                return @{@"body":[NSString stringWithFormat:@"FM_VERSION=1.0.21\nFM_COMMIT=%@",commit],
+                                    @"assets":@[@{@"name":@"LCFloatingMenu.dylib",@"digest":same[@"sha256"],@"browser_download_url":same[@"downloadURL"]}]};
+                            };
+                            CompleteUpdateJSON(metadataOnly(same[@"commit"]));
+                            CompleteUpdateJSON(@{@"tag_name":@"wrong-version",@"body":@"不应使用的说明"});
+                            dispatch_async(dispatch_get_main_queue(),^{
+                                NSDictionary *preserved=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
+                                Check(@"update-same-artifact-notes-never-downgrade-to-fallback",[preserved[@"notes"] containsString:@"改善设置中的更新提醒"],nil);
+                                // Even equal versions can refer to distinct
+                                // artifacts. Keep the first accepted artifact;
+                                // never pair its binary with another's notes.
+                                [notesRoot checkForUpdates];[fast checkForUpdates];
+                                NSString *newCommit=@"cccccccccccccccccccccccccccccccccccccccc";
+                                NSString *newBody=[NSString stringWithFormat:@"FM_VERSION=1.0.22\nFM_COMMIT=%@\n新构建对应说明",newCommit];
+                                NSDictionary *asset=@{@"name":@"LCFloatingMenu.dylib",@"digest":same[@"sha256"],@"browser_download_url":same[@"downloadURL"]};
+                                CompleteUpdateJSON(@{@"body":newBody,@"assets":@[asset]});
+                                NSString *oldBody=[NSString stringWithFormat:@"FM_VERSION=1.0.22\nFM_COMMIT=%@",same[@"commit"]];
+                                CompleteUpdateJSON(@{@"body":oldBody,@"assets":@[asset]});
+                                CompleteUpdateJSON(@{@"tag_name":@"1.0.22",@"body":@"旧构建迟到的说明"});
+                                dispatch_async(dispatch_get_main_queue(),^{
+                                    NSDictionary *artifact=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
+                                    Check(@"update-same-version-artifact-keeps-matched-notes",[artifact[@"commit"] isEqual:newCommit] &&
+                                          [artifact[@"notes"] containsString:@"新构建对应说明"] && ![artifact[@"notes"] containsString:@"旧构建"],nil);
+                                    [fast checkForUpdates];
+                                    NSString *rebuilt=@"dddddddddddddddddddddddddddddddddddddddd";
+                                    NSString *rebuiltDigest=@"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+                                    CompleteUpdateJSON(@{@"body":[NSString stringWithFormat:@"FM_VERSION=1.0.22\nFM_COMMIT=%@\n同版本重新构建说明",rebuilt],
+                                        @"assets":@[@{@"name":@"LCFloatingMenu.dylib",@"digest":rebuiltDigest,@"browser_download_url":same[@"downloadURL"]}]});
+                                    dispatch_async(dispatch_get_main_queue(),^{
+                                        NSDictionary *latestArtifact=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
+                                        Check(@"update-new-check-can-accept-same-version-rebuild",[latestArtifact[@"commit"] isEqual:rebuilt] &&
+                                              [latestArtifact[@"sha256"] isEqual:rebuiltDigest] && [latestArtifact[@"notes"] containsString:@"重新构建"],nil);
+                                        window.hidden=YES;window.rootViewController=nil;
+                                        [prefs setObject:nil forKey:@"LCFloatingMenu.skippedUpdateVersion"];
+                                        RunPluginManagementTests();
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
 }
 static CGRect Frame(UIView *v,FMManager *m) { return [v convertRect:v.bounds toView:m.overlayView]; }
 static FMManager *Manager(BOOL compact,CGFloat scale,CGFloat height,UIEdgeInsets insets,BOOL left,BOOL opened,NSString *page) {
@@ -300,6 +677,87 @@ static void RunTests(void) {
         BOOL removed=YES;for(UIView *v in Views(stack)) if([v isKindOfClass:UILabel.class]) {NSString *t=((UILabel *)v).text;removed &= ![t containsString:@"圆形微珠"] && ![t containsString:@"闲置贴边待命"];}
         Check([@"removed-native-category-" stringByAppendingString:category],removed,nil);Snapshot(m,[@"settings-native-" stringByAppendingString:category]);
     }
+    // Exercise the real native settings pages with credentials behind a
+    // fixture boundary. A saved token must never become text-field content.
+    FMManager *githubHost=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    FMSettingsRootController *githubRoot=[FMSettingsRootController new];
+    githubRoot.view.frame=githubHost.overlayView.bounds;
+    [githubHost.overlayView addSubview:githubRoot.view];[githubRoot rebuild];
+    BOOL hostEntry=NO;
+    for(UIView *view in Views(githubRoot.view)) if([view isKindOfClass:UILabel.class])
+        hostEntry |= [((UILabel *)view).text isEqual:@"GitHub 访问"];
+    Check(@"github-host-access-entry",hostEntry,nil);
+    FixtureHost=NO;[githubRoot rebuild];BOOL guestEntry=NO;
+    for(UIView *view in Views(githubRoot.view)) if([view isKindOfClass:UILabel.class])
+        guestEntry |= [((UILabel *)view).text isEqual:@"GitHub 访问"];
+    Check(@"github-guest-access-entry-hidden",!guestEntry,nil);
+    FixtureHost=YES;GitHubAccount=@"fixture-account";GitHubHasToken=YES;
+    FMSettingsSectionController *githubPage=[[FMSettingsSectionController alloc] initWithSection:@"github"];
+    UINavigationController *githubNavigation=[[UINavigationController alloc] initWithRootViewController:githubPage];
+    // GeometryWindow intentionally keeps its root view detached for layout
+    // fixtures. Credential actions require a presented native page, so give
+    // this navigation stack its own visible UIWindow and real containment.
+    UIWindow *githubWindow=[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+    githubWindow.rootViewController=githubNavigation;githubWindow.hidden=NO;
+    [githubWindow layoutIfNeeded];[githubPage loadViewIfNeeded];[githubPage rebuild];
+    Check(@"github-page-mounted-in-native-window",githubPage.view.window==githubWindow &&
+          githubNavigation.topViewController==githubPage,nil);
+    BOOL accountVisible=NO,tokenStatusVisible=NO;
+    for(UIView *view in Views(githubPage.view)) if([view isKindOfClass:UILabel.class]) {
+        accountVisible |= [((UILabel *)view).text containsString:@"fixture-account"];
+        tokenStatusVisible |= [((UILabel *)view).text containsString:@"Token：已保存"];
+    }
+    Check(@"github-page-shows-account-and-token-status",[githubPage.title isEqual:@"GitHub 访问"] &&
+          accountVisible && tokenStatusVisible,nil);
+    CapturedAlert=nil;if([githubPage respondsToSelector:@selector(editGitHubCredentials)]) [githubPage editGitHubCredentials];
+    NSArray<UITextField *> *credentialFields=CapturedAlert.textFields;
+    Check(@"github-edit-token-secure-and-never-prefilled",credentialFields.count==2 &&
+          [credentialFields[0].text isEqual:@"fixture-account"] && !credentialFields[0].secureTextEntry &&
+          credentialFields[1].secureTextEntry && credentialFields[1].text.length==0,nil);
+    credentialFields.firstObject.text=@"edited-account";
+    InvokeAlertAction(CapturedAlert,@"保存");
+    Check(@"github-empty-token-submitted-without-reading-saved-token",GitHubSaves==1 &&
+          GitHubSavedEmptyToken && GitHubHasToken && [GitHubAccount isEqual:@"edited-account"],nil);
+    if([githubPage respondsToSelector:@selector(clearGitHubCredentials)]) [githubPage clearGitHubCredentials];BOOL destructive=NO;
+    for(UIAlertAction *action in CapturedAlert.actions) destructive |= action.style==UIAlertActionStyleDestructive;
+    Check(@"github-clear-requires-destructive-confirmation",destructive &&
+          [CapturedAlert.title isEqual:@"清除 GitHub 凭据？"],nil);
+    InvokeAlertAction(CapturedAlert,@"清除");
+    Check(@"github-clear-uses-credential-client",GitHubClears==1 && !GitHubHasToken && !GitHubAccount,nil);
+    FixtureHost=NO;NSUInteger readsBefore=GitHubCredentialReads;
+    [githubPage rebuild];CapturedAlert=nil;
+    if([githubPage respondsToSelector:@selector(editGitHubCredentials)]) [githubPage editGitHubCredentials];
+    if([githubPage respondsToSelector:@selector(verifyGitHubConnection)]) [githubPage verifyGitHubConnection];
+    if([githubPage respondsToSelector:@selector(clearGitHubCredentials)]) [githubPage clearGitHubCredentials];
+    Check(@"github-guest-never-reads-host-credentials",GitHubCredentialReads==readsBefore && !CapturedAlert,nil);
+    FixtureHost=YES;GitHubAccount=@"fixture-account";GitHubHasToken=YES;GitHubCompletions=[NSMutableArray array];
+    if([githubPage respondsToSelector:@selector(verifyGitHubConnection)]) {
+        CapturedAlert=nil;NSUInteger requestsBefore=GitHubRequests;
+        [githubPage verifyGitHubConnection];[githubPage verifyGitHubConnection];
+        Check(@"github-verification-uses-user-endpoint-and-coalesces",GitHubRequests==requestsBefore+1 &&
+              [GitHubRequestedURL isEqual:@"https://api.github.com/user"],nil);
+        // Clear while the request is in flight, then deliver its old result.
+        [githubPage clearGitHubCredentials];InvokeAlertAction(CapturedAlert,@"清除");CapturedAlert=nil;
+        CompleteGitHub(@"fixture-account",200);
+        dispatch_async(dispatch_get_main_queue(),^{
+            BOOL staleShown=[CapturedAlert.title isEqual:@"GitHub 访问"];
+            for(UIView *view in Views(githubPage.view)) if([view isKindOfClass:UILabel.class])
+                staleShown |= [((UILabel *)view).text hasPrefix:@"连接成功"];
+            Check(@"github-clearing-invalidates-in-flight-verification",!staleShown,nil);
+            GitHubAccount=@"expected-account";GitHubHasToken=YES;
+            [githubPage verifyGitHubConnection];CompleteGitHub(@"other-account",200);
+            dispatch_async(dispatch_get_main_queue(),^{
+                Check(@"github-verification-rejects-account-mismatch",[CapturedAlert.message containsString:@"账号不一致"],nil);
+                CapturedAlert=nil;GitHubAccount=nil;
+                [githubPage verifyGitHubConnection];CompleteGitHub(@"actual-account",200);
+                dispatch_async(dispatch_get_main_queue(),^{
+                    Check(@"github-verification-shows-actual-login",[CapturedAlert.message containsString:@"actual-account"],nil);
+                    CapturedAlert=nil;githubWindow.hidden=YES;githubWindow.rootViewController=nil;
+                    RunUpdatePromptTests();
+                });
+            });
+        });
+    } else {githubWindow.hidden=YES;githubWindow.rootViewController=nil;RunUpdatePromptTests();}
     NSArray *savedApps=FixtureApps;
     NSMutableDictionary *longName=[savedApps[0] mutableCopy];
     longName[@"title"]=@"一个很长很长的应用名称用来检查开关不会覆盖应用文字";
@@ -460,12 +918,28 @@ static void RunTests(void) {
     [super viewDidAppear:animated];static BOOL ran=NO;if(ran)return;ran=YES;
     NSString *home=NSHomeDirectory();setenv("LC_HOME_PATH",home.UTF8String,1);EvidencePath=[home stringByAppendingPathComponent:@"Documents/DrawerEvidence"];
     [NSFileManager.defaultManager createDirectoryAtPath:EvidencePath withIntermediateDirectories:YES attributes:nil error:nil];
-    Results=[NSMutableArray array];Managers=[NSMutableArray array];AutoPiPStates=[NSMutableDictionary dictionary];NSMutableArray *apps=[NSMutableArray array];
+    Results=[NSMutableArray array];Managers=[NSMutableArray array];AutoPiPStates=[NSMutableDictionary dictionary];GitHubCompletions=[NSMutableArray array];NSMutableArray *apps=[NSMutableArray array];
     for(NSUInteger i=0;i<8;i++) {NSString *folder=[home stringByAppendingFormat:@"/Documents/Fixture%lu.app",(unsigned long)i];[NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];[@{@"CFBundleName":[NSString stringWithFormat:@"App %lu",(unsigned long)i]} writeToFile:[folder stringByAppendingPathComponent:@"Info.plist"] atomically:YES];[apps addObject:@{@"folder":folder,@"title":[NSString stringWithFormat:@"App %lu",(unsigned long)i],@"identity":folder,@"path":folder,@"launchable":@YES}];}FixtureApps=apps;
     SwapClass(LCOrbitGuestService.class,@selector(installedApps),@selector(fixtureApps));SwapClass(LCOrbitGuestService.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));
     SwapClass(LCOrbitMultitask.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));SwapClass(LCOrbitMultitask.class,@selector(isRunningGuest:),@selector(fixtureRunning:));SwapClass(LCOrbitMultitask.class,@selector(closeGuest:error:),@selector(fixtureClose:error:));SwapClass(LCOrbitMultitask.class,@selector(isEnabled),@selector(fixtureEnabled));SwapClass(LCOrbitHost.class,@selector(isHostUI),@selector(fixtureHost));
     SwapClass(LCOrbitMultitask.class,@selector(automaticPiPEnabledForGuest:),@selector(fixtureAutoPiP:));
     SwapClass(LCOrbitMultitask.class,@selector(setAutomaticPiPEnabled:forGuest:error:),@selector(fixtureSetAutoPiP:forGuest:error:));
+    SwapClass(LCOrbitTweakSync.class,@selector(pluginInventory),@selector(fixturePluginInventory));
+    if([LCOrbitTweakSync respondsToSelector:@selector(automaticSyncEnabledForPlugin:)])
+        SwapClass(LCOrbitTweakSync.class,@selector(automaticSyncEnabledForPlugin:),@selector(fixtureAutomaticSyncEnabledForPlugin:));
+    if([LCOrbitTweakSync respondsToSelector:@selector(setAutomaticSyncEnabled:forPlugin:error:)])
+        SwapClass(LCOrbitTweakSync.class,@selector(setAutomaticSyncEnabled:forPlugin:error:),@selector(fixtureSetAutomaticSyncEnabled:forPlugin:error:));
+    SwapClass(LCOrbitTweakSync.class,@selector(syncAutomaticallyIfNeeded),@selector(fixtureSyncAutomaticallyIfNeeded));
+    SwapClass(LCOrbitTweakCenter.class,@selector(pluginInfo:shared:),@selector(fixturePluginInfo:shared:));
+    SwapClass(NSURLSession.class,@selector(sharedSession),@selector(fixtureSharedSession));
+    SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPlugin:expectedSHA256:error:),@selector(fixtureInstallDownloadedPlugin:expectedSHA256:error:));
+    SwapClass(LCOrbitStorage.class,@selector(lastError),@selector(fixtureLastError));
+    SwapClass(LCOrbitGitHub.class,@selector(accountWithError:),@selector(fixtureAccountWithError:));
+    SwapClass(LCOrbitGitHub.class,@selector(hasTokenWithError:),@selector(fixtureHasTokenWithError:));
+    SwapClass(LCOrbitGitHub.class,@selector(saveAccount:token:error:),@selector(fixtureSaveAccount:token:error:));
+    SwapClass(LCOrbitGitHub.class,@selector(clearCredentialsWithError:),@selector(fixtureClearCredentialsWithError:));
+    SwapClass(LCOrbitGitHub.class,@selector(requestForURL:timeout:error:),@selector(fixtureRequestForURL:timeout:error:));
+    SwapClass(LCOrbitGitHub.class,@selector(performRequest:completion:),@selector(fixturePerformRequest:completion:));
     SwapInstance(LCOrbitPreferences.class,@selector(setObject:forKey:),@selector(fixtureSetObject:forKey:));SwapInstance(UIViewController.class,@selector(presentViewController:animated:completion:),@selector(fixturePresent:animated:completion:));
     RunTests();
 }

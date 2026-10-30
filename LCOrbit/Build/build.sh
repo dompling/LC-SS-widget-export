@@ -15,6 +15,8 @@ BUILD_COMMIT_FLAG="-DFM_BUILD_COMMIT=@\"$BUILD_COMMIT\""
 sh "$ROOT/LCOrbit/Tests/run-core-lifecycle-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-storage-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-json-log-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-github-access-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-update-release-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-dock-visibility-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-guest-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-jit-favorites-tests.sh"
@@ -36,7 +38,7 @@ python3 "$ROOT/LCOrbit/Tests/check-host-gestures.py"
 mkdir -p "$(dirname "$OUT")"
 xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.0 -fobjc-arc -O2 \
     -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore \
-    -framework CoreGraphics -install_name '@rpath/LCFloatingMenu.dylib' \
+    -framework CoreGraphics -framework Security -install_name '@rpath/LCFloatingMenu.dylib' \
     "$ROOT/LCOrbit/Core/LCOrbitCore.m" \
     "$ROOT/LCOrbit/Core/LCOrbitHost.m" \
     "$ROOT/LCOrbit/Core/LCOrbitGuestService.m" \
@@ -47,6 +49,8 @@ xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version
     "$ROOT/LCOrbit/Core/LCOrbitEventBus.m" \
     "$ROOT/LCOrbit/Core/LCOrbitOverlayManager.m" \
     "$ROOT/LCOrbit/Core/LCOrbitStorage.m" \
+    "$ROOT/LCOrbit/Core/LCOrbitGitHub.m" \
+    "$ROOT/LCOrbit/Core/LCOrbitUpdateRelease.m" \
     "$ROOT/LCOrbit/Core/LCOrbitLog.m" \
     "$ROOT/LCOrbit/Core/LCOrbitTweakAudit.m" \
     "$ROOT/LCOrbit/Core/LCOrbitTweakSync.m" \

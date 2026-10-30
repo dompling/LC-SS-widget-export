@@ -4,6 +4,8 @@
 #import <UIKit/UIKit.h>
 #import "../LCOrbit/Core/LCOrbitCore.h"
 #import "../LCOrbit/Core/LCOrbitHost.h"
+#import "../LCOrbit/Core/LCOrbitGitHub.h"
+#import "../LCOrbit/Core/LCOrbitUpdateRelease.h"
 #import "../LCOrbit/Core/LCOrbitStorage.h"
 #import "../LCOrbit/Core/LCOrbitLog.h"
 #import "../LCOrbit/Core/LCOrbitEventBus.h"
@@ -33,6 +35,80 @@ static NSString *const FMUpdateAPI=@"https://api.github.com/repos/dompling/LC-SS
 static NSString *const FMUpdateCacheVersion=@"LCFloatingMenu.updateIndicator.latestVersion";
 static NSString *const FMUpdateCacheTime=@"LCFloatingMenu.updateIndicator.lastAttempt";
 static NSString *const FMUpdateCacheSuccess=@"LCFloatingMenu.updateIndicator.lastSuccess";
+static NSString *const FMUpdateCacheRelease=@"LCFloatingMenu.updateIndicator.release";
+static NSString *const FMUpdateReleaseAvailable=@"LCFloatingMenuUpdateReleaseAvailable";
+// Both the indicator and Settings use the same validated release metadata.
+// fm-latest may contain only workflow metadata; its matching version tag
+// holds the user-facing notes. A notes fetch failure still preserves a valid
+// downloadable release and explicitly says notes are unavailable.
+static NSUInteger FMUpdateRequestSequence=0;
+static NSUInteger FMUpdateAcceptedSequence=0;
+static void FMFetchUpdateRelease(NSTimeInterval timeout,void (^completion)(NSDictionary *,NSError *,NSUInteger)) {
+    NSUInteger sequence=++FMUpdateRequestSequence;
+    NSError *requestError=nil;
+    NSURLRequest *request=[LCOrbitGitHub requestForURL:[NSURL URLWithString:FMUpdateAPI] timeout:timeout error:&requestError];
+    if(!request) {completion(nil,requestError,sequence);return;}
+    [LCOrbitGitHub performRequest:request completion:^(NSData *data,NSHTTPURLResponse *response,NSError *error) {
+        if(error || response.statusCode!=200) {
+            NSError *failure=error?:[NSError errorWithDomain:@"LCFloatingMenu.Update" code:response.statusCode
+                userInfo:@{NSLocalizedDescriptionKey:[LCOrbitGitHub messageForStatusCode:response.statusCode]}];
+            completion(nil,failure,sequence);return;
+        }
+        id json=data.length?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+        NSError *metadataError=nil;
+        NSDictionary *release=[LCOrbitUpdateRelease releaseFromJSON:json error:&metadataError];
+        if(!release) {completion(nil,metadataError,sequence);return;}
+        if(![release[@"notes"] isEqualToString:@"此版本未提供更新说明。"])
+            {completion(release,nil,sequence);return;}
+        NSString *version=release[@"version"];
+        NSURL *notesURL=[NSURL URLWithString:[@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/"
+            stringByAppendingString:version]];
+        NSURLRequest *notesRequest=[LCOrbitGitHub requestForURL:notesURL timeout:timeout error:nil];
+        if(!notesRequest) {completion(release,nil,sequence);return;}
+        [LCOrbitGitHub performRequest:notesRequest completion:^(NSData *notesData,NSHTTPURLResponse *notesResponse,NSError *notesError) {
+            id detail=(!notesError && notesResponse.statusCode==200 && notesData.length)?
+                [NSJSONSerialization JSONObjectWithData:notesData options:0 error:nil]:nil;
+            if([detail isKindOfClass:NSDictionary.class] && [detail[@"tag_name"] isKindOfClass:NSString.class] &&
+               [detail[@"tag_name"] isEqualToString:version]) {
+                NSMutableDictionary *enriched=[release mutableCopy];
+                enriched[@"notes"]=[LCOrbitUpdateRelease notesFromBody:detail[@"body"]];
+                completion([enriched copy],nil,sequence);
+            } else completion(release,nil,sequence);
+        }];
+    }];
+}
+// Cache updates run on the main queue. Version wins over request order;
+// within a version, a newer request may accept a rebuilt artifact atomically.
+// Matching artifacts can enrich missing notes without losing complete notes.
+static NSDictionary *FMCacheUpdateRelease(NSDictionary *candidate,NSUInteger sequence) {
+    NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+    NSDictionary *incoming=[LCOrbitUpdateRelease validatedRelease:candidate error:nil];
+    NSDictionary *current=[LCOrbitUpdateRelease validatedRelease:[defaults objectForKey:FMUpdateCacheRelease] error:nil];
+    if(!incoming) return current;
+    NSDictionary *accepted=incoming;
+    if(!current || [LCOrbitUpdateRelease isNewerRelease:incoming thanVersion:current[@"version"]]) {
+        FMUpdateAcceptedSequence=sequence;
+    } else if([LCOrbitUpdateRelease isNewerRelease:current thanVersion:incoming[@"version"]]) {
+        accepted=current;
+    } else {
+        BOOL sameArtifact=[incoming[@"version"] isEqual:current[@"version"]] &&
+            [incoming[@"commit"] isEqual:current[@"commit"]] &&
+            [incoming[@"sha256"] isEqual:current[@"sha256"]] &&
+            [incoming[@"downloadURL"] isEqual:current[@"downloadURL"]];
+        if(sameArtifact) {
+            if(![current[@"notes"] isEqualToString:@"此版本未提供更新说明。"])
+                accepted=current;
+            FMUpdateAcceptedSequence=MAX(FMUpdateAcceptedSequence,sequence);
+        } else if(sequence>=FMUpdateAcceptedSequence) FMUpdateAcceptedSequence=sequence;
+        else accepted=current;
+    }
+    [defaults setObject:accepted forKey:FMUpdateCacheRelease];
+    [defaults setObject:accepted[@"version"] forKey:FMUpdateCacheVersion];
+    [defaults setDouble:NSDate.date.timeIntervalSince1970 forKey:FMUpdateCacheSuccess];
+    if(![accepted isEqual:current])
+        [NSNotificationCenter.defaultCenter postNotificationName:FMUpdateReleaseAvailable object:nil];
+    return accepted;
+}
 static NSTimeInterval const FMUpdateRefreshInterval=6*60*60;
 static NSTimeInterval const FMUpdateRetryInterval=15*60;
 static NSInteger FMVersionCompare(NSString *latest,NSString *installed) {
@@ -460,10 +536,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 @property(nonatomic,strong) UIScrollView *contentScroll;
 @property(nonatomic,weak) UILabel *updateStatusLabel;
 @property(nonatomic,assign) BOOL checkingUpdate;
+@property(nonatomic,assign) BOOL requestedAutomaticUpdate;
+@property(nonatomic,strong) NSMutableSet<NSString *> *automaticallyOfferedVersions;
+@property(nonatomic,strong) id updateReleaseObserver;
+@property(nonatomic,strong) id updateActivationObserver;
+- (void)tryAutomaticUpdatePrompt;
 - (void)rebuild;
 @end
 @interface FMSettingsSectionController : UIViewController
 @property(nonatomic,copy) NSString *sectionKey;
+@property(nonatomic,assign) NSUInteger githubGeneration;
+@property(nonatomic,assign) BOOL checkingGitHub;
+@property(nonatomic,copy) NSString *githubResult;
 @property(nonatomic,strong) UIScrollView *contentScroll;
 - (instancetype)initWithSection:(NSString *)key;
 - (void)rebuild;
@@ -856,44 +940,23 @@ static id FMLayoutChangeObserver=nil;
     if(last>0 && now>=last && now-last<(success>=last?FMUpdateRefreshInterval:FMUpdateRetryInterval)) return;
     self.orbUpdateChecking=YES;
     [defaults setDouble:now forKey:FMUpdateCacheTime];
-    NSMutableURLRequest *req=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:FMUpdateAPI]];
-    req.timeoutInterval=12;
-    [req setValue:@"LCFloatingMenu/1.0 (background update indicator)" forHTTPHeaderField:@"User-Agent"];
-    [req setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
     __weak typeof(self) weakSelf=self;
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
-        BOOL valid=NO;
-        NSString *version=nil;
-        if(!error && [(NSHTTPURLResponse *)response statusCode]==200 && data.length) {
-            NSDictionary *json=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if([json isKindOfClass:NSDictionary.class]) {
-                NSString *body=json[@"body"];
-                for(NSString *line in [body isKindOfClass:NSString.class]?[body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]:@[]) {
-                    if([line hasPrefix:@"FM_VERSION="]) version=[line substringFromIndex:11];
-                }
-                for(id item in json[@"assets"]) {
-                    if([item isKindOfClass:NSDictionary.class] && [item[@"name"] isEqualToString:@"LCFloatingMenu.dylib"]) {
-                        valid=FMVersionCompare(version?:@"",FM_MENU_VERSION)!=NSNotFound;
-                        break;
-                    }
-                }
-            }
-        }
+    FMFetchUpdateRelease(12,^(NSDictionary *release,NSError *error,NSUInteger sequence) {
         dispatch_async(dispatch_get_main_queue(), ^{
             FMManager *owner=weakSelf;
-            if(!owner) return;
             owner.orbUpdateChecking=NO;
-            if(!valid) return; // network failure never clears a known update
-            [defaults setObject:version forKey:FMUpdateCacheVersion];
-            [defaults setDouble:NSDate.date.timeIntervalSince1970 forKey:FMUpdateCacheSuccess];
-            BOOL available=FMVersionCompare(version,FM_MENU_VERSION)==NSOrderedDescending;
+            if(!release) return; // failures never clear a known update
+            NSDictionary *accepted=FMCacheUpdateRelease(release,sequence);
+            if(!owner) return;
+            BOOL available=[LCOrbitUpdateRelease isNewerRelease:accepted thanVersion:FM_MENU_VERSION];
             if(owner.orbUpdateAvailable!=available) {
                 owner.orbUpdateAvailable=available;
                 [owner applyOrbUpdateIndicator];
             }
         });
-    }] resume];
+    });
 }
+
 - (void)scheduleOrbFade {
     [self.orbFadeTimer invalidate];
     if(!BoolPref(@"idleFade",YES) || self.orbUpdateAvailable) return;
@@ -2976,6 +3039,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
     ]];
     self.contentScroll=scroll;
+    __weak typeof(self) weakSelf=self;
+    self.updateReleaseObserver=[NSNotificationCenter.defaultCenter addObserverForName:FMUpdateReleaseAvailable
+        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            [weakSelf tryAutomaticUpdatePrompt];
+        }];
+    self.updateActivationObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
+        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            [weakSelf tryAutomaticUpdatePrompt];
+        }];
     [self rebuild];
 }
 - (UIControl *)navigationRow:(NSString *)name subtitle:(NSString *)subtitle
@@ -3046,8 +3118,24 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     NSURL *url=[NSURL URLWithString:FMRepositoryURL];
     if(url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
 }
+- (void)dealloc {
+    if(self.updateReleaseObserver) [NSNotificationCenter.defaultCenter removeObserver:self.updateReleaseObserver];
+    if(self.updateActivationObserver) [NSNotificationCenter.defaultCenter removeObserver:self.updateActivationObserver];
+}
+- (BOOL)isSettingsRootVisible {
+    return self.isViewLoaded && self.view.window && !self.view.window.hidden &&
+        self.navigationController.topViewController==self && !self.isBeingDismissed &&
+        !self.navigationController.isBeingDismissed &&
+        UIApplication.sharedApplication.applicationState==UIApplicationStateActive &&
+        (!self.view.window.windowScene ||
+         self.view.window.windowScene.activationState==UISceneActivationStateForegroundActive);
+}
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [self tryAutomaticUpdatePrompt];
+}
 - (void)presentUpdateResult:(NSString *)title message:(NSString *)message showRepository:(BOOL)showRepository {
-    if(!self.view.window) return;
+    if(![self isSettingsRootVisible] || self.presentedViewController) return;
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:title
         message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
@@ -3057,77 +3145,130 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
-- (void)checkForUpdates {
-    if(self.checkingUpdate) return;
+- (void)afterUpdatePrompt:(UIAlertController *)prompt perform:(dispatch_block_t)completion {
+    if(prompt.presentingViewController) {
+        id<UIViewControllerTransitionCoordinator> transition=prompt.transitionCoordinator;
+        if(prompt.isBeingDismissed && transition) {
+            [transition animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+                completion();
+            }];
+        } else [prompt dismissViewControllerAnimated:YES completion:completion];
+    } else completion();
+}
+- (void)downloadUpdateRelease:(NSDictionary *)candidate prompt:(UIAlertController *)prompt {
+    if(self.checkingUpdate || !FMHostUI() || ![self isSettingsRootVisible]) return;
+    NSDictionary *release=[LCOrbitUpdateRelease validatedRelease:candidate error:nil];
+    if(!release || ![LCOrbitUpdateRelease isNewerRelease:release thanVersion:FM_MENU_VERSION]) return;
     self.checkingUpdate=YES;
-    self.updateStatusLabel.text=@"正在检查最新发布版…";
-    NSMutableURLRequest *request=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:FMUpdateAPI]];
-    request.timeoutInterval=15;
-    [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
-    [request setValue:@"LCFloatingMenu/1.0" forHTTPHeaderField:@"User-Agent"];
+    self.updateStatusLabel.text=@"下载并校验插件中…";
+    NSMutableURLRequest *download=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:release[@"downloadURL"]]];
+    download.timeoutInterval=40;
     __weak typeof(self) weakSelf=self;
-    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data,NSURLResponse *response,NSError *error) {
+    [[[NSURLSession sharedSession] dataTaskWithRequest:download completionHandler:^(NSData *binary,NSURLResponse *response,NSError *error) {
+        NSError *installError=nil;
+        BOOL success=NO;
+        if(!error && [(NSHTTPURLResponse *)response statusCode]==200 && binary.length>0 && FMHostUI())
+            success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:release[@"sha256"] error:&installError];
         dispatch_async(dispatch_get_main_queue(),^{
             typeof(self) owner=weakSelf;
             if(!owner) return;
             owner.checkingUpdate=NO;
             owner.updateStatusLabel.text=@"检查微珠最新发布版";
-            if(error || [(NSHTTPURLResponse *)response statusCode]!=200) {
-                [owner presentUpdateResult:@"检查更新失败" message:error.localizedDescription?:@"无法获取 GitHub 最新发布信息。" showRepository:YES];return;
-            }
-            NSDictionary *json=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if(![json isKindOfClass:NSDictionary.class]) return;
-            NSString *body=json[@"body"];
-            NSString *version=nil,*commit=nil;
-            if([body isKindOfClass:NSString.class]) for(NSString *line in [body componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-                if([line hasPrefix:@"FM_VERSION="]) version=[line substringFromIndex:11];
-                if([line hasPrefix:@"FM_COMMIT="]) commit=[line substringFromIndex:10];
-            }
-            NSDictionary *asset=nil;
-            for(id item in json[@"assets"]) if([item isKindOfClass:NSDictionary.class] &&
-                [item[@"name"] isEqualToString:@"LCFloatingMenu.dylib"]) {asset=item;break;}
-            NSString *digest=asset[@"digest"],*link=asset[@"browser_download_url"];
-            if(commit.length!=40 || !version.length || ![link hasPrefix:@"https://github.com/dompling/LC-SS-widget-export/releases/download/"] ||
-               ![digest isKindOfClass:NSString.class] || digest.length!=71) {
-                [owner presentUpdateResult:@"发布信息不完整" message:@"缺少版本、下载地址或 SHA-256 校验值，已取消更新。" showRepository:YES];return;
-            }
-            if([version compare:FM_MENU_VERSION options:NSNumericSearch]!=NSOrderedDescending) {
-                [owner presentUpdateResult:@"已是最新版本" message:[NSString stringWithFormat:@"当前 v%@，最新 v%@。",FM_MENU_VERSION,version] showRepository:NO];return;
-            }
-            if(!FMHostUI()) {
-                [owner presentUpdateResult:@"发现新版本" message:@"请返回 LC 主界面，在微珠设置中心安装更新。" showRepository:YES];return;
-            }
-            UIAlertController *confirm=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"升级微珠至 v%@？",version]
-                message:@"将下载并校验官方 dylib，备份旧版后替换 LC 私有插件。更新后仍需在 LC 原生 Tweaks 页面重新签名，并重启相关应用。不会自动替换共享或专属插件副本。"
-                preferredStyle:UIAlertControllerStyleAlert];
-            [confirm addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-            [confirm addAction:[UIAlertAction actionWithTitle:@"下载并安装" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-                if(owner.checkingUpdate) return;
-                owner.checkingUpdate=YES;
-                owner.updateStatusLabel.text=@"下载并校验插件中…";
-                NSMutableURLRequest *download=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:link]];
-                download.timeoutInterval=40;
-                [[[NSURLSession sharedSession] dataTaskWithRequest:download completionHandler:^(NSData *binary,NSURLResponse *resp,NSError *err) {
-                    NSError *installError=nil;
-                    BOOL success=NO;
-                    if(!err && [(NSHTTPURLResponse *)resp statusCode]==200 && binary.length>0)
-                        success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:digest error:&installError];
-                    dispatch_async(dispatch_get_main_queue(),^{
-                        owner.checkingUpdate=NO;
-                        owner.updateStatusLabel.text=@"检查微珠最新发布版";
-                        [owner presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
-                            message:success?@"已备份旧插件并安装新版本。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
-                            (installError.localizedDescription?:err.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
-                            showRepository:!success];
-                    });
-                }] resume];
-            }]];
-            if(owner.view.window) [owner presentViewController:confirm animated:YES completion:nil];
+            [owner afterUpdatePrompt:prompt perform:^{
+                [weakSelf presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
+                    message:success?@"已备份旧插件并安装新版本。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
+                    (installError.localizedDescription?:error.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
+                    showRepository:!success];
+            }];
         });
     }] resume];
 }
+- (void)offerUpdateRelease:(NSDictionary *)release automatic:(BOOL)automatic {
+    if(!FMHostUI() || ![self isSettingsRootVisible] || self.presentedViewController || self.checkingUpdate) return;
+    NSString *version=release[@"version"];
+    if(automatic) {
+        if(!self.automaticallyOfferedVersions) self.automaticallyOfferedVersions=[NSMutableSet set];
+        if([self.automaticallyOfferedVersions containsObject:version]) return;
+        [self.automaticallyOfferedVersions addObject:version];
+    }
+    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验并备份旧插件。安装完成后，请在 LC 原生 Tweaks 页面重新签名并重启相关应用。",release[@"notes"]];
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"发现微珠新版本 v%@",version]
+        message:message preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf=self;
+    __weak UIAlertController *weakAlert=alert;
+    __block BOOL handled=NO;
+    [alert addAction:[UIAlertAction actionWithTitle:@"跳过此版本" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        if(handled) return;handled=YES;
+        typeof(self) owner=weakSelf;
+        if(!owner || !FMHostUI()) return;
+        SetPref(@"skippedUpdateVersion",version);
+        NSError *saveError=[LCOrbitStorage lastError];
+        if(saveError || ![[HostDefaults() objectForKey:Pref(@"skippedUpdateVersion")] isEqual:version])
+            [owner afterUpdatePrompt:weakAlert perform:^{
+                [weakSelf presentUpdateResult:@"跳过未保存" message:@"无法保存跳过设置，请检查 LCOrbit 配置目录后重试。下次进入设置仍可能提示此版本。" showRepository:NO];
+            }];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"下载更新" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        if(handled) return;handled=YES;
+        [weakSelf downloadUpdateRelease:release prompt:weakAlert];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)tryAutomaticUpdatePrompt {
+    if(!FMHostUI() || ![self isSettingsRootVisible] || self.presentedViewController || self.checkingUpdate) return;
+    NSDictionary *release=[LCOrbitUpdateRelease validatedRelease:
+        [NSUserDefaults.standardUserDefaults objectForKey:FMUpdateCacheRelease] error:nil];
+    if(release) {
+        id skipped=[HostDefaults() objectForKey:Pref(@"skippedUpdateVersion")];
+        if([LCOrbitUpdateRelease shouldOfferRelease:release installedVersion:FM_MENU_VERSION
+            skippedVersion:[skipped isKindOfClass:NSString.class]?skipped:nil])
+            [self offerUpdateRelease:release automatic:YES];
+        return;
+    }
+    if(self.requestedAutomaticUpdate) return;
+    self.requestedAutomaticUpdate=YES;
+    self.checkingUpdate=YES;
+    __weak typeof(self) weakSelf=self;
+    FMFetchUpdateRelease(15,^(NSDictionary *fetched,NSError *error,NSUInteger sequence) {
+        dispatch_async(dispatch_get_main_queue(),^{
+            typeof(self) owner=weakSelf;
+            // Cache even if Settings was closed; only a currently visible
+            // root may offer it. Keep the checking guard during notification.
+            if(fetched) FMCacheUpdateRelease(fetched,sequence);
+            owner.checkingUpdate=NO;
+            [owner tryAutomaticUpdatePrompt];
+        });
+    });
+}
+- (void)checkForUpdates {
+    if(self.checkingUpdate) return;
+    self.checkingUpdate=YES;
+    self.updateStatusLabel.text=@"正在检查最新发布版…";
+    __weak typeof(self) weakSelf=self;
+    FMFetchUpdateRelease(15,^(NSDictionary *release,NSError *error,NSUInteger sequence) {
+        dispatch_async(dispatch_get_main_queue(),^{
+            typeof(self) owner=weakSelf;
+            NSDictionary *accepted=release?FMCacheUpdateRelease(release,sequence):nil;
+            owner.checkingUpdate=NO;
+            owner.updateStatusLabel.text=@"检查微珠最新发布版";
+            if(!owner || ![owner isSettingsRootVisible]) return;
+            if(!accepted) {
+                [owner presentUpdateResult:@"检查更新失败" message:error.localizedDescription?:@"无法获取 GitHub 最新发布信息。" showRepository:YES];
+            } else if(![LCOrbitUpdateRelease isNewerRelease:accepted thanVersion:FM_MENU_VERSION]) {
+                [owner presentUpdateResult:@"已是最新版本" message:[NSString stringWithFormat:@"当前 v%@，最新 v%@。",FM_MENU_VERSION,accepted[@"version"]] showRepository:NO];
+            } else if(!FMHostUI()) {
+                [owner presentUpdateResult:@"发现新版本" message:@"请返回 LC 主界面，在微珠设置中心安装更新。" showRepository:YES];
+            } else [owner offerUpdateRelease:accepted automatic:NO];
+        });
+    });
+}
 - (void)openApps {
     FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:@"apps"];
+    [self.navigationController pushViewController:detail animated:YES];
+}
+- (void)openGitHub {
+    if(!FMHostUI()) return;
+    FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:@"github"];
     [self.navigationController pushViewController:detail animated:YES];
 }
 - (void)openDiagnostics {
@@ -3187,7 +3328,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [apps.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:apps];
     if(FMHostUI()) {
-        UIControl *shared=[self navigationRow:@"插件管理中心" subtitle:@"按 App 分配、启停、备份和批量共享"
+        UIControl *shared=[self navigationRow:@"插件管理中心" subtitle:@"按 App 分配、启停和批量共享"
                                    symbol:@"square.stack.3d.up.fill"
                                badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
                                    action:@selector(openSharedTweaks)];
@@ -3226,6 +3367,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:checkRow];
+    if(FMHostUI()) {
+        UIControl *access=[self navigationRow:@"GitHub 访问" subtitle:@"账号、Token 与连接验证"
+            symbol:@"key.fill"
+            badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
+            action:@selector(openGitHub)];
+        [access.heightAnchor constraintEqualToConstant:65].active=YES;
+        [stack addArrangedSubview:access];
+    }
     UIControl *repository=[self navigationRow:@"GitHub 仓库"
         subtitle:@"github.com/dompling/LC-SS-widget-export"
         symbol:@"link"
@@ -3250,7 +3399,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     NSDictionary *titles=@{@"appearance":@"显示与外观",@"behavior":@"交互与切换",
-                           @"apps":@"应用管理",@"diagnostics":@"诊断与日志"};
+                           @"apps":@"应用管理",@"diagnostics":@"诊断与日志",@"github":@"GitHub 访问"};
     self.title=titles[self.sectionKey]?:@"设置";
     self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=[UIScrollView new];
@@ -3267,6 +3416,164 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     ]];
     self.contentScroll=scroll;
     [self rebuild];
+}
+- (BOOL)isGitHubPageVisible {
+    return FMHostUI() && [self.sectionKey isEqualToString:@"github"] && self.isViewLoaded &&
+        self.view.window && self.navigationController.topViewController==self &&
+        !self.isBeingDismissed && !self.navigationController.isBeingDismissed;
+}
+- (void)invalidateGitHubVerification {
+    self.githubGeneration++;
+    self.checkingGitHub=NO;
+    self.githubResult=nil;
+}
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    if([self.sectionKey isEqualToString:@"github"] &&
+       (self.isMovingFromParentViewController || self.navigationController.isBeingDismissed ||
+        self.navigationController.topViewController!=self)) [self invalidateGitHubVerification];
+}
+- (void)showGitHubMessage:(NSString *)message {
+    if(![self isGitHubPageVisible] || self.presentedViewController) return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"GitHub 访问"
+        message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)populateGitHub:(UIStackView *)stack {
+    if(!FMHostUI()) return;
+    FMManager *manager=[FMManager shared];
+    NSError *accountError=nil,*tokenError=nil;
+    NSString *account=[LCOrbitGitHub accountWithError:&accountError];
+    BOOL hasToken=[LCOrbitGitHub hasTokenWithError:&tokenError];
+    [manager section:@"访问配置" sub:@"账号可选，用于核对 Token 对应的用户。凭据仅保存在 LC 宿主钥匙串中。" in:stack];
+    UILabel *accountLabel=[manager label:[@"账号：" stringByAppendingString:account.length?account:@"未配置"]
+        size:14 weight:UIFontWeightRegular];
+    [stack addArrangedSubview:accountLabel];
+    UILabel *tokenLabel=[manager label:hasToken?@"Token：已保存":@"Token：未配置"
+        size:14 weight:UIFontWeightRegular];
+    [stack addArrangedSubview:tokenLabel];
+    if(accountError || tokenError) {
+        UILabel *failure=[manager label:@"无法读取钥匙串配置，请重新配置或清除后重试。"
+            size:13 weight:UIFontWeightRegular];
+        failure.textColor=FMThemeColor(FMColorSecondary);
+        [stack addArrangedSubview:failure];
+    }
+    NSArray *titles=@[@"编辑账号与 Token",self.checkingGitHub?@"正在验证连接…":@"验证连接",@"清除凭据"];
+    NSArray *icons=@[@"pencil",@"checkmark.shield",@"trash"];
+    NSArray *actions=@[NSStringFromSelector(@selector(editGitHubCredentials)),
+        NSStringFromSelector(@selector(verifyGitHubConnection)),NSStringFromSelector(@selector(clearGitHubCredentials))];
+    for(NSUInteger i=0;i<titles.count;i++) {
+        UIControl *row=(UIControl *)[manager rowForTitle:titles[i] icon:icons[i] height:54 action:NULL];
+        [row addTarget:self action:NSSelectorFromString(actions[i]) forControlEvents:UIControlEventTouchUpInside];
+        row.accessibilityLabel=titles[i];row.accessibilityTraits=UIAccessibilityTraitButton;
+        if(i==1) row.enabled=!self.checkingGitHub;
+        [manager addRow:row height:54 to:stack];
+    }
+    if(self.githubResult.length) {
+        UILabel *result=[manager label:self.githubResult size:13 weight:UIFontWeightRegular];
+        result.textColor=FMThemeColor(FMColorSecondary);
+        [stack addArrangedSubview:result];
+    }
+}
+- (void)editGitHubCredentials {
+    if(![self isGitHubPageVisible] || self.presentedViewController) return;
+    NSError *error=nil;
+    NSString *account=[LCOrbitGitHub accountWithError:&error];
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"GitHub 访问配置"
+        message:@"账号可以留空。Token 留空会保留已保存的 Token。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder=@"GitHub 账号（可选）";field.text=account?:@"";
+        field.autocapitalizationType=UITextAutocapitalizationTypeNone;
+        field.autocorrectionType=UITextAutocorrectionTypeNo;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder=@"Token（留空保留原值）";field.secureTextEntry=YES;
+        field.autocapitalizationType=UITextAutocapitalizationTypeNone;
+        field.autocorrectionType=UITextAutocorrectionTypeNo;
+        field.spellCheckingType=UITextSpellCheckingTypeNo;
+        field.textContentType=UITextContentTypePassword;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf=self;
+    __weak UIAlertController *weakAlert=alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        typeof(self) owner=weakSelf;UIAlertController *editor=weakAlert;
+        if(![owner isGitHubPageVisible] || !editor) return;
+        NSError *saveError=nil;
+        BOOL saved=[LCOrbitGitHub saveAccount:editor.textFields[0].text?:@""
+            token:editor.textFields[1].text?:@"" error:&saveError];
+        editor.textFields[1].text=@"";
+        if(saved) { [owner invalidateGitHubVerification];[owner rebuild]; }
+        else {
+            owner.githubResult=saveError.localizedDescription?:@"保存失败，原配置仍保留。请检查钥匙串权限后重试。";
+            [owner rebuild];
+        }
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)clearGitHubCredentials {
+    if(![self isGitHubPageVisible] || self.presentedViewController) return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"清除 GitHub 凭据？"
+        message:@"将删除已保存的账号与 Token，之后检查更新会使用匿名访问。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf=self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"清除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        typeof(self) owner=weakSelf;
+        if(![owner isGitHubPageVisible]) return;
+        NSError *error=nil;
+        if([LCOrbitGitHub clearCredentialsWithError:&error]) {
+            [owner invalidateGitHubVerification];[owner rebuild];
+        } else {
+            owner.githubResult=error.localizedDescription?:@"清除失败，原配置仍保留。请检查钥匙串权限后重试。";
+            [owner rebuild];
+        }
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)verifyGitHubConnection {
+    if(![self isGitHubPageVisible] || self.checkingGitHub || self.presentedViewController) return;
+    NSError *error=nil;
+    NSString *account=[LCOrbitGitHub accountWithError:&error];
+    if(error) { [self showGitHubMessage:error.localizedDescription];return; }
+    BOOL hasToken=[LCOrbitGitHub hasTokenWithError:&error];
+    if(error || !hasToken) {
+        [self showGitHubMessage:error.localizedDescription?:@"请先配置 Token，再验证连接。"];
+        return;
+    }
+    NSMutableURLRequest *request=[LCOrbitGitHub requestForURL:[NSURL URLWithString:@"https://api.github.com/user"]
+        timeout:15 error:&error];
+    if(!request) { [self showGitHubMessage:error.localizedDescription?:@"无法读取 GitHub 配置，请重新设置后重试。"];return; }
+    self.checkingGitHub=YES;self.githubResult=nil;
+    NSUInteger generation=++self.githubGeneration;
+    [self rebuild];
+    __weak typeof(self) weakSelf=self;
+    [LCOrbitGitHub performRequest:request completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure) {
+        dispatch_async(dispatch_get_main_queue(),^{
+            typeof(self) owner=weakSelf;
+            if(!owner || owner.githubGeneration!=generation) return;
+            owner.checkingGitHub=NO;
+            if(![owner isGitHubPageVisible]) return;
+            NSString *message=nil;
+            if(failure) message=@"连接 GitHub 失败，请检查网络后重试。";
+            else if(response.statusCode!=200) message=[LCOrbitGitHub messageForStatusCode:response.statusCode];
+            else {
+                id json=data.length?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+                id login=[json isKindOfClass:NSDictionary.class]?json[@"login"]:nil;
+                if(![login isKindOfClass:NSString.class] || ![login length] || [login length]>100)
+                    message=@"GitHub 返回的账号信息不完整，请稍后重试。";
+                else if(account.length && [account caseInsensitiveCompare:login]!=NSOrderedSame)
+                    message=@"Token 对应的账号与已配置账号不一致，请检查账号或 Token。";
+                else message=[NSString stringWithFormat:@"连接成功，当前账号：%@",login];
+            }
+            owner.githubResult=message;[owner rebuild];
+            // Editing or clearing while verification finishes must not
+            // interrupt that alert; the current result remains on the page.
+            if(!owner.presentedViewController) [owner showGitHubMessage:message];
+        });
+    }];
 }
 - (void)rebuild {
     if(!self.isViewLoaded || !self.contentScroll) return;
@@ -3288,7 +3595,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-32],
         [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-36]
     ]];
-    [[FMManager shared] populateSettingsCategory:self.sectionKey stack:stack];
+    if([self.sectionKey isEqualToString:@"github"]) [self populateGitHub:stack];
+    else [[FMManager shared] populateSettingsCategory:self.sectionKey stack:stack];
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.contentScroll!=scroll || !scroll.window) return;
         [scroll layoutIfNeeded];
