@@ -250,7 +250,7 @@ int main(int argc,const char **argv) {
             NSDictionary *privateGuest=Find([LCOrbitGuestService installedApps],@"folder",privateJIT);
             if(privateGuest) [LCOrbitTweakCenter assignPluginNames:@[] toGuest:privateGuest];
             Check(Info(privateJIT)[@"LCTweakFolder"]==nil,@"clearing an assignment works for JIT guest");
-            Check([Info(sharedJIT][@"LCTweakFolder"] hasPrefix:@"Orbit-"],@"clearing private assignment preserves shared namesake");
+            Check([Info(sharedJIT)[@"LCTweakFolder"] hasPrefix:@"Orbit-"],@"clearing private assignment preserves shared namesake");
             // Replacing and clearing app assignments must not retain old plugin snapshots.
             if(privateGuest) {
                 [LCOrbitTweakCenter assignPluginNames:@[@"B.dylib"] toGuest:privateGuest];
