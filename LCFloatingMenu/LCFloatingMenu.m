@@ -820,7 +820,14 @@ static id FMLayoutChangeObserver=nil;
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
 - (void)openSettingsInScene:(UIWindowScene *)scene;
 @end
-@implementation FMManager
+@implementation FMManager {
+    CGPoint _panStartPoint;
+    CGPoint _panOriginalCenter;
+    BOOL _panOriginalLeft;
+    CGFloat _panMaxInwardDist;
+    CGFloat _panMaxVerticalDist;
+    BOOL _panIsRepositioning;
+}
 + (instancetype)shared {
     static FMManager *m;
     static dispatch_once_t once;
@@ -1290,52 +1297,128 @@ static id FMLayoutChangeObserver=nil;
 }
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
-    if(g.state==UIGestureRecognizerStateBegan || g.state==UIGestureRecognizerStateChanged) {
+    if(g.state==UIGestureRecognizerStateBegan) {
+        _panStartPoint=p;
+        _panOriginalCenter=self.orb.center;
+        _panOriginalLeft=self.left;
+        _panMaxInwardDist=0;
+        _panMaxVerticalDist=0;
+        _panIsRepositioning=NO;
         [self cancelOrbFade];
         self.orbFaded=NO;
-        self.orb.alpha=self.orbNormalAlpha?:0.72;
-        CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
-        CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
-        UIEdgeInsets safe=self.window.safeAreaInsets;
-        CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
-        CGFloat minY=MAX(60,safe.top+6)+orbH/2;
-        CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
-        self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
-        if(g.state==UIGestureRecognizerStateBegan)
-            FMAnimateOrbShoulders(self.orb,self.left,1,YES);
-        if(g.state==UIGestureRecognizerStateChanged) self.orb.alpha=1;
-    } else if(g.state==UIGestureRecognizerStateEnded) {
-        self.left=self.orb.center.x<self.window.bounds.size.width*.5;
-        ((FMHitButton *)self.orb).docksLeft=self.left;
-        self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
-        SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
-        if(UIAccessibilityIsReduceMotionEnabled()) {
-            self.orb.frame=[self orbFrame];
-            [self draw];
-            [self scheduleOrbFade];
+        self.orb.alpha=1;
+        FMAnimateOrbShoulders(self.orb,self.left,1,YES);
+    } else if(g.state==UIGestureRecognizerStateChanged) {
+        [self cancelOrbFade];
+        self.orbFaded=NO;
+        self.orb.alpha=1;
+        
+        CGFloat inwardDist = _panOriginalLeft ? (p.x - _panStartPoint.x) : (_panStartPoint.x - p.x);
+        CGFloat verticalDist = fabs(p.y - _panStartPoint.y);
+        CGFloat totalDist = hypot(p.x - _panStartPoint.x, p.y - _panStartPoint.y);
+        
+        if(inwardDist > _panMaxInwardDist) _panMaxInwardDist = inwardDist;
+        if(verticalDist > _panMaxVerticalDist) _panMaxVerticalDist = verticalDist;
+        
+        // 判定长远拖拽意图：垂直位移超过 25pt（明显上下调整微珠位置），或总位移超过 60pt（远距离搬移），或反向外拉
+        if(!_panIsRepositioning) {
+            if(verticalDist > 25.0 || totalDist > 60.0 || inwardDist < -18.0) {
+                _panIsRepositioning = YES;
+            }
+        }
+        
+        if(_panIsRepositioning) {
+            // 长远拖拽：微珠位置跟随手指
+            CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
+            CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
+            UIEdgeInsets safe=self.window.safeAreaInsets;
+            CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
+            CGFloat minY=MAX(60,safe.top+6)+orbH/2;
+            CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
+            self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
         } else {
-            UIButton *dragged=self.orb;
-            [UIView animateWithDuration:.34 delay:0 usingSpringWithDamping:.78
-                initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
-                animations:^{dragged.frame=[self orbFrame];}
-                completion:^(BOOL finished){
-                    if(!finished || self.orb!=dragged) return;
-                    // The neutral capsule is mirror-invariant. Once the
-                    // snap finishes, grow the destination-side shoulders.
-                    FMAnimateOrbShoulders(dragged,self.left,0,YES);
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.25*NSEC_PER_SEC),
-                        dispatch_get_main_queue(),^{
-                            if(self.orb==dragged) {
-                                [self draw];
-                                [self scheduleOrbFade];
-                            }
-                        });
-                }];
-            [self scheduleOrbFade];
+            // 短拖拽/轻拉抽屉：微珠呈现高质感的 iOS 弹性阻尼轻拉（Rubber-banding）
+            CGFloat rubberX = _panOriginalCenter.x + (_panOriginalLeft ? (inwardDist * 0.45) : (-inwardDist * 0.45));
+            CGFloat rubberY = _panOriginalCenter.y + (p.y - _panStartPoint.y) * 0.2;
+            self.orb.center = CGPointMake(rubberX, rubberY);
+        }
+    } else if(g.state==UIGestureRecognizerStateEnded) {
+        CGPoint v = CGPointZero;
+        @try {
+            v = [g velocityInView:self.overlayView];
+        } @catch(id e) {}
+        CGFloat inwardV = _panOriginalLeft ? v.x : -v.x;
+        CGFloat finalInwardDist = _panOriginalLeft ? (p.x - _panStartPoint.x) : (_panStartPoint.x - p.x);
+        CGFloat finalVerticalDist = fabs(p.y - _panStartPoint.y);
+        CGFloat finalTotalDist = hypot(p.x - _panStartPoint.x, p.y - _panStartPoint.y);
+        
+        // 判定短拖拽/轻拉展开面板：
+        // 1. 快速向内轻甩（Flick）；或
+        // 2. 向内短距离拖拽超过 14pt，且垂直位移较小、总距离未达到长远拖拽；或
+        // 3. 极微小点击释放
+        BOOL isShortDragToOpen = NO;
+        if(!_panIsRepositioning) {
+            if(inwardV > 200.0 && inwardV > fabs(v.y) * 0.7) {
+                isShortDragToOpen = YES;
+            } else if(finalInwardDist >= 14.0 && finalInwardDist >= finalVerticalDist * 0.65 && finalTotalDist < 60.0) {
+                isShortDragToOpen = YES;
+            } else if(finalTotalDist < 6.0) {
+                isShortDragToOpen = YES;
+            }
+        }
+        
+        if(isShortDragToOpen) {
+            // 短拖拽与点击功能一致：微珠回原位，立即触发高质感 iOS Spring 弹簧拉出抽屉动画
+            self.orb.center = _panOriginalCenter;
+            self.left = _panOriginalLeft;
+            ((FMHitButton *)self.orb).docksLeft = self.left;
+            FMAnimateOrbShoulders(self.orb, self.left, 0, NO);
+            if(!self.isOpen) {
+                [self toggle];
+            }
+        } else {
+            // 长远拖拽：移动靠边位置，执行吸附与持久化
+            self.left=self.orb.center.x<self.window.bounds.size.width*.5;
+            ((FMHitButton *)self.orb).docksLeft=self.left;
+            self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
+            SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
+            if(UIAccessibilityIsReduceMotionEnabled()) {
+                self.orb.frame=[self orbFrame];
+                [self draw];
+                [self scheduleOrbFade];
+            } else {
+                UIButton *dragged=self.orb;
+                [UIView animateWithDuration:.34 delay:0 usingSpringWithDamping:.78
+                    initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
+                    animations:^{dragged.frame=[self orbFrame];}
+                    completion:^(BOOL finished){
+                        if(!finished || self.orb!=dragged) return;
+                        FMAnimateOrbShoulders(dragged,self.left,0,YES);
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.25*NSEC_PER_SEC),
+                            dispatch_get_main_queue(),^{
+                                if(self.orb==dragged) {
+                                    [self draw];
+                                    [self scheduleOrbFade];
+                                }
+                            });
+                    }];
+                [self scheduleOrbFade];
+            }
         }
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
-        [self draw];
-        [self scheduleOrbFade];
+        if(!_panIsRepositioning && self.orb) {
+            [UIView animateWithDuration:0.24 delay:0 usingSpringWithDamping:0.85
+                initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState
+                animations:^{
+                    self.orb.center = _panOriginalCenter;
+                } completion:^(BOOL finished) {
+                    FMAnimateOrbShoulders(self.orb, self.left, 0, YES);
+                    [self scheduleOrbFade];
+                }];
+        } else {
+            [self draw];
+            [self scheduleOrbFade];
+        }
     }
 }
 - (void)toggle {
