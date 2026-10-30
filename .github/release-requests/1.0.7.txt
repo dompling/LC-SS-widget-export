@@ -1,0 +1,7 @@
+LCFloatingMenu v1.0.7 formal release request
+
+Version: 1.0.7
+Source: lcss-original, consolidated orientation docking and iOS native-settings changes from PR #6
+Validation: https://github.com/dompling/LC-SS-widget-export/actions/runs/40986495096 (success)
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.7.md (combined 1.0.7 and 1.0.8)
+Publish: verify and compile arm64 LCFloatingMenu.dylib, create annotated 1.0.7 tag, GitHub Release, and refresh fm-latest.
