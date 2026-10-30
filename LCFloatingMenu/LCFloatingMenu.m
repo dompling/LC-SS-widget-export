@@ -444,6 +444,276 @@ static CGFloat FMReadableRowAlpha(void) {
     if(UIAccessibilityDarkerSystemColorsEnabled()) return FMClearGlassEnabled()?.72:.90;
     return FMClearGlassEnabled()?(FMMenuDark()?.55:.52):.84;
 }
+static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
+    Method origMethod = class_getInstanceMethod(cls, orig);
+    Method swizMethod = class_getInstanceMethod(cls, swiz);
+    if(!origMethod || !swizMethod) return;
+    if(class_addMethod(cls, orig, method_getImplementation(swizMethod), method_getTypeEncoding(swizMethod))) {
+        class_replaceMethod(cls, swiz, method_getImplementation(origMethod), method_getTypeEncoding(origMethod));
+    } else {
+        method_exchangeImplementations(origMethod, swizMethod);
+    }
+}
+
+static void FMEnsureWindowOrientationLayout(void);
+
+static UIInterfaceOrientationMask FMCurrentSupportedOrientations(UIViewController *vc) {
+    if(!BoolPref(@"unlockOrientation", YES)) {
+        return UIInterfaceOrientationMaskPortrait;
+    }
+    // 解锁向左横屏与竖屏（单向横屏，杜绝向右横屏白屏）
+    return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+}
+
+@interface UIViewController (FMOrientationUnlock)
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations;
+- (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations;
+- (UIInterfaceOrientationMask)fm__supportedInterfaceOrientations;
+- (UIInterfaceOrientation)fm_preferredInterfaceOrientationForPresentation;
+- (BOOL)fm_shouldAutorotate;
+- (BOOL)fm_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation;
+- (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator;
+@end
+
+@implementation UIViewController (FMOrientationUnlock)
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations {
+    return FMCurrentSupportedOrientations(self);
+}
+- (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations {
+    return FMCurrentSupportedOrientations(self);
+}
+- (UIInterfaceOrientationMask)fm__supportedInterfaceOrientations {
+    return FMCurrentSupportedOrientations(self);
+}
+- (UIInterfaceOrientation)fm_preferredInterfaceOrientationForPresentation {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        UIDeviceOrientation dev = UIDevice.currentDevice.orientation;
+        if(dev == UIDeviceOrientationLandscapeLeft) {
+            return UIInterfaceOrientationLandscapeRight;
+        }
+        return UIInterfaceOrientationPortrait;
+    }
+    return [self fm_preferredInterfaceOrientationForPresentation];
+}
+- (BOOL)fm_shouldAutorotate {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return YES;
+    }
+    return [self fm_shouldAutorotate];
+}
+- (BOOL)fm_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return (orientation == UIInterfaceOrientationPortrait || orientation == UIInterfaceOrientationLandscapeRight);
+    }
+    return [self fm_shouldAutorotateToInterfaceOrientation:orientation];
+}
+- (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [self fm_viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if(BoolPref(@"unlockOrientation", YES)) {
+        if(coordinator) {
+            [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+                FMEnsureWindowOrientationLayout();
+            } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+                FMEnsureWindowOrientationLayout();
+            }];
+        } else {
+            FMEnsureWindowOrientationLayout();
+        }
+    }
+}
+@end
+
+static UIInterfaceOrientationMask FMHooked_appDelegate_supportedInterfaceOrientations(id self, SEL _cmd, UIApplication *application, UIWindow *window) {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+    }
+    SEL origSel = NSSelectorFromString(@"fm_orig_supportedInterfaceOrientationsForWindow:");
+    if([self respondsToSelector:origSel]) {
+        return ((UIInterfaceOrientationMask(*)(id, SEL, id, id))objc_msgSend)(self, origSel, application, window);
+    }
+    return UIInterfaceOrientationMaskPortrait;
+}
+
+static void FMHookAppDelegate(id<UIApplicationDelegate> delegate) {
+    if(!delegate) return;
+    Class cls = [delegate class];
+    SEL sel = @selector(application:supportedInterfaceOrientationsForWindow:);
+    SEL origSel = NSSelectorFromString(@"fm_orig_supportedInterfaceOrientationsForWindow:");
+    if([cls instancesRespondToSelector:origSel]) return;
+    Method origMethod = class_getInstanceMethod(cls, sel);
+    if(origMethod) {
+        class_addMethod(cls, origSel, method_getImplementation(origMethod), method_getTypeEncoding(origMethod));
+        method_setImplementation(origMethod, (IMP)FMHooked_appDelegate_supportedInterfaceOrientations);
+    } else {
+        class_addMethod(cls, sel, (IMP)FMHooked_appDelegate_supportedInterfaceOrientations, "Q@:@@");
+    }
+}
+
+@interface UIApplication (FMOrientationUnlock)
+- (void)fm_setDelegate:(id<UIApplicationDelegate>)delegate;
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientationsForWindow:(UIWindow *)window;
+@end
+
+@implementation UIApplication (FMOrientationUnlock)
+- (void)fm_setDelegate:(id<UIApplicationDelegate>)delegate {
+    if(delegate) FMHookAppDelegate(delegate);
+    [self fm_setDelegate:delegate];
+}
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+    }
+    return [self fm_supportedInterfaceOrientationsForWindow:window];
+}
+@end
+
+static void FMEnsureWindowOrientationLayout(void) {
+    if(!BoolPref(@"unlockOrientation", YES)) return;
+    static BOOL isEnsuring = NO;
+    if(isEnsuring) return;
+    isEnsuring = YES;
+    
+    @try {
+        UIScreen *screen = UIScreen.mainScreen;
+        if(!screen) { isEnsuring = NO; return; }
+        CGSize screenSize = screen.bounds.size;
+        CGFloat portraitW = MIN(screenSize.width, screenSize.height);
+        CGFloat portraitH = MAX(screenSize.width, screenSize.height);
+        
+        BOOL isLandscape = NO;
+        if(@available(iOS 13.0, *)) {
+            for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+                if([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive) {
+                    UIInterfaceOrientation orient = ((UIWindowScene *)s).interfaceOrientation;
+                    if(orient == UIInterfaceOrientationLandscapeRight) {
+                        isLandscape = YES;
+                        break;
+                    }
+                }
+            }
+        }
+        if(!isLandscape) {
+            UIDeviceOrientation dev = UIDevice.currentDevice.orientation;
+            if(dev == UIDeviceOrientationLandscapeLeft) {
+                isLandscape = YES;
+            }
+        }
+        
+        // 关键防护：竖屏状态下（包括应用启动）绝对不干涉 Window 布局，直接返回，杜绝死循环
+        if(!isLandscape) {
+            isEnsuring = NO;
+            return;
+        }
+        
+        CGRect targetBounds = CGRectMake(0, 0, portraitH, portraitW);
+        CGFloat targetW = targetBounds.size.width;
+        CGFloat targetH = targetBounds.size.height;
+        
+        NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
+        if(@available(iOS 13.0, *)) {
+            for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+                if([s isKindOfClass:UIWindowScene.class]) {
+                    [windows addObjectsFromArray:((UIWindowScene *)s).windows];
+                }
+            }
+        }
+        if(windows.count == 0) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [windows addObjectsFromArray:UIApplication.sharedApplication.windows];
+#pragma clang diagnostic pop
+        }
+        
+        for(UIWindow *w in windows) {
+            if(w.windowLevel >= UIWindowLevelAlert) continue;
+            if([w isKindOfClass:NSClassFromString(@"LCOrbitOverlayWindow")]) continue;
+            if(fabs(w.bounds.size.width - targetW) > 1.0 || fabs(w.bounds.size.height - targetH) > 1.0) {
+                w.frame = targetBounds;
+                w.bounds = targetBounds;
+                UIViewController *root = w.rootViewController;
+                if(root && root.isViewLoaded) {
+                    if([root isKindOfClass:NSClassFromString(@"LCOrbitOverlayController")]) continue;
+                    if([root isKindOfClass:NSClassFromString(@"FMSettingsRootController")]) continue;
+                    root.view.frame = targetBounds;
+                    root.view.bounds = targetBounds;
+                    [root.view setNeedsLayout];
+                }
+            }
+        }
+    } @catch(NSException *e) {
+    }
+    
+    isEnsuring = NO;
+}
+
+@interface UIWindow (FMOrientationLayout)
+- (void)fm_layoutSubviews;
+@end
+
+@implementation UIWindow (FMOrientationLayout)
+- (void)fm_layoutSubviews {
+    [self fm_layoutSubviews];
+    if(!BoolPref(@"unlockOrientation", YES) || self.windowLevel >= UIWindowLevelAlert) return;
+    if([self isKindOfClass:NSClassFromString(@"LCOrbitOverlayWindow")]) return;
+    
+    BOOL isLandscape = NO;
+    if(@available(iOS 13.0, *)) {
+        UIWindowScene *scene = self.windowScene;
+        if(scene && scene.interfaceOrientation == UIInterfaceOrientationLandscapeRight) {
+            isLandscape = YES;
+        }
+    }
+    if(!isLandscape && UIDevice.currentDevice.orientation == UIDeviceOrientationLandscapeLeft) {
+        isLandscape = YES;
+    }
+    if(!isLandscape) return; // 竖屏下完全不触发重排
+    
+    FMEnsureWindowOrientationLayout();
+}
+@end
+
+static void FMInstallOrientationHooks(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+        
+        FMSwizzle(UIViewController.class, @selector(supportedInterfaceOrientations), @selector(fm_supportedInterfaceOrientations));
+        SEL dunder = NSSelectorFromString(@"__supportedInterfaceOrientations");
+        if(class_getInstanceMethod(UIViewController.class, dunder)) {
+            FMSwizzle(UIViewController.class, dunder, @selector(fm___supportedInterfaceOrientations));
+        }
+        SEL single = NSSelectorFromString(@"_supportedInterfaceOrientations");
+        if(class_getInstanceMethod(UIViewController.class, single)) {
+            FMSwizzle(UIViewController.class, single, @selector(fm__supportedInterfaceOrientations));
+        }
+        FMSwizzle(UIViewController.class, @selector(preferredInterfaceOrientationForPresentation), @selector(fm_preferredInterfaceOrientationForPresentation));
+        FMSwizzle(UIViewController.class, @selector(shouldAutorotate), @selector(fm_shouldAutorotate));
+        SEL shouldTo = NSSelectorFromString(@"shouldAutorotateToInterfaceOrientation:");
+        if(class_getInstanceMethod(UIViewController.class, shouldTo)) {
+            FMSwizzle(UIViewController.class, shouldTo, @selector(fm_shouldAutorotateToInterfaceOrientation:));
+        }
+        FMSwizzle(UIViewController.class, @selector(viewWillTransitionToSize:withTransitionCoordinator:), @selector(fm_viewWillTransitionToSize:withTransitionCoordinator:));
+        
+        FMSwizzle(UIWindow.class, @selector(layoutSubviews), @selector(fm_layoutSubviews));
+        
+        FMSwizzle(UIApplication.class, @selector(setDelegate:), @selector(fm_setDelegate:));
+        FMSwizzle(UIApplication.class, @selector(supportedInterfaceOrientationsForWindow:), @selector(fm_supportedInterfaceOrientationsForWindow:));
+        if(UIApplication.sharedApplication.delegate) {
+            FMHookAppDelegate(UIApplication.sharedApplication.delegate);
+        }
+        
+        [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            FMEnsureWindowOrientationLayout();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                FMEnsureWindowOrientationLayout();
+            });
+        }];
+        [NSNotificationCenter.defaultCenter addObserverForName:UIWindowDidBecomeVisibleNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            FMEnsureWindowOrientationLayout();
+        }];
+    });
+}
+
 static void FMApplyNavigationTheme(UINavigationController *nav) {
     if(!nav) return;
     UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
@@ -634,7 +904,14 @@ static id FMLayoutChangeObserver=nil;
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
 - (void)openSettingsInScene:(UIWindowScene *)scene;
 @end
-@implementation FMManager
+@implementation FMManager {
+    CGPoint _panStartPoint;
+    CGPoint _panOriginalCenter;
+    BOOL _panOriginalLeft;
+    CGFloat _panMaxInwardDist;
+    CGFloat _panMaxVerticalDist;
+    BOOL _panIsRepositioning;
+}
 + (instancetype)shared {
     static FMManager *m;
     static dispatch_once_t once;
@@ -1039,6 +1316,9 @@ static id FMLayoutChangeObserver=nil;
     hold.minimumPressDuration=.55;
     [button addGestureRecognizer:hold];
     UIPanGestureRecognizer *pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
+    pan.delaysTouchesBegan = NO;
+    pan.delaysTouchesEnded = NO;
+    pan.cancelsTouchesInView = YES;
     [button addGestureRecognizer:pan];
     [self.overlayView addSubview:button];
     self.orb=button;
@@ -1083,10 +1363,27 @@ static id FMLayoutChangeObserver=nil;
 }
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
-    if(g.state==UIGestureRecognizerStateBegan || g.state==UIGestureRecognizerStateChanged) {
+    if(g.state==UIGestureRecognizerStateBegan) {
+        _panStartPoint=p;
+        _panOriginalCenter=self.orb.center;
+        _panOriginalLeft=self.left;
+        _panMaxInwardDist=0;
+        _panMaxVerticalDist=0;
         [self cancelOrbFade];
         self.orbFaded=NO;
-        self.orb.alpha=self.orbNormalAlpha?:0.72;
+        self.orb.alpha=1;
+        FMAnimateOrbShoulders(self.orb,self.left,1,YES);
+    } else if(g.state==UIGestureRecognizerStateChanged) {
+        [self cancelOrbFade];
+        self.orbFaded=NO;
+        self.orb.alpha=1;
+        
+        CGFloat inwardDist = _panOriginalLeft ? (p.x - _panStartPoint.x) : (_panStartPoint.x - p.x);
+        CGFloat verticalDist = fabs(p.y - _panStartPoint.y);
+        if(inwardDist > _panMaxInwardDist) _panMaxInwardDist = inwardDist;
+        if(verticalDist > _panMaxVerticalDist) _panMaxVerticalDist = verticalDist;
+        
+        // 极致灵敏：拖拽过程中 100% 毫秒级紧贴手指，零延迟、零卡滞
         CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
         CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
         UIEdgeInsets safe=self.window.safeAreaInsets;
@@ -1094,37 +1391,66 @@ static id FMLayoutChangeObserver=nil;
         CGFloat minY=MAX(60,safe.top+6)+orbH/2;
         CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
         self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
-        if(g.state==UIGestureRecognizerStateBegan)
-            FMAnimateOrbShoulders(self.orb,self.left,1,YES);
-        if(g.state==UIGestureRecognizerStateChanged) self.orb.alpha=1;
     } else if(g.state==UIGestureRecognizerStateEnded) {
-        self.left=self.orb.center.x<self.window.bounds.size.width*.5;
-        ((FMHitButton *)self.orb).docksLeft=self.left;
-        self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
-        SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
-        if(UIAccessibilityIsReduceMotionEnabled()) {
-            self.orb.frame=[self orbFrame];
-            [self draw];
-            [self scheduleOrbFade];
+        CGPoint v = CGPointZero;
+        @try {
+            v = [g velocityInView:self.overlayView];
+        } @catch(id e) {}
+        CGFloat inwardV = _panOriginalLeft ? v.x : -v.x;
+        CGFloat finalInwardDist = _panOriginalLeft ? (p.x - _panStartPoint.x) : (_panStartPoint.x - p.x);
+        CGFloat finalVerticalDist = fabs(p.y - _panStartPoint.y);
+        CGFloat finalTotalDist = hypot(p.x - _panStartPoint.x, p.y - _panStartPoint.y);
+        
+        // 判定短拖拽/轻拉展开面板（像拉动把手一样顺手轻拉/轻甩即开）：
+        // 1. 向内轻甩：有明确向内速度（inwardV > 160.0），垂直位移不大于 60pt；
+        // 2. 短距离拖拽：向内位移 >= 12pt，垂直位移 < 50pt，且水平没有跨过半个屏幕（< 120pt）；
+        // 3. 极短触碰（< 6pt，等同于点击）。
+        BOOL isShortDragToOpen = NO;
+        if(inwardV > 160.0 && inwardV > fabs(v.y) * 0.6) {
+            if(finalVerticalDist < 60.0) isShortDragToOpen = YES;
+        } else if(finalInwardDist >= 12.0 && finalVerticalDist < 50.0 && finalTotalDist < 120.0) {
+            isShortDragToOpen = YES;
+        } else if(finalTotalDist < 6.0) {
+            isShortDragToOpen = YES;
+        }
+        
+        if(isShortDragToOpen) {
+            // 短拖拽与点击功能一致：微珠回原位，立即触发高质感 iOS Spring 弹簧拉出抽屉动画
+            self.orb.center = _panOriginalCenter;
+            self.left = _panOriginalLeft;
+            ((FMHitButton *)self.orb).docksLeft = self.left;
+            FMAnimateOrbShoulders(self.orb, self.left, 0, NO);
+            if(!self.isOpen) {
+                [self toggle];
+            }
         } else {
-            UIButton *dragged=self.orb;
-            [UIView animateWithDuration:.34 delay:0 usingSpringWithDamping:.78
-                initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
-                animations:^{dragged.frame=[self orbFrame];}
-                completion:^(BOOL finished){
-                    if(!finished || self.orb!=dragged) return;
-                    // The neutral capsule is mirror-invariant. Once the
-                    // snap finishes, grow the destination-side shoulders.
-                    FMAnimateOrbShoulders(dragged,self.left,0,YES);
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.25*NSEC_PER_SEC),
-                        dispatch_get_main_queue(),^{
-                            if(self.orb==dragged) {
-                                [self draw];
-                                [self scheduleOrbFade];
-                            }
-                        });
-                }];
-            [self scheduleOrbFade];
+            // 长远拖拽：移动靠边位置，执行吸附与持久化
+            self.left=self.orb.center.x<self.window.bounds.size.width*.5;
+            ((FMHitButton *)self.orb).docksLeft=self.left;
+            self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
+            SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
+            if(UIAccessibilityIsReduceMotionEnabled()) {
+                self.orb.frame=[self orbFrame];
+                [self draw];
+                [self scheduleOrbFade];
+            } else {
+                UIButton *dragged=self.orb;
+                [UIView animateWithDuration:.34 delay:0 usingSpringWithDamping:.78
+                    initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
+                    animations:^{dragged.frame=[self orbFrame];}
+                    completion:^(BOOL finished){
+                        if(!finished || self.orb!=dragged) return;
+                        FMAnimateOrbShoulders(dragged,self.left,0,YES);
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.25*NSEC_PER_SEC),
+                            dispatch_get_main_queue(),^{
+                                if(self.orb==dragged) {
+                                    [self draw];
+                                    [self scheduleOrbFade];
+                                }
+                            });
+                    }];
+                [self scheduleOrbFade];
+            }
         }
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         [self draw];
@@ -1969,6 +2295,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [self addRow:mode height:38 to:s];
             [self spacer:s size:14];
         }
+        [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，畅享短视频全屏播放。" in:s];
+        [self settingSwitch:s title:@"开启向左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
+        [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
         [self settingSwitch:s title:@"自动淡化" key:@"idleFade" defaultValue:YES tag:21];
@@ -2650,6 +2979,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
         case 20:key=@"recentAppsFirst";break;
+        case 22:key=@"unlockOrientation";break;
         case 21: {
             key=@"idleFade";
             if(!sw.isOn) {
@@ -2786,6 +3116,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"recentAppsFirst",@NO);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
     SetPref(@"appearanceMode",@(0));
+    SetPref(@"unlockOrientation",@YES);
     for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth"]) {
         [HostDefaults() removeObjectForKey:Pref(key)];
     }
@@ -3728,6 +4059,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 @end
 void LCFloatingMenuRegisterWithOrbit(LCOrbitCore *core) {
+    FMInstallOrientationHooks();
     [core registerModule:[LCFloatingMenuModule new]];
     [LCOrbitHostSettings installWithOpenSettings:^(UIWindowScene *scene) { [[FMManager shared] openSettingsInScene:scene]; }];
 }
