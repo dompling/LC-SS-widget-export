@@ -24,7 +24,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.6"
+#define FM_MENU_VERSION @"1.0.8"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -211,6 +211,9 @@ static UIColor *FMThemeColor(FMColorRole role) {
     return surface;
 }
 static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
+static UIColor *FMSwitchGreen(void) {
+    return [UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0];
+}
 static CGFloat FMOrbScale(void) {
     return Clamp(FloatPref(@"orbScale",Clamp(FloatPref(@"orbWidth",12)/12.,.70,1.90)),.70,1.90);
 }
@@ -466,6 +469,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)rebuild;
 @end
 
+static id FMOrientationObserver=nil;
+static id FMLayoutChangeObserver=nil;
+
 @interface FMManager : NSObject <UIScrollViewDelegate>
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) UIView *overlayView;
@@ -610,6 +616,18 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
             [weakSelf wakeOrb];
         }];
     }
+    if(!FMOrientationObserver) {
+        __weak typeof(self) weakSelf=self;
+        FMOrientationObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            [weakSelf handleOrientationOrLayoutChange];
+        }];
+    }
+    if(!FMLayoutChangeObserver) {
+        __weak typeof(self) weakSelf=self;
+        FMLayoutChangeObserver=[NSNotificationCenter.defaultCenter addObserverForName:@"LCOrbitOverlayLayoutDidChangeNotification" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            [weakSelf handleOrientationOrLayoutChange];
+        }];
+    }
     FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu context=%@",
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
@@ -622,13 +640,36 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     }
     [self checkOrbUpdateIfNeeded];
 }
+- (void)handleOrientationOrLayoutChange {
+    [self refreshLayoutForOrientation];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.12*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        [self refreshLayoutForOrientation];
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        [self refreshLayoutForOrientation];
+    });
+}
+- (void)refreshLayoutForOrientation {
+    if(!self.window) return;
+    UIWindowScene *scene=self.window.windowScene?:[self foregroundScene];
+    if(!scene) return;
+    CGRect sceneBounds=scene.coordinateSpace.bounds;
+    if(!isfinite(sceneBounds.size.width) || !isfinite(sceneBounds.size.height) ||
+       sceneBounds.size.width<=0 || sceneBounds.size.height<=0) return;
+    [self.orbitContext.overlays updateFrame];
+    if(self.settingsWindow) {
+        self.settingsWindow.frame=sceneBounds;
+        [self updateSettingsContent];
+    } else {
+        [self draw];
+    }
+}
 - (CGFloat)orbWidth { return 16*FMOrbScale(); }
 - (CGFloat)orbHeight { return 72*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
-    UIEdgeInsets safe=self.window.safeAreaInsets;
-    CGFloat x=self.left?safe.left:b.size.width-safe.right-w;
+    CGFloat x=self.left?0:b.size.width-w;
     CGFloat top=MAX(25,self.window.safeAreaInsets.top+6);
     CGFloat bottom=MAX(24,self.window.safeAreaInsets.bottom+8);
     CGFloat latest=b.size.height-h-bottom;
@@ -986,7 +1027,7 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
         CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
         UIEdgeInsets safe=self.window.safeAreaInsets;
-        CGFloat minX=safe.left+orbW*.5,maxX=MAX(minX,w-safe.right-orbW*.5);
+        CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
         CGFloat minY=MAX(60,safe.top+6)+orbH/2;
         CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
         self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
@@ -2016,7 +2057,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UISwitch *sw=[UISwitch new]; sw.on=BoolPref(key,def); sw.tag=tag;
     if(tag==19) sw.enabled=[[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"];
     sw.translatesAutoresizingMaskIntoConstraints=NO;
-    sw.onTintColor=FMAccent();
+    sw.onTintColor=FMSwitchGreen();
     [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     [row addSubview:sw];
     [NSLayoutConstraint activateConstraints:@[
@@ -2439,7 +2480,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if(showsAutoPiP) {
             UISwitch *control=[UISwitch new];
             control.translatesAutoresizingMaskIntoConstraints=NO;
-            control.onTintColor=FMAccent();
+            control.onTintColor=FMSwitchGreen();
             control.on=[LCOrbitMultitask automaticPiPEnabledForGuest:app];
             NSString *title=app[@"title"]?:app[@"path"]?:@"App";
             control.accessibilityLabel=[title stringByAppendingString:@"，离开 LC 自动画中画"];
@@ -2633,33 +2674,48 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)appendResetStyleRow:(UIStackView *)stack {
     UIView *row=[UIView new];
     row.backgroundColor=FMThemeColor(FMColorSurface);
-    row.layer.cornerRadius=13;
-    UIControl *button=[[UIControl alloc] initWithFrame:CGRectMake(0,0,280,54)];
+    row.layer.cornerRadius=16;
+    UIControl *button=[UIControl new];
     button.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:button];
+    
+    UIView *badge=[UIView new];
+    badge.translatesAutoresizingMaskIntoConstraints=NO;
+    badge.layer.cornerRadius=8;
+    badge.layer.masksToBounds=YES;
+    badge.backgroundColor=[UIColor colorWithRed:255/255.0 green:149/255.0 blue:0/255.0 alpha:1.0];
+    [button addSubview:badge];
+    
     UIImageView *symbol=[[UIImageView alloc] initWithImage:
-        [UIImage systemImageNamed:@"arrow.counterclockwise"]];
+        [[UIImage systemImageNamed:@"arrow.counterclockwise"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
     symbol.translatesAutoresizingMaskIntoConstraints=NO;
-    symbol.tintColor=FMAccent();
-    [button addSubview:symbol];
-    UILabel *label=[self label:@"恢复默认设置" size:14 weight:UIFontWeightMedium];
+    symbol.tintColor=UIColor.whiteColor;
+    symbol.contentMode=UIViewContentModeScaleAspectFit;
+    [badge addSubview:symbol];
+    
+    UILabel *label=[self label:@"恢复默认设置" size:16 weight:UIFontWeightMedium];
     label.translatesAutoresizingMaskIntoConstraints=NO;
     [button addSubview:label];
+    
     [NSLayoutConstraint activateConstraints:@[
         [button.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
         [button.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
         [button.topAnchor constraintEqualToAnchor:row.topAnchor],
         [button.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
-        [symbol.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:15],
-        [symbol.centerYAnchor constraintEqualToAnchor:button.centerYAnchor],
-        [symbol.widthAnchor constraintEqualToConstant:20],
-        [symbol.heightAnchor constraintEqualToConstant:20],
-        [label.leadingAnchor constraintEqualToAnchor:symbol.trailingAnchor constant:12],
+        [badge.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:14],
+        [badge.centerYAnchor constraintEqualToAnchor:button.centerYAnchor],
+        [badge.widthAnchor constraintEqualToConstant:32],
+        [badge.heightAnchor constraintEqualToConstant:32],
+        [symbol.centerXAnchor constraintEqualToAnchor:badge.centerXAnchor],
+        [symbol.centerYAnchor constraintEqualToAnchor:badge.centerYAnchor],
+        [symbol.widthAnchor constraintEqualToConstant:19],
+        [symbol.heightAnchor constraintEqualToConstant:19],
+        [label.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:13],
         [label.centerYAnchor constraintEqualToAnchor:button.centerYAnchor]
     ]];
     button.accessibilityLabel=@"恢复默认设置";
     [button addTarget:self action:@selector(resetStyle) forControlEvents:UIControlEventTouchUpInside];
-    [self addRow:row height:54 to:stack];
+    [self addRow:row height:65 to:stack];
 }
 - (void)resetStyle {
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));
@@ -2923,15 +2979,25 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self rebuild];
 }
 - (UIControl *)navigationRow:(NSString *)name subtitle:(NSString *)subtitle
-                     symbol:(NSString *)symbol action:(SEL)action {
+                     symbol:(NSString *)symbol badgeColor:(UIColor *)badgeColor action:(SEL)action {
     UIControl *row=[UIControl new];
     row.layer.cornerRadius=16;
     row.backgroundColor=FMThemeColor(FMColorSurface);
-    UIImageView *icon=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol]];
+    
+    UIView *badge=[UIView new];
+    badge.translatesAutoresizingMaskIntoConstraints=NO;
+    badge.layer.cornerRadius=8;
+    badge.layer.masksToBounds=YES;
+    badge.backgroundColor=badgeColor?:[UIColor colorWithRed:0 green:122/255.0 blue:255/255.0 alpha:1.0];
+    [row addSubview:badge];
+    
+    UIImageView *icon=[[UIImageView alloc] initWithImage:
+        [[UIImage systemImageNamed:symbol] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
     icon.translatesAutoresizingMaskIntoConstraints=NO;
-    icon.tintColor=FMAccent();
+    icon.tintColor=UIColor.whiteColor;
     icon.contentMode=UIViewContentModeScaleAspectFit;
-    [row addSubview:icon];
+    [badge addSubview:icon];
+    
     UILabel *title=[UILabel new];
     title.translatesAutoresizingMaskIntoConstraints=NO;
     title.text=name;
@@ -2950,11 +3016,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:arrow];
     [NSLayoutConstraint activateConstraints:@[
-        [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
-        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [icon.widthAnchor constraintEqualToConstant:25],
-        [icon.heightAnchor constraintEqualToConstant:25],
-        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:14],
+        [badge.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [badge.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [badge.widthAnchor constraintEqualToConstant:32],
+        [badge.heightAnchor constraintEqualToConstant:32],
+        [icon.centerXAnchor constraintEqualToAnchor:badge.centerXAnchor],
+        [icon.centerYAnchor constraintEqualToAnchor:badge.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:19],
+        [icon.heightAnchor constraintEqualToConstant:19],
+        [title.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:13],
         [title.topAnchor constraintEqualToAnchor:row.topAnchor constant:12],
         [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
         [detail.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
@@ -3111,17 +3181,23 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     section.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
     [stack addArrangedSubview:section];
     UIControl *apps=[self navigationRow:@"应用管理" subtitle:FMHostUI()?@"收藏、排序、自动画中画与独立设置":@"收藏、排序与独立设置"
-                               symbol:@"square.stack.3d.up" action:@selector(openApps)];
+                               symbol:@"square.stack.3d.up"
+                           badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
+                               action:@selector(openApps)];
     [apps.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:apps];
     if(FMHostUI()) {
         UIControl *shared=[self navigationRow:@"插件管理中心" subtitle:@"按 App 分配、启停、备份和批量共享"
-                                   symbol:@"square.stack.3d.up.fill" action:@selector(openSharedTweaks)];
+                                   symbol:@"square.stack.3d.up.fill"
+                               badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
+                                   action:@selector(openSharedTweaks)];
         [shared.heightAnchor constraintEqualToConstant:65].active=YES;
         [stack addArrangedSubview:shared];
     }
     UIControl *logs=[self navigationRow:@"诊断与日志" subtitle:@"查看、导出和清除日志"
-                               symbol:@"waveform.path.ecg" action:@selector(openDiagnostics)];
+                               symbol:@"waveform.path.ecg"
+                           badgeColor:[UIColor colorWithRed:175/255.0 green:82/255.0 blue:222/255.0 alpha:1.0]
+                               action:@selector(openDiagnostics)];
     [logs.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:logs];
     UIView *space=[UIView new];[space.heightAnchor constraintEqualToConstant:18].active=YES;
@@ -3138,17 +3214,23 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [stack addArrangedSubview:aboutTitle];
     NSString *version=[NSString stringWithFormat:@"v%@ · %@",FM_MENU_VERSION,FMCommitSummary()];
     UIControl *versionRow=[self navigationRow:@"当前版本" subtitle:version
-        symbol:@"number.circle" action:NULL];
+        symbol:@"number.circle"
+        badgeColor:[UIColor colorWithRed:142/255.0 green:142/255.0 blue:147/255.0 alpha:1.0]
+        action:NULL];
     [versionRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
         subtitle:self.checkingUpdate?@"正在检查最新发布版…":@"检查微珠最新发布版"
-        symbol:@"arrow.clockwise.circle" action:@selector(checkForUpdates)];
+        symbol:@"arrow.clockwise.circle"
+        badgeColor:[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0]
+        action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:checkRow];
     UIControl *repository=[self navigationRow:@"GitHub 仓库"
         subtitle:@"github.com/dompling/LC-SS-widget-export"
-        symbol:@"link" action:@selector(openRepository)];
+        symbol:@"link"
+        badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
+        action:@selector(openRepository)];
     [repository.heightAnchor constraintEqualToConstant:65].active=YES;
     [stack addArrangedSubview:repository];
     dispatch_async(dispatch_get_main_queue(), ^{
