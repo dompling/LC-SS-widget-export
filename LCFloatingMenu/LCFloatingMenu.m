@@ -391,21 +391,19 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
 - (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations {
     UIInterfaceOrientationMask mask = [self fm_supportedInterfaceOrientations];
     if(BoolPref(@"unlockOrientation", YES)) {
-        mask |= (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
-        mask &= ~UIInterfaceOrientationMaskLandscapeLeft;
-        mask &= ~UIInterfaceOrientationMaskPortraitUpsideDown;
+        mask |= UIInterfaceOrientationMaskAllButUpsideDown;
     }
     return mask;
 }
 - (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations {
     if(BoolPref(@"unlockOrientation", YES)) {
-        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+        return UIInterfaceOrientationMaskAllButUpsideDown;
     }
     return [self fm___supportedInterfaceOrientations];
 }
 - (UIInterfaceOrientationMask)fm__supportedInterfaceOrientations {
     if(BoolPref(@"unlockOrientation", YES)) {
-        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+        return UIInterfaceOrientationMaskAllButUpsideDown;
     }
     return [self fm__supportedInterfaceOrientations];
 }
@@ -417,10 +415,7 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
 }
 - (BOOL)fm_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation {
     if(BoolPref(@"unlockOrientation", YES)) {
-        if(orientation == UIInterfaceOrientationPortrait || orientation == UIInterfaceOrientationLandscapeRight) {
-            return YES;
-        }
-        return NO;
+        return YES;
     }
     return [self fm_shouldAutorotateToInterfaceOrientation:orientation];
 }
@@ -1980,7 +1975,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [self addRow:mode height:38 to:s];
             [self spacer:s size:14];
         }
-        [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入向左横屏，并锁定禁止向右横屏，完美契合短视频与单向应用。" in:s];
+        [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，畅享短视频全屏播放。" in:s];
         [self settingSwitch:s title:@"开启向左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
