@@ -15,6 +15,6 @@ jobs:
         run: |
           set -euo pipefail
           test "$(gh api repos/$GITHUB_REPOSITORY/releases/tags/1.0.7 --jq .tag_name)" = "1.0.7"
-          test "$(gh api repos/$GITHUB_REPOSITORY/releases/tags/1.0.7/assets --jq '.[].name' | grep -xc 'LCFloatingMenu.dylib')" -eq 1
+          test "$(gh release view 1.0.7 --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | index("LCFloatingMenu.dylib") != null')" = "true"
           gh release edit 1.0.7 --repo "$GITHUB_REPOSITORY" --latest
           test "$(gh api repos/$GITHUB_REPOSITORY/releases/latest --jq .tag_name)" = "1.0.7"
