@@ -1723,10 +1723,10 @@ static id FMLayoutChangeObserver=nil;
     UIView *bead=[self.orb viewWithTag:9202];
     CGRect targetFrame=self.orb.frame;
     CGFloat needW=self.orbWidth;
-    if(animated && fabs(NSWidth(targetFrame)-needW)>0.5) {
+    if(animated && fabs(CGRectGetWidth(targetFrame)-needW)>0.5) {
         targetFrame.size.width=needW;
         targetFrame.origin.x=self.left?0:self.window.bounds.size.width-needW;
-    } else if(fabs(NSWidth(targetFrame)-needW)>0.5) {
+    } else if(fabs(CGRectGetWidth(targetFrame)-needW)>0.5) {
         targetFrame.size.width=needW;
         targetFrame.origin.x=self.left?0:self.window.bounds.size.width-needW;
     }
@@ -1747,7 +1747,7 @@ static id FMLayoutChangeObserver=nil;
         [CATransaction commit];
     }
     [self springRestoreOrbToFrame:targetFrame completion:^{
-        self.orbUpdateLine.center=CGPointMake(NSWidth(targetFrame)*0.5,NSHeight(targetFrame)*0.5);
+        self.orbUpdateLine.center=CGPointMake(CGRectGetWidth(targetFrame)*0.5,CGRectGetHeight(targetFrame)*0.5);
         if(self.orbAppPreviewView) self.orbAppPreviewView.center=self.orbUpdateLine.center;
         [self scheduleOrbFade];
     }];
