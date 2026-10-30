@@ -379,13 +379,6 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
     }
 }
 
-static void FMCheckAndFixOrientationLayout(void) {
-    if(!BoolPref(@"unlockOrientation", YES)) return;
-    if([LCOrbitMultitask respondsToSelector:@selector(refreshPresentation)]) {
-        [LCOrbitMultitask refreshPresentation];
-    }
-}
-
 @interface UIViewController (FMOrientationUnlock)
 - (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations;
 - (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations;
@@ -399,10 +392,7 @@ static void FMCheckAndFixOrientationLayout(void) {
 - (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations {
     UIInterfaceOrientationMask mask = [self fm_supportedInterfaceOrientations];
     if(BoolPref(@"unlockOrientation", YES)) {
-        if(!(mask & UIInterfaceOrientationMaskLandscape)) {
-            mask |= UIInterfaceOrientationMaskLandscape;
-        }
-        if(mask == 0) mask = UIInterfaceOrientationMaskAllButUpsideDown;
+        mask |= UIInterfaceOrientationMaskAllButUpsideDown;
     }
     return mask;
 }
@@ -430,26 +420,6 @@ static void FMCheckAndFixOrientationLayout(void) {
     }
     return [self fm_shouldAutorotateToInterfaceOrientation:orientation];
 }
-- (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
-    [self fm_viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
-    if(BoolPref(@"unlockOrientation", YES)) {
-        if(coordinator) {
-            [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
-                FMCheckAndFixOrientationLayout();
-            } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
-                FMCheckAndFixOrientationLayout();
-                if([LCOrbitMultitask respondsToSelector:@selector(refreshPresentation)]) {
-                    [LCOrbitMultitask refreshPresentation];
-                }
-            }];
-        } else {
-            FMCheckAndFixOrientationLayout();
-            if([LCOrbitMultitask respondsToSelector:@selector(refreshPresentation)]) {
-                [LCOrbitMultitask refreshPresentation];
-            }
-        }
-    }
-}
 @end
 
 static void FMInstallOrientationHooks(void) {
@@ -469,10 +439,6 @@ static void FMInstallOrientationHooks(void) {
         if(class_getInstanceMethod(UIViewController.class, shouldTo)) {
             FMSwizzle(UIViewController.class, shouldTo, @selector(fm_shouldAutorotateToInterfaceOrientation:));
         }
-        FMSwizzle(UIViewController.class, @selector(viewWillTransitionToSize:withTransitionCoordinator:), @selector(fm_viewWillTransitionToSize:withTransitionCoordinator:));
-        [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
-            FMCheckAndFixOrientationLayout();
-        }];
     });
 }
 
