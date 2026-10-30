@@ -381,99 +381,11 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
 
 static void FMEnsureWindowOrientationLayout(void);
 
-static void FMCenterPortraitVideoContent(UIWindow *win, BOOL isLandscape) {
-    if(!win || win.windowLevel >= UIWindowLevelAlert) return;
-    if([win isKindOfClass:NSClassFromString(@"LCOrbitOverlayWindow")]) return;
-    
-    UIViewController *root = win.rootViewController;
-    if(!root || !root.isViewLoaded) return;
-    if([root isKindOfClass:NSClassFromString(@"LCOrbitOverlayController")]) return;
-    if([root isKindOfClass:NSClassFromString(@"FMSettingsRootController")]) return;
-    
-    UIScreen *screen = win.screen ?: UIScreen.mainScreen;
-    CGSize s = screen.bounds.size;
-    CGFloat portraitW = MIN(s.width, s.height);
-    CGFloat portraitH = MAX(s.width, s.height);
-    
-    CGFloat targetX = (portraitH - portraitW) / 2.0; // 例如 (852 - 393) / 2 = 229.5
-    
-    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root.view];
-    NSInteger count = 0;
-    while(queue.count > 0 && count < 200) {
-        UIView *v = queue.firstObject;
-        [queue removeObjectAtIndex:0];
-        count++;
-        
-        if(!v.hidden && v.alpha > 0.05) {
-            CGFloat vw = v.bounds.size.width;
-            CGFloat vh = v.bounds.size.height;
-            
-            // 匹配宽度接近竖屏宽（350~450 pt）、且在屏幕左侧的内容视图
-            if(fabs(vw - portraitW) < 45.0 && vh > 200.0) {
-                // 检查是否包含视频渲染层（AVPlayerLayer, CAMetalLayer, CAEAGLLayer 等）
-                BOOL containsVideo = NO;
-                NSMutableArray<CALayer *> *layerQueue = [NSMutableArray arrayWithObject:v.layer];
-                NSInteger lCount = 0;
-                while(layerQueue.count > 0 && lCount < 50) {
-                    CALayer *l = layerQueue.firstObject;
-                    [layerQueue removeObjectAtIndex:0];
-                    lCount++;
-                    
-                    if([l isKindOfClass:NSClassFromString(@"AVPlayerLayer")]) {
-                        containsVideo = YES;
-                        @try {
-                            [l setValue:@"AVLayerVideoGravityResizeAspect" forKey:@"videoGravity"];
-                        } @catch(id e){}
-                        break;
-                    }
-                    if([l isKindOfClass:NSClassFromString(@"CAMetalLayer")] ||
-                       [l isKindOfClass:NSClassFromString(@"CAEAGLLayer")]) {
-                        containsVideo = YES;
-                        break;
-                    }
-                    NSString *lcls = NSStringFromClass([l class]);
-                    if([lcls containsString:@"Player"] || [lcls containsString:@"Video"] || [lcls containsString:@"Render"]) {
-                        containsVideo = YES;
-                        break;
-                    }
-                    if(l.sublayers.count > 0) {
-                        [layerQueue addObjectsFromArray:l.sublayers];
-                    }
-                }
-                
-                if(containsVideo) {
-                    CGRect f = v.frame;
-                    if(isLandscape) {
-                        // 横屏下：如果是靠左停留在 x < 35，将其平移居中到 targetX（左右对称留黑）
-                        if(f.origin.x < 35.0 && fabs(f.origin.x - targetX) > 2.0) {
-                            f.origin.x = targetX;
-                            v.frame = f;
-                            [v setNeedsLayout];
-                        }
-                    } else {
-                        // 竖屏下：如果之前被平移了，恢复原位 x = 0
-                        if(f.origin.x > 35.0) {
-                            f.origin.x = 0;
-                            v.frame = f;
-                            [v setNeedsLayout];
-                        }
-                    }
-                    continue; // 已处理该层级容器，不再深入其子视图
-                }
-            }
-            
-            if(v.subviews.count > 0) {
-                [queue addObjectsFromArray:v.subviews];
-            }
-        }
-    }
-}
-
 static UIInterfaceOrientationMask FMCurrentSupportedOrientations(UIViewController *vc) {
     if(!BoolPref(@"unlockOrientation", YES)) {
         return UIInterfaceOrientationMaskPortrait;
     }
-    // 解锁向左横屏与竖屏
+    // 解锁向左横屏与竖屏（单向横屏，杜绝向右横屏白屏）
     return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
 }
 
@@ -611,25 +523,8 @@ static void FMEnsureWindowOrientationLayout(void) {
             }
         }
         
-        // 关键防护：竖屏状态下（包括应用启动）绝对不干涉 Window 布局，仅复位居中偏移并返回
+        // 关键防护：竖屏状态下（包括应用启动）绝对不干涉 Window 布局，直接返回，杜绝死循环
         if(!isLandscape) {
-            NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
-            if(@available(iOS 13.0, *)) {
-                for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
-                    if([s isKindOfClass:UIWindowScene.class]) {
-                        [windows addObjectsFromArray:((UIWindowScene *)s).windows];
-                    }
-                }
-            }
-            if(windows.count == 0) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                [windows addObjectsFromArray:UIApplication.sharedApplication.windows];
-#pragma clang diagnostic pop
-            }
-            for(UIWindow *w in windows) {
-                FMCenterPortraitVideoContent(w, NO);
-            }
             isEnsuring = NO;
             return;
         }
@@ -668,8 +563,6 @@ static void FMEnsureWindowOrientationLayout(void) {
                     [root.view setNeedsLayout];
                 }
             }
-            // 自动居中竖屏短剧内容视图
-            FMCenterPortraitVideoContent(w, YES);
         }
     } @catch(NSException *e) {
     }
@@ -697,10 +590,7 @@ static void FMEnsureWindowOrientationLayout(void) {
     if(!isLandscape && UIDevice.currentDevice.orientation == UIDeviceOrientationLandscapeLeft) {
         isLandscape = YES;
     }
-    if(!isLandscape) {
-        FMCenterPortraitVideoContent(self, NO);
-        return;
-    }
+    if(!isLandscape) return; // 竖屏下完全不触发重排
     
     FMEnsureWindowOrientationLayout();
 }
