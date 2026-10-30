@@ -250,7 +250,23 @@ int main(int argc,const char **argv) {
             NSDictionary *privateGuest=Find([LCOrbitGuestService installedApps],@"folder",privateJIT);
             if(privateGuest) [LCOrbitTweakCenter assignPluginNames:@[] toGuest:privateGuest];
             Check(Info(privateJIT)[@"LCTweakFolder"]==nil,@"clearing an assignment works for JIT guest");
-            Check([Info(sharedJIT)[@"LCTweakFolder"] hasPrefix:@"Orbit-"],@"clearing private assignment preserves shared namesake");
+            Check([Info(sharedJIT][@"LCTweakFolder"] hasPrefix:@"Orbit-"],@"clearing private assignment preserves shared namesake");
+            // Replacing and clearing app assignments must not retain old plugin snapshots.
+            if(privateGuest) {
+                [LCOrbitTweakCenter assignPluginNames:@[@"B.dylib"] toGuest:privateGuest];
+                [LCOrbitTweakCenter assignPluginNames:@[@"A.dylib"] toGuest:privateGuest];
+                [LCOrbitTweakCenter assignPluginNames:@[] toGuest:privateGuest];
+                Check(Info(privateJIT)[@"LCTweakFolder"]==nil,@"reassignment and clearing preserve metadata");
+            }
+            for(NSString *scopeRoot in @[Root(NO,@"Tweaks"),Root(YES,@"Tweaks")]) {
+                BOOL leftover=NO;
+                for(NSString *entry in [fm contentsOfDirectoryAtPath:scopeRoot error:nil]?:@[])
+                    if([entry containsString:@".rollback.tmp"]) {leftover=YES;break;}
+                Check(!leftover,@"successful assignments remove temporary rollback directories");
+            }
+            Check(!Exists([Home stringByAppendingPathComponent:@"Documents/LCFloatingMenu/AppAssignments"]) &&
+                  !Exists([Group stringByAppendingPathComponent:@"LiveContainer/LCFloatingMenu/AppAssignments"]),
+                  @"app assignments no longer create persistent history backups");
             NSString *configured=Install(NO,@"Existing.app",@{@"LCTweakFolder":@"UserFolder"});
             NSData *before=Bytes([configured stringByAppendingPathComponent:@"LCAppInfo.plist"]);
             NSDictionary *existing=Find([LCOrbitGuestService installedApps],@"folder",configured);
