@@ -1,0 +1,20 @@
+name: Mark existing LCFloatingMenu 1.0.7 as repository Latest (one-shot)
+on:
+  push:
+    branches: [lcss-original]
+    paths: ['.github/workflows/promote-107-latest-once.yml']
+permissions:
+  contents: write
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark the existing 1.0.7 Release as Latest without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/releases/tags/1.0.7 --jq .tag_name)" = "1.0.7"
+          test "$(gh api repos/$GITHUB_REPOSITORY/releases/tags/1.0.7/assets --jq '.[].name' | grep -xc 'LCFloatingMenu.dylib')" -eq 1
+          gh release edit 1.0.7 --repo "$GITHUB_REPOSITORY" --latest
+          test "$(gh api repos/$GITHUB_REPOSITORY/releases/latest --jq .tag_name)" = "1.0.7"
