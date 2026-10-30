@@ -57,7 +57,7 @@ static BOOL UHasMatchingDigest(NSData *binary,NSString *digest) {
 }
 @implementation LCOrbitPluginUpdater
 + (BOOL)replacePluginData:(NSData *)binary expectedSHA256:(NSString *)digest
-             destination:(NSString *)destination backupFolder:(NSString *)backupFolder
+             destination:(NSString *)destination
                    error:(NSError **)error {
     if(!UBinaryIsPlugin(binary)) return UFail(error,1,@"下载的文件不是有效的 arm64 LCFloatingMenu.dylib。");
     if(!UHasMatchingDigest(binary,digest)) return UFail(error,2,@"SHA-256 校验失败，已拒绝安装。");
@@ -66,17 +66,13 @@ static BOOL UHasMatchingDigest(NSData *binary,NSString *digest) {
     struct stat old;
     if(lstat(destination.fileSystemRepresentation,&old)!=0) return UFail(error,4,@"无法读取原插件信息。");
     NSFileManager *fm=NSFileManager.defaultManager;
-    if(![fm createDirectoryAtPath:backupFolder withIntermediateDirectories:YES
-                      attributes:nil error:error]) return NO;
-    NSString *backup=[backupFolder stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"LCFloatingMenu.dylib.%@.bak",NSUUID.UUID.UUIDString]];
-    if(![fm copyItemAtPath:destination toPath:backup error:error] ||
-       ![fm contentsEqualAtPath:destination andPath:backup]) {
-        [fm removeItemAtPath:backup error:nil];
-        return UFail(error,5,@"备份旧插件失败，未进行更新。");
-    }
+    // Verify a staged file, then atomically replace the destination. Until
+    // rename succeeds, the old dylib remains intact; no .bak is created.
     NSString *temporary=[destination stringByAppendingFormat:@".%@.tmp",NSUUID.UUID.UUIDString];
-    if(![binary writeToFile:temporary options:NSDataWritingAtomic error:error]) return NO;
+    if(![binary writeToFile:temporary options:NSDataWritingAtomic error:error]) {
+        [fm removeItemAtPath:temporary error:nil];
+        return NO;
+    }
     BOOL prepared=chmod(temporary.fileSystemRepresentation,old.st_mode&0777)==0 &&
         URegular(temporary) && [fm attributesOfItemAtPath:temporary error:nil]!=nil &&
         UHasMatchingDigest([NSData dataWithContentsOfFile:temporary],digest);
@@ -96,8 +92,7 @@ static BOOL UHasMatchingDigest(NSData *binary,NSString *digest) {
     // Only replace a plugin actually loaded from LC's own private Tweaks root.
     // Never tamper with a bundle, an assigned guest folder, or shared LC root.
     if(!URegular(destination)) return UFail(error,9,@"未在 LC 私有插件目录找到微珠，请通过原生 Tweaks 页面安装一次。");
-    NSString *backup=[home stringByAppendingPathComponent:@"Documents/LCFloatingMenu/PluginBackups"];
     return [self replacePluginData:binary expectedSHA256:digest
-                      destination:destination backupFolder:backup error:error];
+                      destination:destination error:error];
 }
 @end

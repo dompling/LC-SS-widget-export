@@ -86,7 +86,13 @@ grep -Fq 'LCOrbit/Core/LCOrbitTweakCenter.m' "$ROOT/LCOrbit/Build/build.sh"
 grep -Fq 'LCOrbit/Core/LCOrbitTweakCenterViews.m' "$ROOT/LCOrbit/Build/build.sh"
 grep -Fq 'TCManagedName' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
 grep -Fq 'LCTweakFolder' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
-grep -Fq 'TCBackup(infoFile,backups,folder)' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
+grep -Fq 'originalInfo=[NSData dataWithContentsOfFile:infoFile' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
+grep -Fq '.rollback.tmp' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
+if grep -Fq 'TCAppBackupRoot' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m" ||
+   grep -Fq 'PluginBackups' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"; then
+    echo 'Persistent plugin backups must not return' >&2
+    exit 1
+fi
 grep -Fq 'name isEqualToString:@"LCFloatingMenu.dylib"' "$ROOT/LCOrbit/Core/LCOrbitTweakCenter.m"
 grep -Fq 'appAssignmentsWithBackground:' "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m"
 grep -Fq 'pluginDetailsForName:' "$ROOT/LCOrbit/Core/LCOrbitSharedTweaksViewController.m"

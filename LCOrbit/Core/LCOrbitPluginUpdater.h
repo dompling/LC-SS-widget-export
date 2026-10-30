@@ -6,12 +6,11 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)installDownloadedPlugin:(NSData *)binary
                 expectedSHA256:(NSString *)digest
                           error:(NSError * _Nullable * _Nullable)error;
-// Separate, testable file transaction. Both paths are determined by the host
-// in production; callers cannot supply a destination over the network.
+// Separate, testable atomic replacement. The old dylib remains intact if
+// validation or staging fails; no persistent backup files are created.
 + (BOOL)replacePluginData:(NSData *)binary
           expectedSHA256:(NSString *)digest
              destination:(NSString *)destination
-             backupFolder:(NSString *)backupFolder
                    error:(NSError * _Nullable * _Nullable)error;
 @end
 NS_ASSUME_NONNULL_END

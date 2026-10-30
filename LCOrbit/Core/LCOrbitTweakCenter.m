@@ -32,12 +32,6 @@ static NSString *TCRoot(BOOL shared) {
     if(!base.length) return nil;
     return [base stringByAppendingPathComponent:shared?@"LiveContainer/Tweaks":@"Documents/Tweaks"];
 }
-static NSString *TCAppBackupRoot(BOOL shared) {
-    NSString *base=shared?[LCOrbitHost appGroupPath]:TCHome();
-    if(!base.length) return nil;
-    return [base stringByAppendingPathComponent:shared?
-        @"LiveContainer/LCFloatingMenu/AppAssignments":@"Documents/LCFloatingMenu/AppAssignments"];
-}
 static NSString *TCFileInRoot(NSString *root, NSString *name) {
     NSString *active=[root stringByAppendingPathComponent:name];
     if(TCRegular(active)) return active;
@@ -76,17 +70,6 @@ static BOOL TCWriteInfo(NSDictionary *guest, NSMutableDictionary *info) {
 static BOOL TCEnsure(NSString *dir) {
     return dir.length && [NSFileManager.defaultManager createDirectoryAtPath:dir
         withIntermediateDirectories:YES attributes:nil error:nil];
-}
-static NSString *TCBackup(NSString *source, NSString *folder, NSString *name) {
-    if(!TCRegular(source) || !TCEnsure(folder)) return nil;
-    NSString *safe=[name stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-    NSString *backup=[folder stringByAppendingPathComponent:
-        [NSString stringWithFormat:@"%@.%@.bak",safe,NSUUID.UUID.UUIDString]];
-    if(![NSFileManager.defaultManager copyItemAtPath:source toPath:backup error:nil] ||
-       ![NSFileManager.defaultManager contentsEqualAtPath:source andPath:backup]) {
-        [NSFileManager.defaultManager removeItemAtPath:backup error:nil]; return nil;
-    }
-    return backup;
 }
 static NSString *TCResult(NSString *action,NSString *message) {
     [LCOrbitTweakAudit appendEvent:[NSString stringWithFormat:@"tweak-center %@ %@",action,message]];
@@ -159,8 +142,8 @@ static NSString *TCResult(NSString *action,NSString *message) {
     NSString *selected=[info[@"LCTweakFolder"] isKindOfClass:NSString.class]?info[@"LCTweakFolder"]:@"";
     if(selected.length && ![selected isEqualToString:folder])
         return @"此 App 已使用 LC 原有的专属插件文件夹。请先在 LC 设置中手动取消该选择，避免覆盖已有配置。";
-    NSString *root=TCRoot(TCScope(guest)),*backups=TCAppBackupRoot(TCScope(guest));
-    if(!root.length || !TCEnsure(root) || !backups.length) return @"插件目录不可访问。";
+    NSString *root=TCRoot(TCScope(guest));
+    if(!root.length || !TCEnsure(root)) return @"插件目录不可访问。";
     NSMutableSet *valid=[NSMutableSet set];
     for(NSDictionary *row in [self sourcePluginsForGuest:guest]) [valid addObject:row[@"name"]];
     NSMutableOrderedSet *names=[NSMutableOrderedSet orderedSet];
@@ -170,11 +153,15 @@ static NSString *TCResult(NSString *action,NSString *message) {
     }
     NSString *destination=[root stringByAppendingPathComponent:folder];
     if(TCExists(destination) && !TCDirectory(destination)) return @"托管目录不安全，已取消操作。";
+    NSString *infoFile=[guest[@"folder"] stringByAppendingPathComponent:@"LCAppInfo.plist"];
+    // Keep the original plist only in memory; never create a permanent backup file.
+    NSData *originalInfo=[NSData dataWithContentsOfFile:infoFile options:0 error:nil];
+    if(!originalInfo.length) return @"无法读取原应用配置，未修改插件。";
     NSFileManager *fm=NSFileManager.defaultManager;
-    // Stage the entire new folder, then atomically swap it into place.
+    // Stage the new directory next to its destination to allow atomic rename.
     NSString *temporary=[root stringByAppendingPathComponent:
         [NSString stringWithFormat:@".%@.%@.tmp",folder,NSUUID.UUID.UUIDString]];
-    NSString *oldFolder=nil;
+    NSString *rollbackFolder=nil;
     if(![fm createDirectoryAtPath:temporary withIntermediateDirectories:NO attributes:nil error:nil])
         return @"无法创建临时插件目录。";
     for(NSString *name in names) {
@@ -187,22 +174,21 @@ static NSString *TCResult(NSString *action,NSString *message) {
             return [NSString stringWithFormat:@"%@ 复制校验失败，原配置未改变。",name];
         }
     }
-    NSString *infoFile=[guest[@"folder"] stringByAppendingPathComponent:@"LCAppInfo.plist"];
-    NSString *infoBackup=TCBackup(infoFile,backups,folder);
-    if(!infoBackup) {
-        [fm removeItemAtPath:temporary error:nil]; return @"备份应用配置失败，原配置未改变。";
-    }
     if(TCDirectory(destination)) {
-        oldFolder=[backups stringByAppendingPathComponent:
-           [NSString stringWithFormat:@"%@.%@.folder",folder,NSUUID.UUID.UUIDString]];
-        if(rename(destination.fileSystemRepresentation,oldFolder.fileSystemRepresentation)!=0) {
-            [fm removeItemAtPath:temporary error:nil]; return @"备份原专属插件目录失败。";
+        rollbackFolder=[root stringByAppendingPathComponent:
+            [NSString stringWithFormat:@".%@.%@.rollback.tmp",folder,NSUUID.UUID.UUIDString]];
+        if(rename(destination.fileSystemRepresentation,rollbackFolder.fileSystemRepresentation)!=0) {
+            [fm removeItemAtPath:temporary error:nil];
+            return @"暂存原插件目录失败，原配置未改变。";
         }
     }
     if(names.count) {
         if(rename(temporary.fileSystemRepresentation,destination.fileSystemRepresentation)!=0) {
-            if(oldFolder) rename(oldFolder.fileSystemRepresentation,destination.fileSystemRepresentation);
-            [fm removeItemAtPath:temporary error:nil]; return @"安装新插件目录失败，已恢复旧目录。";
+            BOOL restored=!rollbackFolder ||
+                rename(rollbackFolder.fileSystemRepresentation,destination.fileSystemRepresentation)==0;
+            [fm removeItemAtPath:temporary error:nil];
+            return restored?@"安装新插件目录失败，原目录已恢复。":
+                @"安装新插件目录失败，恢复旧目录也失败；旧目录仍保留在临时回滚路径。";
         }
     } else {
         [fm removeItemAtPath:temporary error:nil];
@@ -211,12 +197,25 @@ static NSString *TCResult(NSString *action,NSString *message) {
     if(names.count) next[@"LCTweakFolder"]=folder;
     else [next removeObjectForKey:@"LCTweakFolder"];
     if(!TCWriteInfo(guest,next)) {
-        [fm removeItemAtPath:destination error:nil];
-        if(oldFolder) rename(oldFolder.fileSystemRepresentation,destination.fileSystemRepresentation);
-        return @"应用配置写入失败，已尝试恢复旧目录；原配置备份已保留。";
+        BOOL folderRestored=YES;
+        if(names.count && TCExists(destination))
+            folderRestored=[fm removeItemAtPath:destination error:nil];
+        if(rollbackFolder)
+            folderRestored=(rename(rollbackFolder.fileSystemRepresentation,
+                                   destination.fileSystemRepresentation)==0) && folderRestored;
+        NSData *currentInfo=[NSData dataWithContentsOfFile:infoFile options:0 error:nil];
+        BOOL infoRestored=[originalInfo isEqualToData:currentInfo] ||
+            [originalInfo writeToFile:infoFile options:NSDataWritingAtomic error:nil];
+        return (folderRestored && infoRestored)?
+            @"应用配置写入失败，已恢复原插件目录和配置。":
+            @"应用配置写入失败，自动恢复未完全成功；请检查临时回滚目录和应用配置。";
     }
+    // The old directory is needed only until the plist commit succeeds.
+    if(rollbackFolder && ![fm removeItemAtPath:rollbackFolder error:nil])
+        return TCResult(@"assignment", [NSString stringWithFormat:
+            @"%@：插件分配已完成，但旧目录的临时回滚文件清理失败。请检查插件目录。",guest[@"title"]]);
     return TCResult(@"assignment",[NSString stringWithFormat:
-        @"%@：已分配 %lu 个插件。配置与旧目录均已备份。请重新启动 Guest；全局已启用插件仍会加载。",
+        @"%@：已分配 %lu 个插件。旧托管目录已清理。请重新启动 Guest；全局已启用插件仍会加载。",
         guest[@"title"],(unsigned long)names.count]);
 }
 + (NSDictionary *)pluginInfo:(NSString *)name shared:(BOOL)shared {
