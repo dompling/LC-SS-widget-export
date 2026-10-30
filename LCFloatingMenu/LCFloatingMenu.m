@@ -302,15 +302,15 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
     if(collapsed) {
         // One continuous reverse curve at each end keeps a narrow tab from
         // reading as a rounded rectangle. The flares remain visible at all scales.
-        CGFloat flare=MIN(w*1.3,h*.32);
+        CGFloat flare=MIN(w*1.15,h*.29);
         [path moveToPoint:CGPointMake(w,0)];
         [path addCurveToPoint:CGPointMake(0,flare)
-                controlPoint1:CGPointMake(w,flare*.65)
-                controlPoint2:CGPointMake(0,flare*.35)];
+                controlPoint1:CGPointMake(w,flare*.46)
+                controlPoint2:CGPointMake(0,flare*.46)];
         [path addLineToPoint:CGPointMake(0,h-flare)];
         [path addCurveToPoint:CGPointMake(w,h)
-                controlPoint1:CGPointMake(0,h-flare*.35)
-                controlPoint2:CGPointMake(w,h-flare*.65)];
+                controlPoint1:CGPointMake(0,h-flare*.46)
+                controlPoint2:CGPointMake(w,h-flare*.46)];
     } else {
         // The screen edge is straight; two reverse curves join it to the body.
         [path moveToPoint:CGPointMake(w,0)];
@@ -427,7 +427,7 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
 static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
     CGFloat r=MIN(w*.5,h*.5);
-    CGFloat flare=MIN(w*1.3,h*.32);
+    CGFloat flare=MIN(w*1.15,h*.29);
     CGFloat dock=1-Clamp(opened,0,1); // 0: neutral capsule; 1: docked shoulders
     CGFloat capsuleTopControl=r-r*4/3.; // cubic upper semicircle reaches y=0
     CGFloat capsuleBottomControl=h-r+r*4/3.;
@@ -437,12 +437,12 @@ static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
     UIBezierPath *path=[UIBezierPath bezierPath];
     [path moveToPoint:CGPointMake(w,topY)];
     [path addCurveToPoint:CGPointMake(0,innerTop)
-            controlPoint1:CGPointMake(w,capsuleTopControl*(1-dock)+flare*.65*dock)
-            controlPoint2:CGPointMake(0,capsuleTopControl*(1-dock)+flare*.35*dock)];
+            controlPoint1:CGPointMake(w,capsuleTopControl*(1-dock)+flare*.46*dock)
+            controlPoint2:CGPointMake(0,capsuleTopControl*(1-dock)+flare*.46*dock)];
     [path addLineToPoint:CGPointMake(0,h-innerTop)];
     [path addCurveToPoint:CGPointMake(w,bottomY)
-            controlPoint1:CGPointMake(0,capsuleBottomControl*(1-dock)+(h-flare*.35)*dock)
-            controlPoint2:CGPointMake(w,capsuleBottomControl*(1-dock)+(h-flare*.65)*dock)];
+            controlPoint1:CGPointMake(0,capsuleBottomControl*(1-dock)+(h-flare*.46)*dock)
+            controlPoint2:CGPointMake(w,capsuleBottomControl*(1-dock)+(h-flare*.46)*dock)];
     [path closePath];
     if(left) {
         CGAffineTransform mirror=CGAffineTransformMake(-1,0,0,1,w,0);
