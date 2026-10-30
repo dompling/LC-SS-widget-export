@@ -422,6 +422,40 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
 }
 @end
 
+static void FMEnsureWindowOrientationLayout(void) {
+    if(!BoolPref(@"unlockOrientation", YES)) return;
+    CGSize screen = UIScreen.mainScreen.bounds.size;
+    CGFloat portraitW = MIN(screen.width, screen.height);
+    CGFloat portraitH = MAX(screen.width, screen.height);
+    
+    BOOL isLandscape = NO;
+    UIDeviceOrientation dev = UIDevice.currentDevice.orientation;
+    if(UIDeviceOrientationIsLandscape(dev)) {
+        isLandscape = YES;
+    } else if(UIDeviceOrientationIsPortrait(dev)) {
+        isLandscape = NO;
+    } else {
+        UIWindowScene *scene = [LCOrbitHost activeScene];
+        if(scene && UIInterfaceOrientationIsLandscape(scene.interfaceOrientation)) isLandscape = YES;
+    }
+    
+    CGRect targetBounds = isLandscape ? CGRectMake(0, 0, portraitH, portraitW) : CGRectMake(0, 0, portraitW, portraitH);
+    
+    for(UIWindow *w in UIApplication.sharedApplication.windows) {
+        if(w.windowLevel >= UIWindowLevelAlert) continue;
+        if(w.bounds.size.width != targetBounds.size.width || w.bounds.size.height != targetBounds.size.height) {
+            w.frame = targetBounds;
+            w.bounds = targetBounds;
+            UIViewController *root = w.rootViewController;
+            if(root && root.isViewLoaded) {
+                root.view.frame = targetBounds;
+                root.view.bounds = targetBounds;
+                [root.view setNeedsLayout];
+            }
+        }
+    }
+}
+
 static void FMInstallOrientationHooks(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -439,6 +473,12 @@ static void FMInstallOrientationHooks(void) {
         if(class_getInstanceMethod(UIViewController.class, shouldTo)) {
             FMSwizzle(UIViewController.class, shouldTo, @selector(fm_shouldAutorotateToInterfaceOrientation:));
         }
+        [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            FMEnsureWindowOrientationLayout();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                FMEnsureWindowOrientationLayout();
+            });
+        }];
     });
 }
 

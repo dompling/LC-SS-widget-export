@@ -169,9 +169,9 @@ static BOOL OrbitValidFrame(CGRect frame) {
 static UIEdgeInsets PortraitInsets(UIEdgeInsets insets, UIInterfaceOrientation orientation) {
     switch(orientation) {
         case UIInterfaceOrientationLandscapeLeft:
-            return UIEdgeInsetsMake(insets.left, 0, insets.right > 0 ? insets.right : insets.bottom, 0);
-        case UIInterfaceOrientationLandscapeRight:
             return UIEdgeInsetsMake(insets.right, 0, insets.left > 0 ? insets.left : insets.bottom, 0);
+        case UIInterfaceOrientationLandscapeRight:
+            return UIEdgeInsetsMake(insets.left, 0, insets.right > 0 ? insets.right : insets.bottom, 0);
         default: return insets;
     }
 }
@@ -194,10 +194,13 @@ static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfac
 static void ApplyGeometry(id settings,CGRect frame,UIInterfaceOrientation orientation,UIEdgeInsets insets) {
     [settings setInterfaceOrientation:orientation];
     if([settings respondsToSelector:@selector(setDeviceOrientation:)]) {
-        NSInteger dev = 1;
-        if(orientation == UIInterfaceOrientationLandscapeLeft) dev = UIInterfaceOrientationLandscapeRight;
-        else if(orientation == UIInterfaceOrientationLandscapeRight) dev = UIInterfaceOrientationLandscapeLeft;
-        else if(orientation == UIInterfaceOrientationPortraitUpsideDown) dev = UIInterfaceOrientationPortraitUpsideDown;
+        NSInteger dev = UIDevice.currentDevice.orientation;
+        if(dev == 0) {
+            if(orientation == UIInterfaceOrientationLandscapeLeft) dev = 4;
+            else if(orientation == UIInterfaceOrientationLandscapeRight) dev = 3;
+            else if(orientation == UIInterfaceOrientationPortraitUpsideDown) dev = 2;
+            else dev = 1;
+        }
         [settings setDeviceOrientation:dev];
     }
     [settings setFrame:frame];
