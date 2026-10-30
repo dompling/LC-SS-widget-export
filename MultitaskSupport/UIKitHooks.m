@@ -13,9 +13,9 @@ static BOOL LCHasRemoteSheetProviderSelector;
 UIEdgeInsets LCUIEdgeInsetsRotateToOrientation(UIEdgeInsets insets, UIInterfaceOrientation orientation) {
     switch(orientation) {
         case UIInterfaceOrientationLandscapeLeft:
-            return UIEdgeInsetsMake(insets.left, 0, insets.right, insets.bottom);
+            return UIEdgeInsetsMake(insets.left, 0, insets.right > 0 ? insets.right : insets.bottom, 0);
         case UIInterfaceOrientationLandscapeRight:
-            return UIEdgeInsetsMake(insets.left, insets.bottom, insets.right, 0);
+            return UIEdgeInsetsMake(insets.right, 0, insets.left > 0 ? insets.left : insets.bottom, 0);
         default:
             return insets;
     }

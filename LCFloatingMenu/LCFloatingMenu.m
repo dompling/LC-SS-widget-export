@@ -395,12 +395,30 @@ static BOOL FMDeviceIsLandscape(void) {
     return NO;
 }
 
+static NSArray<UIWindow *> *FMAllApplicationWindows(void) {
+    NSMutableOrderedSet<UIWindow *> *set = [NSMutableOrderedSet orderedSet];
+    if(@available(iOS 13.0, *)) {
+        for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if([s isKindOfClass:UIWindowScene.class]) {
+                for(UIWindow *w in ((UIWindowScene *)s).windows) {
+                    if(w) [set addObject:w];
+                }
+            }
+        }
+    }
+    for(UIWindow *w in UIApplication.sharedApplication.windows) {
+        if(w) [set addObject:w];
+    }
+    return [set array];
+}
+
 static void FMFixSubviewsLandscapeLayout(UIView *view, CGFloat targetWidth, CGFloat targetHeight, int depth) {
     if(!view || depth > 8) return;
     CGRect f = view.frame;
     // If a container/player view is stuck at portrait width while we are in landscape
     if(f.size.width > 300 && f.size.width < 450 && targetWidth > 600) {
-        view.frame = CGRectMake(f.origin.x, f.origin.y, targetWidth, f.size.height < targetHeight ? targetHeight : f.size.height);
+        view.frame = CGRectMake(0, f.origin.y, targetWidth, f.size.height < targetHeight ? targetHeight : f.size.height);
+        view.bounds = CGRectMake(0, 0, targetWidth, view.frame.size.height);
         [view setNeedsLayout];
     }
     for(UIView *sub in view.subviews) {
@@ -417,7 +435,7 @@ static void FMCheckAndFixOrientationLayout(void) {
     CGFloat targetHeight = MIN(screen.width, screen.height);
     CGRect landscapeBounds = CGRectMake(0, 0, targetWidth, targetHeight);
     
-    NSArray<UIWindow *> *windows = UIApplication.sharedApplication.windows;
+    NSArray<UIWindow *> *windows = FMAllApplicationWindows();
     for(UIWindow *w in windows) {
         if(w.windowLevel >= UIWindowLevelAlert) continue;
         if(w.bounds.size.width < targetWidth || w.bounds.size.height < targetHeight) {
@@ -489,11 +507,31 @@ static void FMCheckAndFixOrientationLayout(void) {
                 FMCheckAndFixOrientationLayout();
             } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
                 FMCheckAndFixOrientationLayout();
+                if([LCOrbitMultitask respondsToSelector:@selector(refreshPresentation)]) {
+                    [LCOrbitMultitask refreshPresentation];
+                }
             }];
         } else {
             FMCheckAndFixOrientationLayout();
+            if([LCOrbitMultitask respondsToSelector:@selector(refreshPresentation)]) {
+                [LCOrbitMultitask refreshPresentation];
+            }
         }
     }
+}
+@end
+
+@interface UIWindow (FMOrientationUnlock)
+- (void)fm_setAutorotates:(BOOL)autorotates forceUpdateInterfaceOrientation:(BOOL)force;
+- (BOOL)fm_autorotates;
+@end
+
+@implementation UIWindow (FMOrientationUnlock)
+- (void)fm_setAutorotates:(BOOL)autorotates forceUpdateInterfaceOrientation:(BOOL)force {
+    [self fm_setAutorotates:YES forceUpdateInterfaceOrientation:force];
+}
+- (BOOL)fm_autorotates {
+    return YES;
 }
 @end
 
@@ -515,8 +553,22 @@ static void FMInstallOrientationHooks(void) {
             FMSwizzle(UIViewController.class, shouldTo, @selector(fm_shouldAutorotateToInterfaceOrientation:));
         }
         FMSwizzle(UIViewController.class, @selector(viewWillTransitionToSize:withTransitionCoordinator:), @selector(fm_viewWillTransitionToSize:withTransitionCoordinator:));
+        SEL setAuto = NSSelectorFromString(@"setAutorotates:forceUpdateInterfaceOrientation:");
+        if(class_getInstanceMethod(UIWindow.class, setAuto)) {
+            FMSwizzle(UIWindow.class, setAuto, @selector(fm_setAutorotates:forceUpdateInterfaceOrientation:));
+        }
+        SEL autoRot = NSSelectorFromString(@"autorotates");
+        if(class_getInstanceMethod(UIWindow.class, autoRot)) {
+            FMSwizzle(UIWindow.class, autoRot, @selector(fm_autorotates));
+        }
         [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
             FMCheckAndFixOrientationLayout();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                FMCheckAndFixOrientationLayout();
+                if([LCOrbitMultitask respondsToSelector:@selector(refreshPresentation)]) {
+                    [LCOrbitMultitask refreshPresentation];
+                }
+            });
         }];
     });
 }
