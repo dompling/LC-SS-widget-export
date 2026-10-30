@@ -1477,41 +1477,44 @@ static id FMLayoutChangeObserver=nil;
 }
 
 - (void)springRestoreOrbToFrame:(CGRect)targetFrame completion:(void (^)(void))completion {
+    if(!self.orb) { if(completion) completion(); return; }
     UIView *bead=[self.orb viewWithTag:9202];
-    if(!bead || !self.orb) { if(completion) completion(); return; }
     UIBezierPath *notchPath=FMSideNotchPath(CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height),self.left,YES,YES);
     CGPathRef destPath=notchPath.CGPath;
     
-    // 先无动画将 bead 尺寸对齐到目标 frame，避免路径与 bounds 不匹配导致崩溃
+    // 无动画一次性拍平容器宽度、bead、mask、rim、shadow 全部回到目标尺寸
+    // 宽度立刻恢复，只留 Y 坐标跟随弹簧动画，避免动画中间态 bounds 与 path 不匹配
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    bead.frame=CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height);
-    CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
-    CAShapeLayer *rim=nil;
-    for(CALayer *layer in bead.layer.sublayers) {
-        if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
-            rim=(CAShapeLayer *)layer; break;
+    CGRect snapFrame=CGRectMake(targetFrame.origin.x, self.orb.frame.origin.y, targetFrame.size.width, targetFrame.size.height);
+    self.orb.frame=snapFrame;
+    if(bead) {
+        bead.frame=self.orb.bounds;
+        CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
+        if([mask isKindOfClass:CAShapeLayer.class]) {
+            [mask removeAnimationForKey:@"fm.orb.shoulders"];
+            mask.frame=bead.bounds;
+            mask.path=destPath;
         }
-    }
-    // 先拍平当前路径动画，避免 from 路径与当前 bounds 不匹配
-    if([mask isKindOfClass:CAShapeLayer.class]) {
-        [mask removeAnimationForKey:@"fm.orb.shoulders"];
-        mask.frame=bead.bounds;
-        mask.path=destPath;
-    }
-    if(rim) {
-        [rim removeAnimationForKey:@"fm.orb.shoulders"];
-        rim.frame=bead.bounds;
-        rim.path=destPath;
+        for(CALayer *layer in bead.layer.sublayers) {
+            if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
+                [layer removeAnimationForKey:@"fm.orb.shoulders"];
+                layer.frame=bead.bounds;
+                ((CAShapeLayer *)layer).path=destPath;
+                break;
+            }
+        }
     }
     [self.orb.layer removeAnimationForKey:@"fm.orb.shoulders"];
     self.orb.layer.shadowPath=destPath;
     [CATransaction commit];
     
-    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.4
+    // 弹簧动画只动 Y 位置（宽度已瞬间正确，不再变）
+    [UIView animateWithDuration:0.38 delay:0 usingSpringWithDamping:0.70 initialSpringVelocity:0.5
         options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            self.orb.frame=targetFrame;
-            bead.frame=self.orb.bounds;
+            CGRect f=self.orb.frame;
+            f.origin.y=targetFrame.origin.y;
+            self.orb.frame=f;
             self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
             if(self.orbAppPreviewView) self.orbAppPreviewView.center=self.orbUpdateLine.center;
         } completion:^(BOOL finished) {
