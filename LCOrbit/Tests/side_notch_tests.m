@@ -29,7 +29,8 @@
 }
 @end
 static inline CGFloat Clamp(CGFloat x,CGFloat lo,CGFloat hi) { return fmax(lo,fmin(hi,x)); }
-static CGFloat FMOrbScale(void) { return 1; }
+static CGFloat geometryScale=1;
+static CGFloat FMOrbScale(void) { return geometryScale; }
 static NSMutableDictionary *stylePreferences;
 static CGFloat FloatPref(NSString *key,CGFloat fallback) { return stylePreferences[key]?[stylePreferences[key] doubleValue]:fallback; }
 #include "side-notch.inc"
@@ -49,6 +50,39 @@ int main(void) { @autoreleasepool {
         [stylePreferences removeObjectForKey:key];
     }
 
+    // The exposed outline must follow the visible body's circular caps,
+    // regardless of the edge gap or any independent size setting.
+    BOOL capsAligned=YES;
+    for(NSNumber *scale in @[@.7,@1,@1.9])
+    for(NSNumber *bodyWidth in @[@8,@12,@20])
+    for(NSNumber *bodyHeight in @[@36,@52,@80])
+    for(NSNumber *gap in @[@0,@2,@8])
+    for(NSNumber *extension in @[@8,@25,@48]) {
+        geometryScale=scale.doubleValue;
+        stylePreferences[@"orbEdgeGap"]=gap;stylePreferences[@"orbExtension"]=extension;
+        CGFloat bw=bodyWidth.doubleValue*geometryScale,bh=bodyHeight.doubleValue*geometryScale;
+        CGFloat top=extension.doubleValue*geometryScale,w=bw+gap.doubleValue*geometryScale,h=bh+2*top;
+        CGFloat radius=MIN(bw,bh)*.5;
+        UIBezierPath *fill=FMOrbBodyPath(CGRectMake(0,0,bw,bh));
+        for(NSNumber *left in @[@NO,@YES]) {
+            UIBezierPath *outline=FMSideNotchPath(CGRectMake(0,0,w,h),left.boolValue,YES,YES);
+            for(CGFloat fraction=.1;fraction<1;fraction+=.1) {
+                CGFloat dy=radius*(1-fraction);
+                CGFloat edge=radius-sqrt(radius*radius-dy*dy);
+                for(NSNumber *bottom in @[@NO,@YES]) {
+                    CGFloat y=bottom.boolValue?h-top-radius*fraction:top+radius*fraction;
+                    CGFloat inside=edge+.015*geometryScale,outside=edge-.015*geometryScale;
+                    capsAligned &= CGPathContainsPoint(fill.CGPath,NULL,CGPointMake(inside,y-top),NO) &&
+                        !CGPathContainsPoint(fill.CGPath,NULL,CGPointMake(outside,y-top),NO);
+                    if(left.boolValue) {inside=w-inside;outside=w-outside;}
+                    capsAligned &= CGPathContainsPoint(outline.CGPath,NULL,CGPointMake(inside,y),NO) &&
+                        !CGPathContainsPoint(outline.CGPath,NULL,CGPointMake(outside,y),NO);
+                }
+            }
+        }
+    }
+    Expect(capsAligned,"body fill and exposed glass cap must align across size, gap, extension and side settings");
+    geometryScale=1;[stylePreferences removeAllObjects];
     for(NSNumber *scale in @[@.7,@1,@1.9]) {
         CGFloat w=16*scale.doubleValue,h=64*scale.doubleValue;
         UIBezierPath *tab=FMSideNotchPath(CGRectMake(0,0,w,h),NO,YES,YES);

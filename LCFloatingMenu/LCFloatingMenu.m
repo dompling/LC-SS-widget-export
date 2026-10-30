@@ -350,6 +350,30 @@ static CGFloat FMOrbStyleValue(NSString *key) {
     }
     return 0;
 }
+// The edge gap belongs to the connector, never to the visible cap radius.
+static CGRect FMOrbBodyRect(CGRect bounds,BOOL left,CGFloat progress) {
+    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
+    CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1));
+    CGFloat gap=MIN(FMOrbStyleValue(@"orbEdgeGap")*FMOrbScale(),MAX(0,w-1));
+    gap*=1-Clamp(progress*2.5,0,1);
+    return CGRectMake(left?gap:0,shoulder,w-gap,h-shoulder*2);
+}
+static UIBezierPath *FMOrbBodyPath(CGRect bounds) {
+    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
+    CGFloat r=MIN(w,h)*.5,k=r*.55228475;
+    UIBezierPath *path=[UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(r,0)];
+    [path addLineToPoint:CGPointMake(w-r,0)];
+    [path addCurveToPoint:CGPointMake(w,r) controlPoint1:CGPointMake(w-r+k,0) controlPoint2:CGPointMake(w,r-k)];
+    [path addLineToPoint:CGPointMake(w,h-r)];
+    [path addCurveToPoint:CGPointMake(w-r,h) controlPoint1:CGPointMake(w,h-r+k) controlPoint2:CGPointMake(w-r+k,h)];
+    [path addLineToPoint:CGPointMake(r,h)];
+    [path addCurveToPoint:CGPointMake(0,h-r) controlPoint1:CGPointMake(r-k,h) controlPoint2:CGPointMake(0,h-r+k)];
+    [path addLineToPoint:CGPointMake(0,r)];
+    [path addCurveToPoint:CGPointMake(r,0) controlPoint1:CGPointMake(0,r-k) controlPoint2:CGPointMake(r-k,0)];
+    [path closePath];
+    return path;
+}
 // A mirrored, gently concave inner shoulder joins the side edge to the drawer.
 // The glass and its shadow use exactly the same path.
 static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact, BOOL collapsed) {
@@ -357,20 +381,22 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
     CGFloat r=MIN(compact?26:30,MIN(w*.48,h*.17));
     UIBezierPath *path=[UIBezierPath bezierPath];
     if(collapsed) {
-        CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1)),radius=MIN(w*.48,h*.14);
+        CGRect body=FMOrbBodyRect(bounds,NO,0);
+        CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
+        CGFloat crown=radius,capK=radius*.55228475;
         [path moveToPoint:CGPointMake(w,0)];
-        [path addCurveToPoint:CGPointMake(w-radius,shoulder)
+        [path addCurveToPoint:CGPointMake(crown,shoulder)
                 controlPoint1:CGPointMake(w,shoulder*.40)
-                controlPoint2:CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),shoulder)];
+                controlPoint2:CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder)];
         [path addCurveToPoint:CGPointMake(0,shoulder+radius)
-                controlPoint1:CGPointMake(0,shoulder)
-                controlPoint2:CGPointMake(0,shoulder+radius*.45)];
+                controlPoint1:CGPointMake(crown-capK,shoulder)
+                controlPoint2:CGPointMake(0,shoulder+radius-capK)];
         [path addLineToPoint:CGPointMake(0,h-shoulder-radius)];
-        [path addCurveToPoint:CGPointMake(w-radius,h-shoulder)
-                controlPoint1:CGPointMake(0,h-shoulder-radius*.45)
-                controlPoint2:CGPointMake(0,h-shoulder)];
+        [path addCurveToPoint:CGPointMake(crown,h-shoulder)
+                controlPoint1:CGPointMake(0,h-shoulder-radius+capK)
+                controlPoint2:CGPointMake(crown-capK,h-shoulder)];
         [path addCurveToPoint:CGPointMake(w,h)
-                controlPoint1:CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder)
+                controlPoint1:CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder)
                 controlPoint2:CGPointMake(w,h-shoulder*.40)];
     } else {
         // The screen edge is straight; two reverse curves join it to the body.
@@ -446,7 +472,9 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
     CGFloat rootTop=h*.5*t;
     CGFloat tipControlX=w-(w-cx)*.4*t;
     CGFloat neck=h*(.22-.07*t);
-    CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1)),radius=MIN(baseW*.48,h*.14);
+    CGRect body=FMOrbBodyRect(CGRectMake(0,0,baseW,h),NO,0);
+        CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
+        CGFloat crown=w-baseW+radius,capK=radius*.55228475;
     CGFloat blend=Clamp(pullDist/(14*FMOrbScale()),0,1);
     blend=blend*blend*(3-2*blend);
     CGPoint (^mix)(CGPoint,CGPoint)=^CGPoint(CGPoint tab,CGPoint drop) {
@@ -454,18 +482,18 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
     };
     UIBezierPath *path=[UIBezierPath bezierPath];
     [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,rootTop))];
-    [path addCurveToPoint:mix(CGPointMake(w-radius,shoulder),CGPointMake(cx,cy-r))
+    [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(cx,cy-r))
             controlPoint1:mix(CGPointMake(w,shoulder*.40),CGPointMake(tipControlX,cy-neck*(1-t)))
-            controlPoint2:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(cx+r*.9,cy-r))];
+            controlPoint2:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(cx+r*.9,cy-r))];
     [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,cy))
-            controlPoint1:mix(CGPointMake(0,shoulder),CGPointMake(cx-k,cy-r))
-            controlPoint2:mix(CGPointMake(0,shoulder+radius*.45),CGPointMake(0,cy-k))];
+            controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(cx-k,cy-r))
+            controlPoint2:mix(CGPointMake(0,shoulder+radius-capK),CGPointMake(0,cy-k))];
     [path addLineToPoint:mix(CGPointMake(0,h-shoulder-radius),CGPointMake(0,cy))];
-    [path addCurveToPoint:mix(CGPointMake(w-radius,h-shoulder),CGPointMake(cx,cy+r))
-            controlPoint1:mix(CGPointMake(0,h-shoulder-radius*.45),CGPointMake(0,cy+k))
-            controlPoint2:mix(CGPointMake(0,h-shoulder),CGPointMake(cx-k,cy+r))];
+    [path addCurveToPoint:mix(CGPointMake(crown,h-shoulder),CGPointMake(cx,cy+r))
+            controlPoint1:mix(CGPointMake(0,h-shoulder-radius+capK),CGPointMake(0,cy+k))
+            controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(cx-k,cy+r))];
     [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-rootTop))
-            controlPoint1:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(cx+r*.9,cy+r))
+            controlPoint1:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(cx+r*.9,cy+r))
             controlPoint2:mix(CGPointMake(w,h-shoulder*.40),CGPointMake(tipControlX,cy+neck*(1-t)))];
     [path closePath];
     if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
@@ -477,12 +505,13 @@ static void FMLayoutOrbCapsule(UIView *glass,CGFloat pullProgress) {
     CGFloat w=glass.bounds.size.width,h=glass.bounds.size.height;
     for(CALayer *layer in glass.layer.sublayers) {
         if([layer.name isEqualToString:@"fm.orb.capsule"]) {
-            CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1));
-            // Fill the entire body between the two attached glass shoulders.
-            CGFloat gap=FMOrbStyleValue(@"orbEdgeGap")*FMOrbScale()*(1-Clamp(pullProgress*2.5,0,1));
             BOOL left=((CAGradientLayer *)layer).startPoint.x>.5;
-            layer.frame=CGRectMake(left?gap:0,shoulder,w-gap,h-shoulder*2);
-            layer.cornerRadius=MIN((w-gap)*.48,h*.14);
+            layer.frame=FMOrbBodyRect(glass.bounds,left,pullProgress);
+            layer.cornerRadius=0;
+            CAShapeLayer *mask=(CAShapeLayer *)layer.mask;
+            if(!mask) {mask=[CAShapeLayer layer];layer.mask=mask;}
+            mask.frame=layer.bounds;
+            mask.path=FMOrbBodyPath(layer.bounds).CGPath;
             layer.opacity=1-Clamp(pullProgress*2.5,0,1);
         } else if([layer.name isEqualToString:@"fm.orb.surface"]) {
             layer.frame=glass.bounds;
@@ -551,25 +580,27 @@ static void FMAddOrbBackdrop(UIView *orb,BOOL left) {
 static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
     CGFloat r=MIN(w*.5,h*.5),k=r*.55228475;
-    CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1)),radius=MIN(w*.48,h*.14);
+    CGRect body=FMOrbBodyRect(bounds,NO,0);
+        CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
+        CGFloat crown=radius,capK=radius*.55228475;
     CGFloat t=Clamp(opened,0,1);
     CGPoint (^mix)(CGPoint,CGPoint)=^CGPoint(CGPoint tab,CGPoint capsule) {
         return CGPointMake(tab.x+(capsule.x-tab.x)*t,tab.y+(capsule.y-tab.y)*t);
     };
     UIBezierPath *path=[UIBezierPath bezierPath];
     [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,r))];
-    [path addCurveToPoint:mix(CGPointMake(w-radius,shoulder),CGPointMake(w*.5,0))
+    [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(w*.5,0))
             controlPoint1:mix(CGPointMake(w,shoulder*.40),CGPointMake(w,r-k))
-            controlPoint2:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(w*.5+k,0))];
+            controlPoint2:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(w*.5+k,0))];
     [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,r))
-            controlPoint1:mix(CGPointMake(0,shoulder),CGPointMake(w*.5-k,0))
-            controlPoint2:mix(CGPointMake(0,shoulder+radius*.45),CGPointMake(0,r-k))];
+            controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(w*.5-k,0))
+            controlPoint2:mix(CGPointMake(0,shoulder+radius-capK),CGPointMake(0,r-k))];
     [path addLineToPoint:mix(CGPointMake(0,h-shoulder-radius),CGPointMake(0,h-r))];
-    [path addCurveToPoint:mix(CGPointMake(w-radius,h-shoulder),CGPointMake(w*.5,h))
-            controlPoint1:mix(CGPointMake(0,h-shoulder-radius*.45),CGPointMake(0,h-r+k))
-            controlPoint2:mix(CGPointMake(0,h-shoulder),CGPointMake(w*.5-k,h))];
+    [path addCurveToPoint:mix(CGPointMake(crown,h-shoulder),CGPointMake(w*.5,h))
+            controlPoint1:mix(CGPointMake(0,h-shoulder-radius+capK),CGPointMake(0,h-r+k))
+            controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(w*.5-k,h))];
     [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-r))
-            controlPoint1:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(w*.5+k,h))
+            controlPoint1:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(w*.5+k,h))
             controlPoint2:mix(CGPointMake(w,h-shoulder*.40),CGPointMake(w,h-r+k))];
     [path closePath];
     if(left) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
@@ -1709,7 +1740,9 @@ static id FMLayoutChangeObserver=nil;
             FMAnimateOrbShoulders(self.orb,self.left,1,NO);
             for(CALayer *layer in bead.layer.sublayers) {
                 if([layer.name isEqualToString:@"fm.orb.capsule"]) {
-                    layer.frame=bead.bounds;layer.cornerRadius=orbW*.5;layer.opacity=1;
+                    layer.frame=bead.bounds;layer.cornerRadius=0;layer.opacity=1;
+                    CAShapeLayer *mask=(CAShapeLayer *)layer.mask;
+                    mask.frame=layer.bounds;mask.path=FMOrbBodyPath(layer.bounds).CGPath;
                 } else if([layer.name isEqualToString:@"fm.orb.surface"]) layer.frame=bead.bounds;
             }
             self.orbUpdateLine.hidden=NO;
