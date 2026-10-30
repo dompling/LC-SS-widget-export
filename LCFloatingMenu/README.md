@@ -206,7 +206,7 @@ JSON 仅存放插件自身配置，不包含 LC 证书、系统多任务偏好�
 - 使用 LC 原生的 `LCAppInfo.plist → LCTweakFolder` 与 `TweakLoader` 递归加载。每个 App 拥有自己的 `Orbit-<digest>` 文件夹，放在该 App 所属的私有或共享 Tweaks 根目录；目标源码来源只能是普通 `.dylib` 文件，原始签名字节保留。
 - **全局已启用的 dylib 始终会加载到同一作用域的其他 Guest**：按 App 分配并不构成排他隔离。要按 App 独享，应先在插件详情中停用对应全局副本（原名变成 `.dylib.disabled`），然后将它分配到目标 App。管理器保护私有根目录中的 `LCFloatingMenu.dylib` 和 `TweakLoader.dylib`，防止自我失联。
 - 如果 App 已在 LC 原生设置中选择了非 Orbit 专属插件文件夹，不会强行覆盖。先在原设置取消选择再分配。
-- 保存分配前备份 App 信息 `LCAppInfo.plist` 和原托管目录；批量创建临时目录、逐文件内容校验，再切换目录和配置。插件启停不再创建历史备份。备份保留在 private `Documents/LCFloatingMenu` 或共享 App Group `LiveContainer/LCFloatingMenu` 下。
+- 分配插件时先创建临时目录并逐文件校验，再更新应用配置和托管目录。原配置在内存中保留，旧插件目录仅在事务期间暂存，用于失败回滚；成功后清理，不再创建永久备份。旧版本留下的备份文件不会被自动删除。
 - **写入后至少重启 Guest，建议先关闭再重开 LC 宿主，以免 LC UI 内存中的 App 配置写回覆盖磁盘修改**。这不是运行时卸载插件，也不会绕过签名或文件访问权限。初次发布仍需真机验证。
 
 ## LCOrbit modular runtime (Stage 1)
@@ -247,4 +247,4 @@ LC 主界面中进入 **微珠设置 → 版本与更新 → GitHub 访问**。�
 
 LC 宿主检测到新版本后，进入微珠设置首页会自动显示版本号及更新说明，提供“跳过此版本”和“下载更新”两个按钮。同一次设置会话里，同一版本只自动弹出一次；跳过精确版本的记录保存在 `LCFloatingMenu.skippedUpdateVersion` 配置中，更高版本仍会提示，手动“检测更新”可再次查看已跳过的版本。
 
-说明优先使用 latest Release 的正文；如果 `fm-latest` 只有内部版本标记，则读取同版本 tag 的公开 Release 正文。暂时无法获取说明时明确显示缺失提示。下载继续使用官方公开 dylib，执行既有 SHA-256 校验、备份和替换；安装后仍需通过 LC 原生 Tweaks 重新签名并重启。
+说明优先使用 latest Release 的正文；如果 `fm-latest` 只有内部版本标记，则读取同版本 tag 的公开 Release 正文。暂时无法获取说明时明确显示缺失提示。下载继续使用官方公开 dylib，执行 SHA-256 校验、临时文件校验及原子替换；失败时保留旧插件，不再生成永久备份。安装后仍需通过 LC 原生 Tweaks 重新签名并重启。
