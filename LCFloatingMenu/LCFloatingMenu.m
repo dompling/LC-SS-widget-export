@@ -293,29 +293,57 @@ static UIColor *FMSwitchGreen(void) {
 static CGFloat FMOrbScale(void) {
     return Clamp(FloatPref(@"orbScale",Clamp(FloatPref(@"orbWidth",12)/12.,.70,1.90)),.70,1.90);
 }
+static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
+    static NSArray *options;static dispatch_once_t once;
+    dispatch_once(&once, ^{ options=@[
+        @{@"key":@"orbExtension",@"title":@"上下延展长度",@"min":@(8),@"max":@(48),@"default":@(25),@"unit":@"点"},
+        @{@"key":@"orbGlowLength",@"title":@"背景散光长度",@"min":@(0),@"max":@(100),@"default":@(56),@"unit":@"点"},
+        @{@"key":@"orbGlowBrightness",@"title":@"背景散光亮度",@"min":@(0),@"max":@(0.35),@"default":@(0.16),@"unit":@"%"},
+        @{@"key":@"orbBodyWidth",@"title":@"胶囊宽度",@"min":@(8),@"max":@(20),@"default":@(12),@"unit":@"点"},
+        @{@"key":@"orbBodyHeight",@"title":@"胶囊高度",@"min":@(36),@"max":@(80),@"default":@(52),@"unit":@"点"},
+        @{@"key":@"orbEdgeGap",@"title":@"贴边间距",@"min":@(0),@"max":@(8),@"default":@(2),@"unit":@"点"},
+        @{@"key":@"orbCurveSoftness",@"title":@"连接弧线柔和度",@"min":@(0),@"max":@(0.85),@"default":@(0.33),@"unit":@"%"},
+        @{@"key":@"orbDropletSize",@"title":@"水滴大小",@"min":@(0.65),@"max":@(1.25),@"default":@(1),@"unit":@"%"},
+        @{@"key":@"orbSnapDuration",@"title":@"吸边动画时长",@"min":@(0.2),@"max":@(0.65),@"default":@(0.34),@"unit":@"秒"},
+        @{@"key":@"orbSnapDamping",@"title":@"吸边回弹阻尼",@"min":@(0.65),@"max":@(1),@"default":@(0.78),@"unit":@"%"},
+    ]; });
+    return options;
+}
+static CGFloat FMOrbStyleValue(NSString *key) {
+    for(NSDictionary *option in FMOrbStyleOptions()) if([option[@"key"] isEqualToString:key]) {
+        CGFloat fallback=[option[@"default"] doubleValue];
+        CGFloat value=FloatPref(key,fallback);
+        return Clamp(isfinite(value)?value:fallback,[option[@"min"] doubleValue],[option[@"max"] doubleValue]);
+    }
+    return 0;
+}
 // A mirrored, gently concave inner shoulder joins the side edge to the drawer.
 // The glass and its shadow use exactly the same path.
 static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact, BOOL collapsed) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat r=MIN(compact?22:28,MIN(w*.65,h*.17));
+    CGFloat r=MIN(compact?26:30,MIN(w*.48,h*.17));
     UIBezierPath *path=[UIBezierPath bezierPath];
     if(collapsed) {
-        // One continuous reverse curve at each end keeps a narrow tab from
-        // reading as a rounded rectangle. The flares remain visible at all scales.
-        CGFloat flare=MIN(w*1.15,h*.29);
+        CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1)),radius=MIN(w*.48,h*.14);
         [path moveToPoint:CGPointMake(w,0)];
-        [path addCurveToPoint:CGPointMake(0,flare)
-                controlPoint1:CGPointMake(w,flare*.46)
-                controlPoint2:CGPointMake(0,flare*.46)];
-        [path addLineToPoint:CGPointMake(0,h-flare)];
+        [path addCurveToPoint:CGPointMake(w-radius,shoulder)
+                controlPoint1:CGPointMake(w,shoulder*.40)
+                controlPoint2:CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),shoulder)];
+        [path addCurveToPoint:CGPointMake(0,shoulder+radius)
+                controlPoint1:CGPointMake(0,shoulder)
+                controlPoint2:CGPointMake(0,shoulder+radius*.45)];
+        [path addLineToPoint:CGPointMake(0,h-shoulder-radius)];
+        [path addCurveToPoint:CGPointMake(w-radius,h-shoulder)
+                controlPoint1:CGPointMake(0,h-shoulder-radius*.45)
+                controlPoint2:CGPointMake(0,h-shoulder)];
         [path addCurveToPoint:CGPointMake(w,h)
-                controlPoint1:CGPointMake(0,h-flare*.46)
-                controlPoint2:CGPointMake(w,h-flare*.46)];
+                controlPoint1:CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder)
+                controlPoint2:CGPointMake(w,h-shoulder*.40)];
     } else {
         // The screen edge is straight; two reverse curves join it to the body.
         [path moveToPoint:CGPointMake(w,0)];
         [path addCurveToPoint:CGPointMake(w-r,r)
-                controlPoint1:CGPointMake(w,r*.72)
+                controlPoint1:CGPointMake(w,r*.64)
                 controlPoint2:CGPointMake(w,r)];
         CGFloat inner=MIN(r,w-r);
         [path addLineToPoint:CGPointMake(inner,r)];
@@ -329,7 +357,7 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
         [path addLineToPoint:CGPointMake(w-r,h-r)];
         [path addCurveToPoint:CGPointMake(w,h)
                 controlPoint1:CGPointMake(w,h-r)
-                controlPoint2:CGPointMake(w,h-r*.72)];
+                controlPoint2:CGPointMake(w,h-r*.64)];
     }
     [path closePath];
     if(dockLeft) {
@@ -355,99 +383,163 @@ static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL co
     rim.path=outline.CGPath;
     rim.fillColor=UIColor.clearColor.CGColor;
     rim.strokeColor=[UIColor.whiteColor colorWithAlphaComponent:
-        collapsed?(FMMenuDark()?.65:.80):(FMMenuDark()?.32:.58)].CGColor;
-    rim.lineWidth=collapsed?.9:.75;
+        collapsed?(FMMenuDark()?.28:.40):(FMMenuDark()?.32:.58)].CGColor;
+    rim.lineWidth=collapsed?.45:.75;
     [glass.layer addSublayer:rim];
+    if(!collapsed) {
+        // A broad, low-opacity reflection gives the custom silhouette depth
+        // without replacing the live system material with an opaque fill.
+        CAGradientLayer *reflection=[CAGradientLayer layer];
+        reflection.frame=glass.bounds;
+        reflection.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.13].CGColor,
+                            (id)[UIColor.whiteColor colorWithAlphaComponent:.025].CGColor,
+                            (id)[UIColor.blackColor colorWithAlphaComponent:.08].CGColor,
+                            (id)[UIColor.whiteColor colorWithAlphaComponent:.07].CGColor];
+        reflection.locations=@[@0,@.24,@.72,@1];
+        reflection.startPoint=CGPointMake(dockLeft?1:0,0);
+        reflection.endPoint=CGPointMake(dockLeft?0:1,1);
+        [glass.layer insertSublayer:reflection atIndex:1];
+    }
 }
 static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDist, CGFloat maxPull) {
-    CGFloat w = CGRectGetWidth(bounds), h = CGRectGetHeight(bounds);
-    if(pullDist <= 0.01) {
-        return FMSideNotchPath(bounds, dockLeft, YES, YES);
-    }
-    // iOS 水滴拉扯效果：边缘连接处颈部收窄，头部逐渐膨胀成圆球
-    CGFloat t = Clamp(pullDist / MAX(maxPull, 1.0), 0.0, 1.0);
-    CGFloat cy = h * 0.5;
-    CGFloat scale = FMOrbScale();
-    
-    // 头部半径：从微珠宽度一半(8pt)膨胀到饱满水滴球体(18pt)
-    CGFloat r0 = 8.0 * scale;
-    CGFloat r1 = 18.0 * scale;
-    CGFloat headR = r0 + (r1 - r0) * t;
-    
-    // 边缘连接处(颈部)高度：从微珠全高逐渐收窄
-    CGFloat neckH = h * (1.0 - t * 0.85);
-    CGFloat neckHalf = neckH * 0.5;
-    CGFloat neckTopY = cy - neckHalf;
-    CGFloat neckBottomY = cy + neckHalf;
-    
-    // 头部球心 X：靠近拉出侧（贴紧 bounds 边缘，headCX - headR = 0，不露外边框间隙）
-    CGFloat headCX = headR;
-    CGFloat headTopY = cy - headR;
-    CGFloat headBottomY = cy + headR;
-    
-    // 颈部平滑 S 形控制点
-    CGFloat neckMidX = headCX + (w - headCX) * (0.35 + 0.25 * t);
-    
-    UIBezierPath *path = [UIBezierPath bezierPath];
-    // 起点：边缘(右侧x=w)连接处上端
-    [path moveToPoint:CGPointMake(w, neckTopY)];
-    
-    // 上侧颈部：从边缘弯向头部上切点
-    [path addCurveToPoint:CGPointMake(headCX, headTopY)
-            controlPoint1:CGPointMake(neckMidX, neckTopY)
-            controlPoint2:CGPointMake(headCX + headR * 0.15, headTopY - headR * 0.05)];
-    
-    // 头部圆弧：完美半圆（三次贝塞尔近似）
-    CGFloat k = headR * 0.55228475;
-    [path addCurveToPoint:CGPointMake(headCX - headR, cy)
-            controlPoint1:CGPointMake(headCX - k, headTopY)
-            controlPoint2:CGPointMake(headCX - headR, cy - k)];
-    [path addCurveToPoint:CGPointMake(headCX, headBottomY)
-            controlPoint1:CGPointMake(headCX - headR, cy + k)
-            controlPoint2:CGPointMake(headCX - k, headBottomY)];
-    
-    // 下侧颈部：对称回到边缘连接处下端
-    [path addCurveToPoint:CGPointMake(w, neckBottomY)
-            controlPoint1:CGPointMake(headCX + headR * 0.15, headBottomY + headR * 0.05)
-            controlPoint2:CGPointMake(neckMidX, neckBottomY)];
-    
+    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
+    if(pullDist<=.01) return FMSideNotchPath(bounds,dockLeft,YES,YES);
+    CGFloat t=Clamp(pullDist/MAX(maxPull,1),0,1);
+    CGFloat cy=h*.5,baseW=MAX(1,w-pullDist*.4);
+    CGFloat r=MIN(h*.20,(baseW*.5+pullDist*.025)*FMOrbStyleValue(@"orbDropletSize"));
+    CGFloat cx=r,k=r*.55228475;
+    // Keep the glass rooted at the edge; the moving crown draws the
+    // shoulders inward continuously instead of growing a long pear tail.
+    CGFloat rootTop=h*.5*t;
+    CGFloat tipControlX=w-(w-cx)*.4*t;
+    CGFloat neck=h*(.22-.07*t);
+    CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1)),radius=MIN(baseW*.48,h*.14);
+    CGFloat blend=Clamp(pullDist/(14*FMOrbScale()),0,1);
+    blend=blend*blend*(3-2*blend);
+    CGPoint (^mix)(CGPoint,CGPoint)=^CGPoint(CGPoint tab,CGPoint drop) {
+        return CGPointMake(tab.x+(drop.x-tab.x)*blend,tab.y+(drop.y-tab.y)*blend);
+    };
+    UIBezierPath *path=[UIBezierPath bezierPath];
+    [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,rootTop))];
+    [path addCurveToPoint:mix(CGPointMake(w-radius,shoulder),CGPointMake(cx,cy-r))
+            controlPoint1:mix(CGPointMake(w,shoulder*.40),CGPointMake(tipControlX,cy-neck*(1-t)))
+            controlPoint2:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(cx+r*.9,cy-r))];
+    [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,cy))
+            controlPoint1:mix(CGPointMake(0,shoulder),CGPointMake(cx-k,cy-r))
+            controlPoint2:mix(CGPointMake(0,shoulder+radius*.45),CGPointMake(0,cy-k))];
+    [path addLineToPoint:mix(CGPointMake(0,h-shoulder-radius),CGPointMake(0,cy))];
+    [path addCurveToPoint:mix(CGPointMake(w-radius,h-shoulder),CGPointMake(cx,cy+r))
+            controlPoint1:mix(CGPointMake(0,h-shoulder-radius*.45),CGPointMake(0,cy+k))
+            controlPoint2:mix(CGPointMake(0,h-shoulder),CGPointMake(cx-k,cy+r))];
+    [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-rootTop))
+            controlPoint1:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(cx+r*.9,cy+r))
+            controlPoint2:mix(CGPointMake(w,h-shoulder*.40),CGPointMake(tipControlX,cy+neck*(1-t)))];
     [path closePath];
-    
-    if(dockLeft) {
-        CGAffineTransform flip = CGAffineTransformMake(-1, 0, 0, 1, w, 0);
-        [path applyTransform:flip];
-    }
+    if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
     return path;
 }
-// One compatible, four-segment path at every phase. The free-floating
-// outline is a *symmetric stadium*: its rounded top and bottom reach the
-// same midpoint whether docking to the left or to the right. The side
-// shoulders are grown only after the bead has snapped to the destination.
-// Matching control points prevent CAPath's trapezoid/flip interpolation.
+// The raised capsule has its own rounded optical fill, without an inset
+// stroke. Its broader edge backing remains visible above and below it.
+static void FMLayoutOrbCapsule(UIView *glass,CGFloat pullProgress) {
+    CGFloat w=glass.bounds.size.width,h=glass.bounds.size.height;
+    for(CALayer *layer in glass.layer.sublayers) {
+        if([layer.name isEqualToString:@"fm.orb.capsule"]) {
+            CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1));
+            // Fill the entire body between the two attached glass shoulders.
+            CGFloat gap=FMOrbStyleValue(@"orbEdgeGap")*FMOrbScale()*(1-Clamp(pullProgress*2.5,0,1));
+            BOOL left=((CAGradientLayer *)layer).startPoint.x>.5;
+            layer.frame=CGRectMake(left?gap:0,shoulder,w-gap,h-shoulder*2);
+            layer.cornerRadius=MIN((w-gap)*.48,h*.14);
+            layer.opacity=1-Clamp(pullProgress*2.5,0,1);
+        } else if([layer.name isEqualToString:@"fm.orb.surface"]) {
+            layer.frame=glass.bounds;
+            layer.opacity=1-Clamp(pullProgress,0,1)*.35;
+        }
+    }
+}
+static void FMAddOrbCapsule(UIView *glass,BOOL left) {
+    CAGradientLayer *surface=[CAGradientLayer layer];
+    surface.name=@"fm.orb.surface";
+    surface.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.08].CGColor,
+                     (id)[UIColor.whiteColor colorWithAlphaComponent:.02].CGColor,
+                     (id)[UIColor.whiteColor colorWithAlphaComponent:.10].CGColor];
+    surface.locations=@[@0,@.48,@1];
+    surface.startPoint=CGPointMake(0,0);surface.endPoint=CGPointMake(1,1);
+    [glass.layer addSublayer:surface];
+    CAGradientLayer *capsule=[CAGradientLayer layer];
+    capsule.name=@"fm.orb.capsule";
+    capsule.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.40].CGColor,
+                     (id)[UIColor.whiteColor colorWithAlphaComponent:.18].CGColor,
+                     (id)[UIColor.whiteColor colorWithAlphaComponent:.32].CGColor];
+    capsule.locations=@[@0,@.52,@1];
+    capsule.startPoint=CGPointMake(left?1:0,0);capsule.endPoint=CGPointMake(left?0:1,1);
+    capsule.cornerCurve=kCACornerCurveCircular;
+    [glass.layer addSublayer:capsule];
+    FMLayoutOrbCapsule(glass,0);
+}
+// This backdrop extends beyond the handle but never expands its hit target.
+// Faded ends and a soft horizontal falloff prevent a second visible frame.
+static void FMLayoutOrbBackdrop(UIView *orb,BOOL left,CGFloat progress) {
+    UIView *backdrop=[orb viewWithTag:9204];
+    CGFloat w=16*FMOrbScale(),h=orb.bounds.size.height;
+    CGFloat reach=FMOrbStyleValue(@"orbGlowLength")*FMOrbScale();
+    backdrop.frame=CGRectMake(left?0:orb.bounds.size.width-w*.85,-reach,w*.85,h+reach*2);
+    backdrop.alpha=1-Clamp(progress*1.6,0,1);
+    for(CALayer *layer in backdrop.layer.sublayers) {
+        if([layer.name isEqualToString:@"fm.edge.light"]) {
+            layer.frame=backdrop.bounds;
+            ((CAGradientLayer *)layer).startPoint=CGPointMake(left?1:0,.5);
+            ((CAGradientLayer *)layer).endPoint=CGPointMake(left?0:1,.5);
+        }
+    }
+    backdrop.layer.mask.frame=backdrop.bounds;
+    CGFloat fade=reach/MAX(1,backdrop.bounds.size.height);
+    ((CAGradientLayer *)backdrop.layer.mask).locations=@[@0,@(fade),@(1-fade),@1];
+}
+static void FMAddOrbBackdrop(UIView *orb,BOOL left) {
+    UIView *backdrop=[[UIView alloc] initWithFrame:CGRectZero];
+    backdrop.tag=9204;backdrop.userInteractionEnabled=NO;
+    CAGradientLayer *light=[CAGradientLayer layer];
+    light.name=@"fm.edge.light";
+    light.colors=@[(id)UIColor.clearColor.CGColor,
+                   (id)[UIColor.whiteColor colorWithAlphaComponent:FMOrbStyleValue(@"orbGlowBrightness")].CGColor];
+    light.startPoint=CGPointMake(left?1:0,.5);
+    light.endPoint=CGPointMake(left?0:1,.5);
+    [backdrop.layer addSublayer:light];
+    CAGradientLayer *fade=[CAGradientLayer layer];
+    fade.colors=@[(id)UIColor.clearColor.CGColor,(id)UIColor.blackColor.CGColor,
+                  (id)UIColor.blackColor.CGColor,(id)UIColor.clearColor.CGColor];
+    fade.locations=@[@0,@.25,@.75,@1];backdrop.layer.mask=fade;
+    [orb insertSubview:backdrop atIndex:0];
+    FMLayoutOrbBackdrop(orb,left,0);
+}
+// The docked and free capsule share four cubic curves and one straight side.
+// Keeping segment order stable avoids twisted shoulders while moving the orb.
 static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat r=MIN(w*.5,h*.5);
-    CGFloat flare=MIN(w*1.15,h*.29);
-    CGFloat dock=1-Clamp(opened,0,1); // 0: neutral capsule; 1: docked shoulders
-    CGFloat capsuleTopControl=r-r*4/3.; // cubic upper semicircle reaches y=0
-    CGFloat capsuleBottomControl=h-r+r*4/3.;
-    CGFloat topY=r*(1-dock);
-    CGFloat innerTop=r*(1-dock)+flare*dock;
-    CGFloat bottomY=(h-r)*(1-dock)+h*dock;
+    CGFloat r=MIN(w*.5,h*.5),k=r*.55228475;
+    CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1)),radius=MIN(w*.48,h*.14);
+    CGFloat t=Clamp(opened,0,1);
+    CGPoint (^mix)(CGPoint,CGPoint)=^CGPoint(CGPoint tab,CGPoint capsule) {
+        return CGPointMake(tab.x+(capsule.x-tab.x)*t,tab.y+(capsule.y-tab.y)*t);
+    };
     UIBezierPath *path=[UIBezierPath bezierPath];
-    [path moveToPoint:CGPointMake(w,topY)];
-    [path addCurveToPoint:CGPointMake(0,innerTop)
-            controlPoint1:CGPointMake(w,capsuleTopControl*(1-dock)+flare*.46*dock)
-            controlPoint2:CGPointMake(0,capsuleTopControl*(1-dock)+flare*.46*dock)];
-    [path addLineToPoint:CGPointMake(0,h-innerTop)];
-    [path addCurveToPoint:CGPointMake(w,bottomY)
-            controlPoint1:CGPointMake(0,capsuleBottomControl*(1-dock)+(h-flare*.46)*dock)
-            controlPoint2:CGPointMake(w,capsuleBottomControl*(1-dock)+(h-flare*.46)*dock)];
+    [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,r))];
+    [path addCurveToPoint:mix(CGPointMake(w-radius,shoulder),CGPointMake(w*.5,0))
+            controlPoint1:mix(CGPointMake(w,shoulder*.40),CGPointMake(w,r-k))
+            controlPoint2:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(w*.5+k,0))];
+    [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,r))
+            controlPoint1:mix(CGPointMake(0,shoulder),CGPointMake(w*.5-k,0))
+            controlPoint2:mix(CGPointMake(0,shoulder+radius*.45),CGPointMake(0,r-k))];
+    [path addLineToPoint:mix(CGPointMake(0,h-shoulder-radius),CGPointMake(0,h-r))];
+    [path addCurveToPoint:mix(CGPointMake(w-radius,h-shoulder),CGPointMake(w*.5,h))
+            controlPoint1:mix(CGPointMake(0,h-shoulder-radius*.45),CGPointMake(0,h-r+k))
+            controlPoint2:mix(CGPointMake(0,h-shoulder),CGPointMake(w*.5-k,h))];
+    [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-r))
+            controlPoint1:mix(CGPointMake(w-radius*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(w*.5+k,h))
+            controlPoint2:mix(CGPointMake(w,h-shoulder*.40),CGPointMake(w,h-r+k))];
     [path closePath];
-    if(left) {
-        CGAffineTransform mirror=CGAffineTransformMake(-1,0,0,1,w,0);
-        [path applyTransform:mirror];
-    }
+    if(left) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
     return path;
 }
 static void FMAnimateOrbPath(CALayer *layer,NSString *key,CGPathRef destination,BOOL animated) {
@@ -1092,8 +1184,8 @@ static id FMLayoutChangeObserver=nil;
         [self draw];
     }
 }
-- (CGFloat)orbWidth { return 16*FMOrbScale(); }
-- (CGFloat)orbHeight { return 72*FMOrbScale(); }
+- (CGFloat)orbWidth { return (FMOrbStyleValue(@"orbBodyWidth")+FMOrbStyleValue(@"orbEdgeGap"))*FMOrbScale(); }
+- (CGFloat)orbHeight { return (FMOrbStyleValue(@"orbBodyHeight")+2*FMOrbStyleValue(@"orbExtension"))*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -1241,7 +1333,7 @@ static id FMLayoutChangeObserver=nil;
     if(!line) return;
     [line.layer removeAnimationForKey:@"fm.update.red-breath"];
     if(!self.orbUpdateAvailable) {
-        line.backgroundColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+        line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
         line.layer.shadowOpacity=0;
         line.layer.shadowRadius=0;
         line.alpha=1;
@@ -1352,21 +1444,25 @@ static id FMLayoutChangeObserver=nil;
     button.layer.shadowColor=FMAccent().CGColor;
     button.layer.shadowOpacity=.24;button.layer.shadowRadius=6;
     button.layer.shadowOffset=CGSizeMake(0,1);
+    FMAddOrbBackdrop(button,self.left);
     UIView *bead=[self glass:button.bounds radius:f.size.width*.5 strong:NO];
     FMApplySideNotch(bead,button.layer,self.left,YES,YES);
+    FMAddOrbCapsule(bead,self.left);
     for(CALayer *layer in bead.layer.sublayers)
         if([layer isKindOfClass:CAShapeLayer.class]) layer.name=@"fm.orb.rim";
     bead.userInteractionEnabled=NO;
     bead.tag=9202;
     [button addSubview:bead];
-    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,4*FMOrbScale(),
-        MIN(26*FMOrbScale(),f.size.height*.55))];
-    line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
-    line.backgroundColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,3*FMOrbScale(),
+        MIN(18*FMOrbScale(),f.size.height*.30))];
+    line.center=CGPointMake(f.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),f.size.height*.5);
+    line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
     line.layer.cornerRadius=line.bounds.size.width*.5;
     line.layer.cornerCurve=kCACornerCurveCircular;
+    line.layer.borderWidth=.4;
+    line.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.4].CGColor;
     line.userInteractionEnabled=NO;
-    [FMGlassContent(bead) addSubview:line];
+    [bead addSubview:line];
     line.accessibilityIdentifier=@"fm.orb.update-indicator";
     self.orbUpdateLine=line;
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
@@ -1453,6 +1549,10 @@ static id FMLayoutChangeObserver=nil;
             break;
         }
     }
+    CGFloat pull=MAX(0,self.orb.bounds.size.width-self.orbWidth)/.4;
+    self.orbUpdateLine.hidden=pull>.01;
+    FMLayoutOrbCapsule(bead,pull/(52*FMOrbScale()));
+    FMLayoutOrbBackdrop(self.orb,self.left,pull/(52*FMOrbScale()));
     self.orb.layer.shadowPath=path.CGPath;
     [CATransaction commit];
 }
@@ -1472,7 +1572,7 @@ static id FMLayoutChangeObserver=nil;
         self.orb.frame=targetFrame;
         if(bead) bead.frame=self.orb.bounds;
         [self applyDropletPath:notchPath];
-        self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
+        self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),targetFrame.size.height*.5);
         [CATransaction commit];
         [self scheduleOrbFade];
         return;
@@ -1497,7 +1597,7 @@ static id FMLayoutChangeObserver=nil;
         options:UIViewAnimationOptionBeginFromCurrentState animations:^{
             dragged.frame=targetFrame;
             if(bead) bead.frame=dragged.bounds;
-            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
+            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),targetFrame.size.height*.5);
         } completion:^(BOOL finished){
             if(!finished || self.orb!=dragged) return;
             [CATransaction begin];
@@ -1505,7 +1605,7 @@ static id FMLayoutChangeObserver=nil;
             dragged.frame=targetFrame;
             if(bead) bead.frame=dragged.bounds;
             [self applyDropletPath:notchPath];
-            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
+            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),targetFrame.size.height*.5);
             [CATransaction commit];
             [self scheduleOrbFade];
         }];
@@ -1542,7 +1642,7 @@ static id FMLayoutChangeObserver=nil;
         if(!_panIsRepositioning && !_panIsDropletPull) {
             if(verticalDist > 16.0 && verticalDist > inwardDist * 1.3) {
                 _panIsRepositioning = YES;
-                FMAnimateOrbShoulders(self.orb, self.left, 1, YES);
+                // The reposition branch below owns the compact moving capsule.
             } else if(inwardDist > 0.5) {
                 _panIsDropletPull = YES;
             }
@@ -1558,26 +1658,30 @@ static id FMLayoutChangeObserver=nil;
         }
         
         if(_panIsRepositioning) {
+            [self.orb viewWithTag:9204].alpha=0;
             // === 换位模式：自由平移，毫秒级跟手 ===
             CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
-            CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
+            CGFloat orbW=FMOrbStyleValue(@"orbBodyWidth")*FMOrbScale(),orbH=FMOrbStyleValue(@"orbBodyHeight")*FMOrbScale();
             UIEdgeInsets safe=self.window.safeAreaInsets;
             CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
             CGFloat minY=MAX(60,safe.top+6)+orbH/2;
             CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
-            
-            // 核心修复：若刚从水滴拉伸切换过来，瞬间将微珠还原为标准胶囊尺寸，杜绝变形拉长
-            if(self.orb.bounds.size.width != orbW || self.orb.bounds.size.height != orbH) {
-                [CATransaction begin];
-                [CATransaction setDisableActions:YES];
-                self.orb.frame=CGRectMake(0,0,orbW,orbH);
-                UIView *bead=[self.orb viewWithTag:9202];
-                if(bead) bead.frame=self.orb.bounds;
-                UIBezierPath *capsulePath=FMOrbDragPath(CGRectMake(0,0,orbW,orbH),self.left,1);
-                [self applyDropletPath:capsulePath];
-                self.orbUpdateLine.center=CGPointMake(orbW*0.5,orbH*0.5);
-                [CATransaction commit];
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            self.orb.bounds=CGRectMake(0,0,orbW,orbH);
+            UIView *bead=[self.orb viewWithTag:9202];
+            bead.frame=self.orb.bounds;
+            // Keep the raised fill aligned with the body-sized material capsule.
+            FMAnimateOrbShoulders(self.orb,self.left,1,NO);
+            for(CALayer *layer in bead.layer.sublayers) {
+                if([layer.name isEqualToString:@"fm.orb.capsule"]) {
+                    layer.frame=bead.bounds;layer.cornerRadius=orbW*.5;layer.opacity=1;
+                } else if([layer.name isEqualToString:@"fm.orb.surface"]) layer.frame=bead.bounds;
             }
+            self.orbUpdateLine.hidden=NO;
+            self.orbUpdateLine.center=CGPointMake(orbW*.5,orbH*.5);
+            [self.orb viewWithTag:9204].alpha=0;
+            [CATransaction commit];
             self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
             
         } else {
@@ -1594,7 +1698,7 @@ static id FMLayoutChangeObserver=nil;
             pullDist = Clamp(pullDist, 0, maxPull);
             
             CGFloat deltaY = (p.y - _panStartPoint.y) * 0.14;
-            CGFloat currentW = self.orbWidth + pullDist;
+            CGFloat currentW = self.orbWidth + pullDist*.4;
             
             CGRect targetFrame;
             if(_panOriginalLeft) {
@@ -1607,9 +1711,7 @@ static id FMLayoutChangeObserver=nil;
             [CATransaction setDisableActions:YES];
             self.orb.frame=targetFrame;
             
-            CGFloat tProgress = Clamp(pullDist / maxPull, 0.0, 1.0);
-            CGFloat scale = FMOrbScale();
-            CGFloat headR = (8.0 * scale) * (1.0 - tProgress) + (18.0 * scale) * tProgress;
+            CGFloat headR = MIN(self.orbHeight*.20,(self.orbWidth*.5+pullDist*.025)*FMOrbStyleValue(@"orbDropletSize"));
             CGFloat headCenterX = _panOriginalLeft ? (currentW - headR) : headR;
             self.orbUpdateLine.center = CGPointMake(headCenterX, self.orbHeight * 0.5);
             
@@ -1642,25 +1744,27 @@ static id FMLayoutChangeObserver=nil;
             self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
             SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
             if(UIAccessibilityIsReduceMotionEnabled()) {
-                self.orb.frame=[self orbFrame];
-                UIView *bead=[self.orb viewWithTag:9202];
-                if(bead) bead.frame=self.orb.bounds;
-                UIBezierPath *notchPath=FMSideNotchPath(self.orb.bounds,self.left,YES,YES);
-                [self applyDropletPath:notchPath];
-                [self scheduleOrbFade];
+                [self drawOrb];
             } else {
                 UIButton *dragged=self.orb;
-                [UIView animateWithDuration:.34 delay:0 usingSpringWithDamping:.78
+                CGPoint destination=CGPointMake(CGRectGetMidX([self orbFrame]),
+                                                CGRectGetMidY([self orbFrame]));
+                [UIView animateWithDuration:FMOrbStyleValue(@"orbSnapDuration") delay:0 usingSpringWithDamping:FMOrbStyleValue(@"orbSnapDamping")
                     initialSpringVelocity:.25 options:UIViewAnimationOptionBeginFromCurrentState
-                    animations:^{dragged.frame=[self orbFrame];}
+                    animations:^{dragged.center=destination;}
                     completion:^(BOOL finished){
                         if(!finished || self.orb!=dragged) return;
-                        UIView *bead=[dragged viewWithTag:9202];
-                        if(bead) bead.frame=dragged.bounds;
-                        FMAnimateOrbShoulders(dragged,self.left,0,YES);
-                        [self scheduleOrbFade];
+                        UIView *capsule=[dragged snapshotViewAfterScreenUpdates:NO];
+                        capsule.frame=dragged.frame;capsule.userInteractionEnabled=NO;
+                        [self.overlayView addSubview:capsule];
+                        [self drawOrb];
+                        UIButton *docked=self.orb;
+                        CGFloat alpha=docked.alpha;docked.alpha=0;
+                        [UIView animateWithDuration:FMOrbStyleValue(@"orbSnapDuration")*.8
+                            delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction
+                            animations:^{capsule.alpha=0;docked.alpha=alpha;}
+                            completion:^(BOOL done){[capsule removeFromSuperview];}];
                     }];
-                [self scheduleOrbFade];
             }
         } else {
             // === 水滴模式松手 ===
@@ -1677,16 +1781,6 @@ static id FMLayoutChangeObserver=nil;
                 if(BoolPref(@"haptic", YES)) {
                     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
                 }
-                [CATransaction begin];
-                [CATransaction setDisableActions:YES];
-                self.orb.frame=_panOriginalOrbFrame;
-                UIView *bead=[self.orb viewWithTag:9202];
-                if(bead) bead.frame=self.orb.bounds;
-                UIBezierPath *notchPath=FMSideNotchPath(self.orb.bounds,self.left,YES,YES);
-                [self applyDropletPath:notchPath];
-                self.orbUpdateLine.center=CGPointMake(self.orb.bounds.size.width*0.5,self.orb.bounds.size.height*0.5);
-                [CATransaction commit];
-                
                 if(!self.isOpen) {
                     [self toggle];
                 }
@@ -1697,7 +1791,8 @@ static id FMLayoutChangeObserver=nil;
         }
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         _isPanning=NO;
-        [self restoreDropletToOriginalAnimated:NO];
+        if(_panIsRepositioning) [self drawOrb];
+        else [self restoreDropletToOriginalAnimated:NO];
     }
 }
 - (void)toggle {
@@ -2016,15 +2111,16 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         shadow.accessibilityHint=@"长按打开微珠菜单设置";
     }
     BOOL night=FMMenuDark();
-    UIColor *shadowTint=small?FMAccent():UIColor.blackColor;
+    UIColor *shadowTint=UIColor.blackColor;
     shadow.layer.shadowColor=shadowTint.CGColor;
-    shadow.layer.shadowOpacity=small?(night?.52:.24):.18;
+    shadow.layer.shadowOpacity=small?(night?.30:.18):.18;
     shadow.layer.shadowRadius=small?18:22;
     shadow.layer.shadowOffset=CGSizeMake(0,3);
     // Both layouts share the same inward-curved side-notch silhouette.
     CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
     if(small) {
+        FMAddOrbBackdrop(shadow,self.left);
         FMApplySideNotch(glass,shadow.layer,self.left,compact,NO);
     }
     [shadow addSubview:glass];
@@ -2355,8 +2451,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             button.frame=CGRectOffset(tile.frame,hit.origin.x,hit.origin.y);
             tile.frame=button.bounds;
         }
-        tile.layer.cornerRadius=tileSize*.24;
-        tile.backgroundColor=FMClearGlassEnabled()?
+        tile.layer.cornerRadius=tileSize*.26;
+        tile.layer.cornerCurve=kCACornerCurveContinuous;
+        tile.backgroundColor=compact?[UIColor.whiteColor colorWithAlphaComponent:FMMenuDark()?.10:.18]:FMClearGlassEnabled()?
             [FMThemeColor(FMColorTool) colorWithAlphaComponent:
                  UIAccessibilityIsReduceTransparencyEnabled()?.94:.48]:
             FMThemeColor(FMColorTool);
@@ -2376,7 +2473,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
-        glyph.tintColor=FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+        glyph.tintColor=compact?FMThemeColor(FMColorText):FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
@@ -2710,6 +2807,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UISlider *slider=[UISlider new];slider.minimumValue=min;slider.maximumValue=max;
     slider.value=FloatPref(key,def);slider.tag=tag;
     slider.tintColor=FMAccent();
+    if(tag>=30 && tag<40) {
+        objc_setAssociatedObject(slider,@selector(sliderFinished:),key,OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(slider,@selector(sliderChanged:),l,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        slider.accessibilityLabel=title;
+        [self updateOrbStyleLabel:slider];
+    }
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
     [slider addTarget:self action:@selector(sliderFinished:)
         forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
@@ -2874,6 +2977,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self orbScaleControl:s];
     [self settingSlider:s title:@"玻璃主题着色增强" key:@"glassTint" min:0 max:.15 def:0 tag:13];
+    [self section:@"微珠外观与回弹" sub:@"尺寸随微珠缩放；松开滑块后生效。阻尼越低，回弹越明显。" in:s];
+    NSInteger styleTag=30;
+    for(NSDictionary *option in FMOrbStyleOptions()) {
+        [self settingSlider:s title:option[@"title"] key:option[@"key"]
+            min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
+            def:[option[@"default"] floatValue] tag:styleTag++];
+    }
 }
 - (void)pinApp:(UIControl *)button {
     NSDictionary *app=objc_getAssociatedObject(button,@selector(pinApp:));
@@ -3246,11 +3356,27 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(sw.tag==3||sw.tag==7||sw.tag==8||sw.tag==18) [self draw];
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
+- (void)updateOrbStyleLabel:(UISlider *)slider {
+    NSInteger index=slider.tag-30;
+    if(index<0 || index>=(NSInteger)FMOrbStyleOptions().count) return;
+    NSDictionary *option=FMOrbStyleOptions()[index];
+    NSString *unit=option[@"unit"];
+    CGFloat value=slider.value*([unit isEqualToString:@"%"]?100:1);
+    NSString *number=[unit isEqualToString:@"秒"]?[NSString stringWithFormat:@"%.2f",value]:
+        [NSString stringWithFormat:@"%.0f",value];
+    UILabel *label=objc_getAssociatedObject(slider,@selector(sliderChanged:));
+    label.text=[NSString stringWithFormat:@"%@：%@ %@",option[@"title"],number,unit];
+    slider.accessibilityValue=[NSString stringWithFormat:@"%@ %@",number,unit];
+}
 - (void)sliderChanged:(UISlider*)slider {
     NSString *key=slider.tag==14?@"panelScale":slider.tag==10?@"idleAlpha":
         slider.tag==11?@"orbScale":
         slider.tag==13?@"glassTint":
         slider.tag==12?[@"appAlpha." stringByAppendingString:GuestID()]:nil;
+    if(slider.tag>=30 && slider.tag<40) {
+        key=objc_getAssociatedObject(slider,@selector(sliderFinished:));
+        [self updateOrbStyleLabel:slider];
+    }
     if(!key) return;
     SetPref(key,@(slider.value));
     if(slider.tag==14 || slider.tag==11) {
@@ -3266,7 +3392,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
 }
 - (void)sliderFinished:(UISlider*)slider {
-    if(slider.tag==11||slider.tag==13) [self draw];
+    if(slider.tag==11||slider.tag==13||(slider.tag>=30 && slider.tag<40)) [self draw];
 }
 - (void)openMenuLogs {
     if(!self.settingsNavigation) return;
@@ -3354,6 +3480,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self addRow:row height:65 to:stack];
 }
 - (void)resetStyle {
+    for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"recentAppsFirst",@NO);

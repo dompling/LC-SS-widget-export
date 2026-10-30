@@ -11,10 +11,13 @@ start=source.index('static UIBezierPath *FMSideNotchPath(')
 end=source.index('\n}',start)+2
 begin_capsule=source.index('static UIBezierPath *FMOrbDragPath(')
 end_capsule=source.index('\n}',begin_capsule)+2
+begin_drop=source.index('static UIBezierPath *FMDropletPath(')
+end_drop=source.index('\n}',begin_drop)+2
 # Pure geometry only: skip UIKit mask/shadow implementation.
-Path(sys.argv[2]).write_text(source[start:end]+'\n'+source[begin_capsule:end_capsule])
+style=source[source.index('static NSArray<NSDictionary *> *FMOrbStyleOptions'):source.index('// A mirrored, gently concave')]
+Path(sys.argv[2]).write_text(style+'\n'+source[start:end]+'\n'+source[begin_capsule:end_capsule]+'\n'+source[begin_drop:end_drop])
 PYTEST
-xcrun --sdk macosx clang -fobjc-arc -Wall -Wextra -Werror \
-    -framework Foundation -framework CoreGraphics -I "$WORK" \
+xcrun --sdk macosx clang -fobjc-arc -fblocks -Wall -Wextra -Werror \
+    -framework Foundation -framework CoreGraphics -framework ImageIO -I "$WORK" \
     "$ROOT/LCOrbit/Tests/side_notch_tests.m" -o "$WORK/side-notch-tests"
 "$WORK/side-notch-tests"

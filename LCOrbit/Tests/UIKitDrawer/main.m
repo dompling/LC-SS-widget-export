@@ -39,6 +39,8 @@
 - (void)automaticPiPChanged:(UISwitch *)control;
 - (void)sortDrag:(UILongPressGestureRecognizer *)gesture;
 - (void)pan:(UIPanGestureRecognizer *)gesture;
+- (void)sliderChanged:(UISlider *)slider;
+- (void)sliderFinished:(UISlider *)slider;
 @end
 @interface FMSettingsRootController : UIViewController
 - (void)tryAutomaticUpdatePrompt;
@@ -359,7 +361,7 @@ static void RunPluginManagementTests(void) {
 static void RunUpdatePromptTests(void) {
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
     [prefs setObject:nil forKey:@"LCFloatingMenu.skippedUpdateVersion"];
-    [NSUserDefaults.standardUserDefaults setObject:UpdateRelease(@"1.0.8") forKey:@"LCFloatingMenu.updateIndicator.release"];
+    [NSUserDefaults.standardUserDefaults setObject:UpdateRelease(@"9.0.8") forKey:@"LCFloatingMenu.updateIndicator.release"];
     CapturedAlert=nil;UpdatePromptPresentations=0;GitHubCompletions=[NSMutableArray array];
     FMSettingsRootController *root=[FMSettingsRootController new];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:root];
@@ -367,38 +369,38 @@ static void RunUpdatePromptTests(void) {
     window.rootViewController=nav;window.hidden=NO;[window layoutIfNeeded];[root loadViewIfNeeded];
     AttemptAutomaticUpdate(root);
     NSArray *buttons=[CapturedAlert.actions valueForKey:@"title"];
-    Check(@"update-auto-prompt-has-notes-and-two-actions",[CapturedAlert.title containsString:@"1.0.8"] &&
+    Check(@"update-auto-prompt-has-notes-and-two-actions",[CapturedAlert.title containsString:@"9.0.8"] &&
           [CapturedAlert.message containsString:@"改善设置中的更新提醒"] &&
           [buttons isEqual:@[@"跳过此版本",@"下载更新"]],nil);
     NSUInteger offered=UpdatePromptPresentations;
-    AttemptAutomaticUpdate(root);NotifyUpdate(UpdateRelease(@"1.0.8"));
+    AttemptAutomaticUpdate(root);NotifyUpdate(UpdateRelease(@"9.0.8"));
     Check(@"update-auto-same-version-once-per-controller",offered==1 && UpdatePromptPresentations==offered,nil);
     InvokeAlertAction(CapturedAlert,@"跳过此版本");
-    Check(@"update-skip-persists-exact-version",[[prefs objectForKey:@"LCFloatingMenu.skippedUpdateVersion"] isEqual:@"1.0.8"],nil);
+    Check(@"update-skip-persists-exact-version",[[prefs objectForKey:@"LCFloatingMenu.skippedUpdateVersion"] isEqual:@"9.0.8"],nil);
     CapturedAlert=nil;
     FMSettingsRootController *reopened=[FMSettingsRootController new];
     SetUpdateRoot(nav,reopened,window);AttemptAutomaticUpdate(reopened);
     Check(@"update-skipped-version-suppressed-after-reopen",!CapturedAlert,nil);
-    [reopened checkForUpdates];CompleteUpdateRequest(@"1.0.8");
+    [reopened checkForUpdates];CompleteUpdateRequest(@"9.0.8");
     dispatch_async(dispatch_get_main_queue(),^{
-        Check(@"update-manual-check-ignores-skipped-version",[CapturedAlert.title containsString:@"1.0.8"] &&
+        Check(@"update-manual-check-ignores-skipped-version",[CapturedAlert.title containsString:@"9.0.8"] &&
               [[CapturedAlert.actions valueForKey:@"title"] containsObject:@"下载更新"],
               @{@"hasWindow":@(reopened.view.window!=nil),@"isTop":@(nav.topViewController==reopened),
                 @"hidden":@(window.hidden),@"checking":[reopened valueForKey:@"checkingUpdate"],
                 @"pendingRequests":@(GitHubCompletions.count),@"title":CapturedAlert.title?:@""});
-        CapturedAlert=nil;NotifyUpdate(UpdateRelease(@"1.0.9"));AttemptAutomaticUpdate(reopened);
-        Check(@"update-new-version-still-offered",[CapturedAlert.title containsString:@"1.0.9"],nil);
+        CapturedAlert=nil;NotifyUpdate(UpdateRelease(@"9.0.9"));AttemptAutomaticUpdate(reopened);
+        Check(@"update-new-version-still-offered",[CapturedAlert.title containsString:@"9.0.9"],nil);
         RejectUpdateSkipSave=YES;InvokeAlertAction(CapturedAlert,@"跳过此版本");RejectUpdateSkipSave=NO;
         Check(@"update-failed-skip-reports-error",[CapturedAlert.title isEqual:@"跳过未保存"],nil);
-        Check(@"update-failed-skip-not-persisted",[[prefs objectForKey:@"LCFloatingMenu.skippedUpdateVersion"] isEqual:@"1.0.8"],nil);
+        Check(@"update-failed-skip-not-persisted",[[prefs objectForKey:@"LCFloatingMenu.skippedUpdateVersion"] isEqual:@"9.0.8"],nil);
         CapturedAlert=nil;
         UIViewController *child=[UIViewController new];[nav pushViewController:child animated:NO];
-        NotifyUpdate(UpdateRelease(@"1.0.10"));AttemptAutomaticUpdate(reopened);
+        NotifyUpdate(UpdateRelease(@"9.0.10"));AttemptAutomaticUpdate(reopened);
         Check(@"update-notification-does-not-interrupt-child-page",!CapturedAlert,nil);
         [nav popViewControllerAnimated:NO];[window layoutIfNeeded];[nav.view layoutIfNeeded];AttemptAutomaticUpdate(reopened);
-        Check(@"update-return-to-root-offers-late-version",[CapturedAlert.title containsString:@"1.0.10"],nil);
+        Check(@"update-return-to-root-offers-late-version",[CapturedAlert.title containsString:@"9.0.10"],nil);
         CapturedAlert=nil;window.hidden=YES;
-        NotifyUpdate(UpdateRelease(@"1.0.11"));AttemptAutomaticUpdate(reopened);
+        NotifyUpdate(UpdateRelease(@"9.0.11"));AttemptAutomaticUpdate(reopened);
         Check(@"update-hidden-window-does-not-prompt",!CapturedAlert,nil);
         window.hidden=NO;
         FixtureHost=NO;AttemptAutomaticUpdate(reopened);
@@ -408,7 +410,7 @@ static void RunUpdatePromptTests(void) {
         NSUInteger downloadsBefore=DownloadResumes;
         InvokeAlertAction(downloadAlert,@"下载更新");InvokeAlertAction(downloadAlert,@"下载更新");
         Check(@"update-download-action-starts-once-without-second-confirmation",DownloadResumes==downloadsBefore+1 &&
-              [DownloadRequest.URL.absoluteString isEqual:UpdateRelease(@"1.0.11")[@"downloadURL"]] &&
+              [DownloadRequest.URL.absoluteString isEqual:UpdateRelease(@"9.0.11")[@"downloadURL"]] &&
               ![DownloadRequest valueForHTTPHeaderField:@"Authorization"],nil);
         CapturedAlert=nil;
         if(DownloadCompletion) {
@@ -418,7 +420,7 @@ static void RunUpdatePromptTests(void) {
         }
         dispatch_async(dispatch_get_main_queue(),^{
             Check(@"update-download-uses-existing-digest-install-boundary",UpdateInstalls==1 &&
-                  [InstalledUpdateDigest isEqual:UpdateRelease(@"1.0.11")[@"sha256"]],nil);
+                  [InstalledUpdateDigest isEqual:UpdateRelease(@"9.0.11")[@"sha256"]],nil);
             // No metadata: fetch once, leave the root before completion. The
             // late result is cacheable but cannot take over a child page.
             [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
@@ -427,19 +429,19 @@ static void RunUpdatePromptTests(void) {
             SetUpdateRoot(nav,late,window);CapturedAlert=nil;
             AttemptAutomaticUpdate(late);AttemptAutomaticUpdate(late);
             Check(@"update-missing-metadata-fetches-once-per-controller",GitHubRequests==before+1,nil);
-            [nav pushViewController:[UIViewController new] animated:NO];CompleteUpdateRequest(@"1.0.12");
+            [nav pushViewController:[UIViewController new] animated:NO];CompleteUpdateRequest(@"9.0.12");
             dispatch_async(dispatch_get_main_queue(),^{
                 NSDictionary *cached=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
-                Check(@"update-late-response-caches-without-presenting",!CapturedAlert && [cached[@"version"] isEqual:@"1.0.12"],nil);
+                Check(@"update-late-response-caches-without-presenting",!CapturedAlert && [cached[@"version"] isEqual:@"9.0.12"],nil);
                 [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
                 FMSettingsRootController *notesRoot=[FMSettingsRootController new];
                 SetUpdateRoot(nav,notesRoot,window);AttemptAutomaticUpdate(notesRoot);
-                NSDictionary *metadata=UpdateRelease(@"1.0.13");
-                CompleteUpdateJSON(@{@"body":[NSString stringWithFormat:@"FM_VERSION=1.0.13\nFM_COMMIT=%@\nFM_TAG=fm-latest",metadata[@"commit"]],
+                NSDictionary *metadata=UpdateRelease(@"9.0.13");
+                CompleteUpdateJSON(@{@"body":[NSString stringWithFormat:@"FM_VERSION=9.0.13\nFM_COMMIT=%@\nFM_TAG=fm-latest",metadata[@"commit"]],
                     @"assets":@[@{@"name":@"LCFloatingMenu.dylib",@"digest":metadata[@"sha256"],@"browser_download_url":metadata[@"downloadURL"]}]});
                 dispatch_async(dispatch_get_main_queue(),^{
-                    Check(@"update-metadata-only-fetches-version-tag-notes",[GitHubRequestedURL hasSuffix:@"/releases/tags/1.0.13"] && GitHubCompletions.count>0,nil);
-                    CompleteUpdateJSON(@{@"tag_name":@"1.0.13",@"body":@"# 独立版本说明\n这里是正式更新说明。"});
+                    Check(@"update-metadata-only-fetches-version-tag-notes",[GitHubRequestedURL hasSuffix:@"/releases/tags/9.0.13"] && GitHubCompletions.count>0,nil);
+                    CompleteUpdateJSON(@{@"tag_name":@"9.0.13",@"body":@"# 独立版本说明\n这里是正式更新说明。"});
                     dispatch_async(dispatch_get_main_queue(),^{
                         NSDictionary *enriched=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
                         Check(@"update-version-tag-enriches-prompt-and-cache",[CapturedAlert.message containsString:@"正式更新说明"] &&
@@ -449,17 +451,17 @@ static void RunUpdatePromptTests(void) {
                         [notesRoot checkForUpdates];
                         FMSettingsRootController *fast=[FMSettingsRootController new];
                         SetUpdateRoot(nav,fast,window);[fast checkForUpdates];
-                        CapturedAlert=nil;CompleteUpdateRequest(@"1.0.21");CompleteUpdateRequest(@"1.0.20");
+                        CapturedAlert=nil;CompleteUpdateRequest(@"9.0.21");CompleteUpdateRequest(@"9.0.20");
                         dispatch_async(dispatch_get_main_queue(),^{
                             NSDictionary *newest=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
-                            Check(@"update-out-of-order-release-never-rewinds-cache-or-prompt",[newest[@"version"] isEqual:@"1.0.21"] &&
-                                  ![CapturedAlert.title containsString:@"1.0.20"],nil);
+                            Check(@"update-out-of-order-release-never-rewinds-cache-or-prompt",[newest[@"version"] isEqual:@"9.0.21"] &&
+                                  ![CapturedAlert.title containsString:@"9.0.20"],nil);
                             // Same artifact with complete cached notes must
                             // survive a later metadata-only fallback result.
                             [fast checkForUpdates];
-                            NSDictionary *same=UpdateRelease(@"1.0.21");
+                            NSDictionary *same=UpdateRelease(@"9.0.21");
                             NSDictionary *(^metadataOnly)(NSString *)=^NSDictionary *(NSString *commit) {
-                                return @{@"body":[NSString stringWithFormat:@"FM_VERSION=1.0.21\nFM_COMMIT=%@",commit],
+                                return @{@"body":[NSString stringWithFormat:@"FM_VERSION=9.0.21\nFM_COMMIT=%@",commit],
                                     @"assets":@[@{@"name":@"LCFloatingMenu.dylib",@"digest":same[@"sha256"],@"browser_download_url":same[@"downloadURL"]}]};
                             };
                             CompleteUpdateJSON(metadataOnly(same[@"commit"]));
@@ -472,12 +474,12 @@ static void RunUpdatePromptTests(void) {
                                 // never pair its binary with another's notes.
                                 [notesRoot checkForUpdates];[fast checkForUpdates];
                                 NSString *newCommit=@"cccccccccccccccccccccccccccccccccccccccc";
-                                NSString *newBody=[NSString stringWithFormat:@"FM_VERSION=1.0.22\nFM_COMMIT=%@\n新构建对应说明",newCommit];
+                                NSString *newBody=[NSString stringWithFormat:@"FM_VERSION=9.0.22\nFM_COMMIT=%@\n新构建对应说明",newCommit];
                                 NSDictionary *asset=@{@"name":@"LCFloatingMenu.dylib",@"digest":same[@"sha256"],@"browser_download_url":same[@"downloadURL"]};
                                 CompleteUpdateJSON(@{@"body":newBody,@"assets":@[asset]});
-                                NSString *oldBody=[NSString stringWithFormat:@"FM_VERSION=1.0.22\nFM_COMMIT=%@",same[@"commit"]];
+                                NSString *oldBody=[NSString stringWithFormat:@"FM_VERSION=9.0.22\nFM_COMMIT=%@",same[@"commit"]];
                                 CompleteUpdateJSON(@{@"body":oldBody,@"assets":@[asset]});
-                                CompleteUpdateJSON(@{@"tag_name":@"1.0.22",@"body":@"旧构建迟到的说明"});
+                                CompleteUpdateJSON(@{@"tag_name":@"9.0.22",@"body":@"旧构建迟到的说明"});
                                 dispatch_async(dispatch_get_main_queue(),^{
                                     NSDictionary *artifact=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
                                     Check(@"update-same-version-artifact-keeps-matched-notes",[artifact[@"commit"] isEqual:newCommit] &&
@@ -485,7 +487,7 @@ static void RunUpdatePromptTests(void) {
                                     [fast checkForUpdates];
                                     NSString *rebuilt=@"dddddddddddddddddddddddddddddddddddddddd";
                                     NSString *rebuiltDigest=@"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-                                    CompleteUpdateJSON(@{@"body":[NSString stringWithFormat:@"FM_VERSION=1.0.22\nFM_COMMIT=%@\n同版本重新构建说明",rebuilt],
+                                    CompleteUpdateJSON(@{@"body":[NSString stringWithFormat:@"FM_VERSION=9.0.22\nFM_COMMIT=%@\n同版本重新构建说明",rebuilt],
                                         @"assets":@[@{@"name":@"LCFloatingMenu.dylib",@"digest":rebuiltDigest,@"browser_download_url":same[@"downloadURL"]}]});
                                     dispatch_async(dispatch_get_main_queue(),^{
                                         NSDictionary *latestArtifact=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"LCFloatingMenu.updateIndicator.release"];
@@ -548,8 +550,8 @@ static void RunTests(void) {
     }
     [prefs setObject:@1 forKey:@"LCFloatingMenu.orbScale"];
     FMManager *proportion=Manager(NO,1,667,ordinary,NO,NO,@"apps");
-    Check(@"bead-16-by-72-proportion",fabs(proportion.orb.bounds.size.width-16)<.01 &&
-          fabs(proportion.orb.bounds.size.height-72)<.01,NSStringFromCGRect(proportion.orb.bounds));
+    Check(@"bead-default-style-proportion",fabs(proportion.orb.bounds.size.width-14)<.01 &&
+          fabs(proportion.orb.bounds.size.height-102)<.01,NSStringFromCGRect(proportion.orb.bounds));
     Snapshot(proportion,@"collapsed-bead");
     for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *height in @[@320,@375]) {
         FMManager *m=Manager(compact.boolValue,1,height.doubleValue,ordinary,NO,YES,@"apps");
@@ -615,8 +617,8 @@ static void RunTests(void) {
     }
     for(NSNumber *left in @[@NO,@YES]) {
         UIEdgeInsets insets=UIEdgeInsetsMake(0,59,21,35);FMManager *m=Manager(NO,1,375,insets,left.boolValue,NO,@"apps");
-        CGRect orb=Frame(m.orb,m);BOOL safe=CGRectGetMinX(orb)>=insets.left-.01 && CGRectGetMaxX(orb)<=667-insets.right+.01;
-        Check([NSString stringWithFormat:@"horizontal-safe-handle-%@",left],safe,NSStringFromCGRect(orb));
+        CGRect orb=Frame(m.orb,m);BOOL safe=left.boolValue?fabs(CGRectGetMinX(orb))<.01:fabs(CGRectGetMaxX(orb)-667)<.01;
+        Check([NSString stringWithFormat:@"horizontal-edge-attached-handle-%@",left],safe,NSStringFromCGRect(orb));
         m.isOpen=YES;[m draw];[m.overlayView layoutIfNeeded];safe=YES;
         for(UIControl *c in Actions(m,@"switchFromRow:")) {CGRect f=Frame(c,m);safe &= CGRectGetMinX(f)>=insets.left-.01 && CGRectGetMaxX(f)<=667-insets.right+.01;}
         Check([NSString stringWithFormat:@"horizontal-safe-content-%@",left],safe,NSStringFromCGRect(m.panel.frame));Snapshot(m,[NSString stringWithFormat:@"safe-%@",left]);
@@ -645,6 +647,7 @@ static void RunTests(void) {
     Check(@"footer-close-immediate",!CapturedAlert && CloseCount==1 && !closing.isOpen,@{@"closeCalls":@(CloseCount),@"alert":@(CapturedAlert!=nil)});FixtureCurrent=NO;
     FMManager *pan=Manager(NO,1,667,ordinary,NO,NO,@"apps");CGRect saved=pan.orb.frame;PositionWrites=0;
     FixturePan *g=[FixturePan new];g.fixturePoint=CGPointMake(150,180);g.fixtureState=UIGestureRecognizerStateBegan;[pan pan:g];
+    g.fixtureState=UIGestureRecognizerStateChanged;g.fixturePoint=CGPointMake(150,210);[pan pan:g];
     UIView *orbGlass=[pan.orb viewWithTag:9202];
     CAShapeLayer *neutralMask=(CAShapeLayer *)orbGlass.layer.mask;
     CGPathRef neutralPath=CGPathCreateCopy(neutralMask.path);
@@ -654,13 +657,14 @@ static void RunTests(void) {
     BOOL roundedBottom=CGPathContainsPoint(neutralPath,NULL,CGPointMake(orbW*.5,orbH-.10),NO) &&
                        !CGPathContainsPoint(neutralPath,NULL,CGPointMake(orbW*.95,orbH-.10),NO);
     Check(@"drag-capsule-not-trapezoid",roundedTop && roundedBottom,nil);
-    g.fixtureState=UIGestureRecognizerStateChanged;g.fixturePoint=CGPointMake(520,180);[pan pan:g];
+    g.fixtureState=UIGestureRecognizerStateChanged;g.fixturePoint=CGPointMake(520,210);[pan pan:g];
     Check(@"drag-crosses-screen-without-flip",CGPathEqualToPath(neutralPath,neutralMask.path) &&
           !pan.left,nil);
     CGPathRelease(neutralPath);
-    g.fixtureState=UIGestureRecognizerStateCancelled;[pan pan:g];
+    NSUInteger cancelWrites=PositionWrites;g.fixtureState=UIGestureRecognizerStateCancelled;[pan pan:g];
+    Check(@"cancelled-pan-does-not-save-position",PositionWrites==cancelWrites,nil);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.6*NSEC_PER_SEC),dispatch_get_main_queue(),^{
-        Check(@"cancelled-pan-restores-position",CGRectEqualToRect(saved,pan.orb.frame) && PositionWrites==0,@{@"saved":NSStringFromCGRect(saved),@"actual":NSStringFromCGRect(pan.orb.frame),@"positionWrites":@(PositionWrites)});
+        Check(@"cancelled-pan-restores-position",CGRectEqualToRect(saved,pan.orb.frame),@{@"saved":NSStringFromCGRect(saved),@"actual":NSStringFromCGRect(pan.orb.frame),@"positionWrites":@(PositionWrites)});
     });
     LCOrbitPreferences *p=[LCOrbitStorage preferences];[p setObject:@YES forKey:@"LCFloatingMenu.roundOrb"];[p setObject:@YES forKey:@"LCFloatingMenu.autoFade"];
     FMManager *legacy=Manager(NO,1,667,ordinary,NO,NO,@"apps");
@@ -677,6 +681,37 @@ static void RunTests(void) {
         BOOL removed=YES;for(UIView *v in Views(stack)) if([v isKindOfClass:UILabel.class]) {NSString *t=((UILabel *)v).text;removed &= ![t containsString:@"圆形微珠"] && ![t containsString:@"闲置贴边待命"];}
         Check([@"removed-native-category-" stringByAppendingString:category],removed,nil);Snapshot(m,[@"settings-native-" stringByAppendingString:category]);
     }
+    FMManager *style=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    UIStackView *styleStack=[UIStackView new];
+    [style populateSettingsCategory:@"appearance" stack:styleStack];
+    NSMutableArray<UISlider *> *styleSliders=[NSMutableArray array];
+    for(UIView *view in Views(styleStack)) if([view isKindOfClass:UISlider.class] && view.tag>=30 && view.tag<40) [styleSliders addObject:(UISlider *)view];
+    Check(@"orb-style-has-ten-adjustments",styleSliders.count==10,@(styleSliders.count));
+    UISlider *extension=nil;
+    for(UISlider *slider in styleSliders) if(slider.tag==30) extension=slider;
+    extension.value=31;[style sliderChanged:extension];[style sliderFinished:extension];
+    Check(@"orb-style-slider-applies-and-persists",fabs(style.orb.bounds.size.height-114)<.01 &&
+        [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,NSStringFromCGRect(style.orb.bounds));
+    UIStackView *reopened=[UIStackView new];[style populateSettingsCategory:@"appearance" stack:reopened];
+    BOOL restored=NO;for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag==30) restored=fabs(((UISlider *)view).value-31)<.01;
+    Check(@"orb-style-restores-on-reopen",restored,nil);
+    [prefs removeObjectForKey:@"LCFloatingMenu.orbExtension"];
+    dispatch_async(dispatch_get_main_queue(), ^{
+    FMManager *snap=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    snap.window.hidden=NO;
+    FixturePan *move=[FixturePan new];move.fixturePoint=CGPointMake(640,200);move.fixtureState=UIGestureRecognizerStateBegan;[snap pan:move];
+    move.fixturePoint=CGPointMake(640,230);move.fixtureState=UIGestureRecognizerStateChanged;[snap pan:move];
+    UIButton *movingOrb=snap.orb;
+    Check(@"moving-orb-only-capsule",CGSizeEqualToSize(movingOrb.bounds.size,CGSizeMake(12,52)) && [movingOrb viewWithTag:9204].alpha==0,NSStringFromCGRect(movingOrb.bounds));
+    move.fixturePoint=CGPointMake(10,230);[snap pan:move];move.fixtureState=UIGestureRecognizerStateEnded;[snap pan:move];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
+        UIView *glass=[snap.orb viewWithTag:9202];CALayer *capsule=nil;
+        for(CALayer *layer in glass.layer.sublayers) if([layer.name isEqualToString:@"fm.orb.capsule"]) capsule=layer;
+        CGFloat markerX=0;for(UIView *view in glass.subviews) if([view.accessibilityIdentifier isEqual:@"fm.orb.update-indicator"]) markerX=view.center.x;
+        Check(@"snap-restores-new-side-layout",snap.left && snap.orb!=movingOrb && fabs(capsule.frame.origin.x-2)<.01 && fabs(markerX-8)<.01 && [snap.orb viewWithTag:9204].alpha==1,@{@"left":@(snap.left),@"new":@(snap.orb!=movingOrb),@"capsule":NSStringFromCGRect(capsule.frame),@"marker":@(markerX),@"backdrop":@([snap.orb viewWithTag:9204].alpha),@"orb":NSStringFromCGRect(snap.orb.bounds)});
+        Snapshot(snap,@"orb-after-animated-snap");snap.window.hidden=YES;
+    });
+    });
     // Exercise the real native settings pages with credentials behind a
     // fixture boundary. A saved token must never become text-field content.
     FMManager *githubHost=Manager(NO,1,667,ordinary,NO,NO,@"apps");

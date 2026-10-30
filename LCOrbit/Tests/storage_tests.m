@@ -70,8 +70,11 @@ int main(int argc,const char **argv) { @autoreleasepool {
     Expect(![Document(file)[@"preferences"][@"LCFloatingMenu.autoSyncSharedTweaks"] boolValue],@"setter persists JSON immediately");
     NSMutableDictionary *external=[Document(file)[@"preferences"] mutableCopy];
     external[@"LCFloatingMenu.idleAlpha"]=@.23;
+    external[@"LCFloatingMenu.orbExtension"]=@31;
+    external[@"LCFloatingMenu.orbGlowBrightness"]=@.22;
     Write(file,@{@"schemaVersion":@1,@"preferences":external});
     Expect([LCOrbitStorage reloadWithError:nil] && [prefs doubleForKey:@"LCFloatingMenu.idleAlpha"]==.23,@"valid external JSON changes become effective");
+    Expect([prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31 && [prefs doubleForKey:@"LCFloatingMenu.orbGlowBrightness"]==.22,@"orb style settings reload from JSON");
     NSString *executable=NSProcessInfo.processInfo.arguments.firstObject;
     NSTask *fresh=[NSTask new];fresh.executableURL=[NSURL fileURLWithPath:executable];
     fresh.arguments=@[@"--read",home,@"LCFloatingMenu.idleAlpha",@"0.23"];

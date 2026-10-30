@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <ImageIO/ImageIO.h>
 
 // Run the production UIKit path builder on macOS using its CoreGraphics operations.
 @interface UIBezierPath : NSObject
@@ -28,17 +29,31 @@
 }
 @end
 static inline CGFloat Clamp(CGFloat x,CGFloat lo,CGFloat hi) { return fmax(lo,fmin(hi,x)); }
+static CGFloat FMOrbScale(void) { return 1; }
+static NSMutableDictionary *stylePreferences;
+static CGFloat FloatPref(NSString *key,CGFloat fallback) { return stylePreferences[key]?[stylePreferences[key] doubleValue]:fallback; }
 #include "side-notch.inc"
 static int passed,failed;
 static void Expect(BOOL condition,const char *message) {
     if(condition) passed++; else { failed++; fprintf(stderr,"FAIL: %s\n",message); }
 }
 int main(void) { @autoreleasepool {
+    stylePreferences=[NSMutableDictionary dictionary];
+    for(NSDictionary *option in FMOrbStyleOptions()) {
+        NSString *key=option[@"key"];
+        Expect(FMOrbStyleValue(key)==[option[@"default"] doubleValue],"style setting preserves default");
+        stylePreferences[key]=@(-1000);
+        Expect(FMOrbStyleValue(key)==[option[@"min"] doubleValue],"style setting clamps lower limit");
+        stylePreferences[key]=@(1000);
+        Expect(FMOrbStyleValue(key)==[option[@"max"] doubleValue],"style setting clamps upper limit");
+        [stylePreferences removeObjectForKey:key];
+    }
+
     for(NSNumber *scale in @[@.7,@1,@1.9]) {
         CGFloat w=16*scale.doubleValue,h=64*scale.doubleValue;
         UIBezierPath *tab=FMSideNotchPath(CGRectMake(0,0,w,h),NO,YES,YES);
-        Expect(!CGPathContainsPoint(tab.CGPath,NULL,CGPointMake(w*.12,h*.20),NO),"collapsed upper flare must remain visibly inset from inner body");
-        Expect(!CGPathContainsPoint(tab.CGPath,NULL,CGPointMake(w*.12,h*.80),NO),"collapsed lower flare must remain visibly inset from inner body");
+        Expect(!CGPathContainsPoint(tab.CGPath,NULL,CGPointMake(w*.12,h*.10),NO),"collapsed upper flare must remain visibly inset from inner body");
+        Expect(!CGPathContainsPoint(tab.CGPath,NULL,CGPointMake(w*.12,h*.90),NO),"collapsed lower flare must remain visibly inset from inner body");
     }
     for(NSNumber *width in @[@12,@76,@310]) {
         CGFloat w=width.doubleValue,h=w==12?52:360;
@@ -55,6 +70,32 @@ int main(void) { @autoreleasepool {
                        CGPathContainsPoint(left.CGPath,NULL,CGPointMake(w-x,y),NO),"left and right outlines mirror exactly");
         }
     }
+    for(NSNumber *left in @[@YES,@NO]) {
+        CGRect bounds=CGRectMake(0,0,16,64);
+        Expect(CGPathEqualToPath(FMDropletPath(bounds,left.boolValue,0,52).CGPath,
+                                FMSideNotchPath(bounds,left.boolValue,YES,YES).CGPath),
+               "pull starts at the exact docked outline without a shape jump");
+        for(CGFloat pull=1;pull<=52;pull+=1) {
+            CGFloat w=16+pull*.4;
+            UIBezierPath *drop=FMDropletPath(CGRectMake(0,0,w,64),left.boolValue,pull,52);
+            CGFloat edge=left.boolValue?.001:w-.001;
+            Expect(CGPathContainsPoint(drop.CGPath,NULL,CGPointMake(edge,32),NO),
+                   "droplet remains attached to the screen throughout pull");
+            CGRect box=CGPathGetPathBoundingBox(drop.CGPath);
+            Expect(box.origin.x>=-.01 && box.origin.y>=-.01 &&
+                   CGRectGetMaxX(box)<=w+.01 && CGRectGetMaxY(box)<=64.01,
+                   "droplet remains inside glass bounds");
+        }
+    }
+    // Repositioning uses the visible body dimensions, not the tall dock backing.
+    UIBezierPath *moving=FMOrbDragPath(CGRectMake(0,0,12,52),NO,1);
+    UIBezierPath *movingLeft=FMOrbDragPath(CGRectMake(0,0,12,52),YES,1);
+    Expect(CGRectEqualToRect(CGPathGetPathBoundingBox(moving.CGPath),CGRectMake(0,0,12,52)),
+           "moving capsule keeps only the twelve by fifty-two point body");
+    for(CGFloat x=.5;x<12;x+=1) for(CGFloat y=.5;y<52;y+=1)
+        Expect(CGPathContainsPoint(moving.CGPath,NULL,CGPointMake(x,y),NO)==
+               CGPathContainsPoint(movingLeft.CGPath,NULL,CGPointMake(x,y),NO),
+               "moving capsule stays identical when crossing the screen midpoint");
     // Free drag must be a true round-ended capsule without the previous
     // triangular shoulders. It must look the SAME when crossing the midline.
     for(NSNumber *scale in @[@.7,@1,@1.9]) {
@@ -94,6 +135,57 @@ int main(void) { @autoreleasepool {
                    !CGPathContainsPoint(transitioning,NULL,CGPointMake(w*.5,h+.4),NO),
                    "all morph phases stay within rendered bead bounds");
         }
+    }
+    UIBezierPath *fullDrop=FMDropletPath(CGRectMake(0,0,36.8,64),NO,52,52);
+    Expect(!CGPathContainsPoint(fullDrop.CGPath,NULL,CGPointMake(1,20),NO),
+           "pulled head must round inward above its center, never a flat trapezoid front");
+    Expect(CGPathContainsPoint(fullDrop.CGPath,NULL,CGPointMake(1,32),NO),
+           "round head reaches the inward-most tip at its center");
+    Expect(CGPathContainsPoint(fullDrop.CGPath,NULL,CGPointMake(36.79,32),NO),
+           "liquid pull remains joined at its pointed root");
+    Expect(!CGPathContainsPoint(fullDrop.CGPath,NULL,CGPointMake(36.6,30),NO) &&
+           !CGPathContainsPoint(fullDrop.CGPath,NULL,CGPointMake(36.6,34),NO),
+           "full pull tapers to a sharp root instead of a broad edge");
+    // Smaller head and shorter travel preserve the scale of the original tab.
+    // Every vertical slice must remain one connected piece of glass.
+    for(CGFloat pull=4;pull<=52;pull+=4) {
+        CGFloat w=16+pull*.4;
+        UIBezierPath *right=FMDropletPath(CGRectMake(0,0,w,64),NO,pull,52);
+        UIBezierPath *left=FMDropletPath(CGRectMake(0,0,w,64),YES,pull,52);
+        for(CGFloat x=.5;x<w;x+=1) {
+            BOOL entered=NO,exited=NO;
+            for(CGFloat y=.5;y<64;y+=1) {
+                BOOL inside=CGPathContainsPoint(right.CGPath,NULL,CGPointMake(x,y),NO);
+                Expect(inside==CGPathContainsPoint(left.CGPath,NULL,CGPointMake(w-x,y),NO),
+                       "liquid pull mirrors exactly on either docking edge");
+                Expect(!(inside && exited),"liquid pull has no disconnected lobes or holes");
+                if(inside) entered=YES;
+                else if(entered) exited=YES;
+            }
+        }
+    }
+    const char *preview=getenv("FM_GEOMETRY_PREVIEW");
+    if(preview) {
+        CGContextRef ctx=CGBitmapContextCreate(NULL,960,400,8,0,CGColorSpaceCreateDeviceRGB(),(CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+        CGContextSetRGBFillColor(ctx,.035,.04,.055,1); CGContextFillRect(ctx,CGRectMake(0,0,960,400));
+        for(int phase=0;phase<4;phase++) {
+            CGFloat pull=phase==0?0:phase==1?12:phase==2?32:52;
+            CGContextSaveGState(ctx);
+            CGContextTranslateCTM(ctx,220+phase*240,320); CGContextScaleCTM(ctx,3,-3);
+            CGContextSetRGBStrokeColor(ctx,.3,.34,.4,1); CGContextSetLineWidth(ctx,.4);
+            CGContextMoveToPoint(ctx,0,-12); CGContextAddLineToPoint(ctx,0,84); CGContextStrokePath(ctx);
+            CGContextTranslateCTM(ctx,-16-pull*.4,0);
+            UIBezierPath *outline=phase==0?FMSideNotchPath(CGRectMake(0,0,16,64),NO,YES,YES):
+                FMDropletPath(CGRectMake(0,0,16+pull*.4,64),NO,pull,52);
+            CGContextAddPath(ctx,outline.CGPath); CGContextSetRGBFillColor(ctx,.48,.51,.55,.65);
+            CGContextSetRGBStrokeColor(ctx,.85,.88,.94,.8); CGContextSetLineWidth(ctx,.45);
+            CGContextDrawPath(ctx,kCGPathFillStroke); CGContextRestoreGState(ctx);
+        }
+        CGImageRef img=CGBitmapContextCreateImage(ctx);
+        NSURL *url=[NSURL fileURLWithPath:@(preview)];
+        CGImageDestinationRef dest=CGImageDestinationCreateWithURL((__bridge CFURLRef)url,CFSTR("public.png"),1,NULL);
+        CGImageDestinationAddImage(dest,img,NULL); CGImageDestinationFinalize(dest);
+        CFRelease(dest); CGImageRelease(img); CGContextRelease(ctx);
     }
     printf("Side-notch and capsule morph geometry: %d assertions, %d failures\n",passed+failed,failed);
     return failed?1:0;
