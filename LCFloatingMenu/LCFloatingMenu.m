@@ -1482,14 +1482,11 @@ static id FMLayoutChangeObserver=nil;
     UIBezierPath *notchPath=FMSideNotchPath(CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height),self.left,YES,YES);
     CGPathRef destPath=notchPath.CGPath;
     
-    // 无动画一次性拍平容器宽度、bead、mask、rim、shadow 全部回到目标尺寸
-    // 宽度立刻恢复，只留 Y 坐标跟随弹簧动画，避免动画中间态 bounds 与 path 不匹配
+    // 无动画拍平 mask/rim/shadow 路径到目标状态，避免动画中间态 bounds 与 path 不匹配
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    CGRect snapFrame=CGRectMake(targetFrame.origin.x, self.orb.frame.origin.y, targetFrame.size.width, targetFrame.size.height);
-    self.orb.frame=snapFrame;
     if(bead) {
-        bead.frame=self.orb.bounds;
+        bead.frame=CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height);
         CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
         if([mask isKindOfClass:CAShapeLayer.class]) {
             [mask removeAnimationForKey:@"fm.orb.shoulders"];
@@ -1509,15 +1506,29 @@ static id FMLayoutChangeObserver=nil;
     self.orb.layer.shadowPath=destPath;
     [CATransaction commit];
     
-    // 弹簧动画只动 Y 位置（宽度已瞬间正确，不再变）
+    // 弹簧动画移动容器 frame（包含位置和尺寸）
     [UIView animateWithDuration:0.38 delay:0 usingSpringWithDamping:0.70 initialSpringVelocity:0.5
         options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            CGRect f=self.orb.frame;
-            f.origin.y=targetFrame.origin.y;
-            self.orb.frame=f;
+            self.orb.frame=targetFrame;
+            if(bead) bead.frame=self.orb.bounds;
             self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
             if(self.orbAppPreviewView) self.orbAppPreviewView.center=self.orbUpdateLine.center;
         } completion:^(BOOL finished) {
+            // 动画结束后再次确保路径一致，防止 bead bounds 变化后路径残留
+            if(bead) {
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+                bead.frame=CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height);
+                CAShapeLayer *mask2=(CAShapeLayer *)bead.layer.mask;
+                if([mask2 isKindOfClass:CAShapeLayer.class]) { mask2.frame=bead.bounds; mask2.path=destPath; }
+                for(CALayer *layer in bead.layer.sublayers) {
+                    if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
+                        layer.frame=bead.bounds; ((CAShapeLayer *)layer).path=destPath; break;
+                    }
+                }
+                self.orb.layer.shadowPath=destPath;
+                [CATransaction commit];
+            }
             if(completion) completion();
         }];
 }
