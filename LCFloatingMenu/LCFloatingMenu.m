@@ -1981,7 +1981,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [self spacer:s size:14];
         }
         [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入向左横屏，并锁定禁止向右横屏，完美契合短视频与单向应用。" in:s];
-        [self settingSwitch:s title:@"开启向左横屏（锁定防反转）" key:@"unlockOrientation" defaultValue:YES tag:22];
+        [self settingSwitch:s title:@"开启向左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
