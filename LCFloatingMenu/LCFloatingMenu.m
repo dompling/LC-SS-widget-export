@@ -379,6 +379,8 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
     }
 }
 
+static void FMEnsureWindowOrientationLayout(void);
+
 @interface UIViewController (FMOrientationUnlock)
 - (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations;
 - (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations;
@@ -530,7 +532,10 @@ static void FMEnsureWindowOrientationLayout(void) {
         }
     }
     if(windows.count == 0) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         [windows addObjectsFromArray:UIApplication.sharedApplication.windows];
+#pragma clang diagnostic pop
     }
     
     for(UIWindow *w in windows) {
