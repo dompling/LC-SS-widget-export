@@ -359,69 +359,6 @@ static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL co
     rim.lineWidth=collapsed?.9:.75;
     [glass.layer addSublayer:rim];
 }
-static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDist, CGFloat maxPull) {
-    CGFloat w = CGRectGetWidth(bounds), h = CGRectGetHeight(bounds);
-    if(pullDist <= 0.01) {
-        return FMSideNotchPath(bounds, dockLeft, YES, YES);
-    }
-    // iOS PiP 风格：边缘 tab 拉出时头部逐渐膨胀成圆球，颈部收窄
-    // t 范围 [0,1]，0=未拉伸，1=满拉伸
-    CGFloat t = Clamp(pullDist / MAX(maxPull, 1.0), 0.0, 1.0);
-    CGFloat cy = h * 0.5;
-    CGFloat scale = FMOrbScale();
-    
-    // 头部半径：从微珠宽度一半(8pt)膨胀到饱满球体(18pt)
-    CGFloat r0 = 8.0 * scale;
-    CGFloat r1 = 18.0 * scale;
-    CGFloat headR = r0 + (r1 - r0) * t;
-    
-    // 边缘连接处(颈部)高度：从微珠全高逐渐收窄到很小的连接点
-    CGFloat neckH = h * (1.0 - t * 0.85);
-    CGFloat neckHalf = neckH * 0.5;
-    CGFloat neckTopY = cy - neckHalf;
-    CGFloat neckBottomY = cy + neckHalf;
-    
-    // 头部球心 X：靠近拉出侧（远离边缘侧）
-    // dockLeft=NO 时边缘在右(x=w)，头部在左侧
-    CGFloat headCX = headR + 1.0;
-    CGFloat headTopY = cy - headR;
-    CGFloat headBottomY = cy + headR;
-    
-    // 颈部控制点：平滑 S 形过渡
-    CGFloat neckMidX = headCX + (w - headCX) * (0.35 + 0.25 * t);
-    
-    UIBezierPath *path = [UIBezierPath bezierPath];
-    
-    // 起点：边缘(右侧x=w)连接处上端
-    [path moveToPoint:CGPointMake(w, neckTopY)];
-    
-    // 上侧颈部：从边缘弯向头部上切点
-    [path addCurveToPoint:CGPointMake(headCX, headTopY)
-            controlPoint1:CGPointMake(neckMidX, neckTopY)
-            controlPoint2:CGPointMake(headCX + headR * 0.15, headTopY - headR * 0.05)];
-    
-    // 头部圆弧：完美半圆（三次贝塞尔近似）
-    CGFloat k = headR * 0.55228475;
-    [path addCurveToPoint:CGPointMake(headCX - headR, cy)
-            controlPoint1:CGPointMake(headCX - k, headTopY)
-            controlPoint2:CGPointMake(headCX - headR, cy - k)];
-    [path addCurveToPoint:CGPointMake(headCX, headBottomY)
-            controlPoint1:CGPointMake(headCX - headR, cy + k)
-            controlPoint2:CGPointMake(headCX - k, headBottomY)];
-    
-    // 下侧颈部：对称回到边缘连接处下端
-    [path addCurveToPoint:CGPointMake(w, neckBottomY)
-            controlPoint1:CGPointMake(headCX + headR * 0.15, headBottomY + headR * 0.05)
-            controlPoint2:CGPointMake(neckMidX, neckBottomY)];
-    
-    [path closePath];
-    
-    if(dockLeft) {
-        CGAffineTransform flip = CGAffineTransformMake(-1, 0, 0, 1, w, 0);
-        [path applyTransform:flip];
-    }
-    return path;
-}
 // One compatible, four-segment path at every phase. The free-floating
 // outline is a *symmetric stadium*: its rounded top and bottom reach the
 // same midpoint whether docking to the left or to the right. The side
@@ -934,8 +871,6 @@ static id FMLayoutChangeObserver=nil;
 @property(nonatomic,assign) CGFloat orbNormalAlpha;
 @property(nonatomic,strong) id screenTouchObserver;
 @property(nonatomic,weak) UIView *orbUpdateLine;
-@property(nonatomic,weak) UIImageView *orbAppPreviewView;
-@property(nonatomic,assign) CGFloat pullDistCache;
 @property(nonatomic,assign) BOOL orbUpdateAvailable;
 @property(nonatomic,assign) BOOL orbUpdateChecking;
 @property(nonatomic,strong) NSTimer *orbUpdateTimer;
@@ -972,7 +907,6 @@ static id FMLayoutChangeObserver=nil;
 @implementation FMManager {
     CGPoint _panStartPoint;
     CGPoint _panOriginalCenter;
-    CGRect _panOriginalOrbFrame;
     BOOL _panOriginalLeft;
     CGFloat _panMaxInwardDist;
     CGFloat _panMaxVerticalDist;
@@ -1095,9 +1029,6 @@ static id FMLayoutChangeObserver=nil;
 }
 - (CGFloat)orbWidth { return 16*FMOrbScale(); }
 - (CGFloat)orbHeight { return 72*FMOrbScale(); }
-// 水滴拉拽时容器需容纳向外膨胀的头部大圆，避免被容器边界裁切或残留额外圆形
-- (CGFloat)orbMaxPull { return 52.0*FMOrbScale(); }
-- (CGFloat)orbDetachDist { return 40.0*FMOrbScale(); }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -1341,15 +1272,9 @@ static id FMLayoutChangeObserver=nil;
 
 - (void)drawOrb {
     [self cancelOrbFade];
-    for(UIView *sub in [self.overlayView.subviews copy]) {
-        if([sub isKindOfClass:[FMHitButton class]] || sub.tag==9200 || sub==self.orb) {
-            [sub removeFromSuperview];
-        }
-    }
-    self.orb=nil;
+    [self.orb removeFromSuperview]; self.orb=nil;
     CGRect f=[self orbFrame];
     FMHitButton *button=[FMHitButton buttonWithType:UIButtonTypeCustom];
-    button.tag=9200;
     button.docksLeft=self.left;
     button.frame=f;
     button.layer.shadowColor=FMAccent().CGColor;
@@ -1372,22 +1297,6 @@ static id FMLayoutChangeObserver=nil;
     [FMGlassContent(bead) addSubview:line];
     line.accessibilityIdentifier=@"fm.orb.update-indicator";
     self.orbUpdateLine=line;
-    UIImageView *appIconView=[[UIImageView alloc] initWithFrame:CGRectMake(0,0,26*FMOrbScale(),26*FMOrbScale())];
-    appIconView.center=line.center;
-    appIconView.contentMode=UIViewContentModeScaleAspectFit;
-    appIconView.layer.cornerRadius=5.5*FMOrbScale();
-    appIconView.layer.masksToBounds=YES;
-    appIconView.alpha=0;
-    appIconView.userInteractionEnabled=NO;
-    NSArray<NSDictionary *> *menuApps=[self orderedAppsForMenu];
-    if(menuApps.count > 0) {
-        UIImage *icon=menuApps[0][@"icon"];
-        if([icon isKindOfClass:UIImage.class]) {
-            appIconView.image=icon;
-        }
-    }
-    [FMGlassContent(bead) addSubview:appIconView];
-    self.orbAppPreviewView=appIconView;
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
@@ -1454,98 +1363,17 @@ static id FMLayoutChangeObserver=nil;
         [self.overlayView bringSubviewToFront:self.orb];
     }
 }
-- (void)applyDropletPath:(UIBezierPath *)path {
-    UIView *bead=[self.orb viewWithTag:9202];
-    if(!bead) return;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    bead.frame=self.orb.bounds;
-    CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
-    if([mask isKindOfClass:CAShapeLayer.class]) {
-        mask.frame=bead.bounds;
-        mask.path=path.CGPath;
-    }
-    for(CALayer *layer in bead.layer.sublayers) {
-        if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
-            layer.frame=bead.bounds;
-            ((CAShapeLayer *)layer).path=path.CGPath;
-            break;
-        }
-    }
-    self.orb.layer.shadowPath=path.CGPath;
-    [CATransaction commit];
-}
-
-- (void)springRestoreOrbToFrame:(CGRect)targetFrame completion:(void (^)(void))completion {
-    if(!self.orb) { if(completion) completion(); return; }
-    UIView *bead=[self.orb viewWithTag:9202];
-    UIBezierPath *notchPath=FMSideNotchPath(CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height),self.left,YES,YES);
-    CGPathRef destPath=notchPath.CGPath;
-    
-    // 无动画拍平 mask/rim/shadow 路径到目标状态，避免动画中间态 bounds 与 path 不匹配
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    if(bead) {
-        bead.frame=CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height);
-        CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
-        if([mask isKindOfClass:CAShapeLayer.class]) {
-            [mask removeAnimationForKey:@"fm.orb.shoulders"];
-            mask.frame=bead.bounds;
-            mask.path=destPath;
-        }
-        for(CALayer *layer in bead.layer.sublayers) {
-            if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
-                [layer removeAnimationForKey:@"fm.orb.shoulders"];
-                layer.frame=bead.bounds;
-                ((CAShapeLayer *)layer).path=destPath;
-                break;
-            }
-        }
-    }
-    [self.orb.layer removeAnimationForKey:@"fm.orb.shoulders"];
-    self.orb.layer.shadowPath=destPath;
-    [CATransaction commit];
-    
-    // 弹簧动画移动容器 frame（包含位置和尺寸）
-    [UIView animateWithDuration:0.38 delay:0 usingSpringWithDamping:0.70 initialSpringVelocity:0.5
-        options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            self.orb.frame=targetFrame;
-            if(bead) bead.frame=self.orb.bounds;
-            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
-            if(self.orbAppPreviewView) self.orbAppPreviewView.center=self.orbUpdateLine.center;
-        } completion:^(BOOL finished) {
-            // 动画结束后再次确保路径一致，防止 bead bounds 变化后路径残留
-            if(bead) {
-                [CATransaction begin];
-                [CATransaction setDisableActions:YES];
-                bead.frame=CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height);
-                CAShapeLayer *mask2=(CAShapeLayer *)bead.layer.mask;
-                if([mask2 isKindOfClass:CAShapeLayer.class]) { mask2.frame=bead.bounds; mask2.path=destPath; }
-                for(CALayer *layer in bead.layer.sublayers) {
-                    if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
-                        layer.frame=bead.bounds; ((CAShapeLayer *)layer).path=destPath; break;
-                    }
-                }
-                self.orb.layer.shadowPath=destPath;
-                [CATransaction commit];
-            }
-            if(completion) completion();
-        }];
-}
-
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
     if(g.state==UIGestureRecognizerStateBegan) {
         _panStartPoint=p;
         _panOriginalCenter=self.orb.center;
-        _panOriginalOrbFrame=self.orb.frame;
         _panOriginalLeft=self.left;
         _panMaxInwardDist=0;
         _panMaxVerticalDist=0;
         _panIsRepositioning=NO;
         _panIsDropletPull=NO;
         _panDropletTriggered=NO;
-        
         [self cancelOrbFade];
         self.orbFaded=NO;
         self.orb.alpha=1;
@@ -1554,127 +1382,91 @@ static id FMLayoutChangeObserver=nil;
         self.orbFaded=NO;
         self.orb.alpha=1;
         
-        CGFloat inwardDist=_panOriginalLeft ? (p.x - _panStartPoint.x) : (_panStartPoint.x - p.x);
-        CGFloat verticalDist=fabs(p.y - _panStartPoint.y);
-        if(inwardDist > _panMaxInwardDist) _panMaxInwardDist=inwardDist;
-        if(verticalDist > _panMaxVerticalDist) _panMaxVerticalDist=verticalDist;
+        CGFloat inwardDist = _panOriginalLeft ? (p.x - _panStartPoint.x) : (_panStartPoint.x - p.x);
+        CGFloat verticalDist = fabs(p.y - _panStartPoint.y);
+        if(inwardDist > _panMaxInwardDist) _panMaxInwardDist = inwardDist;
+        if(verticalDist > _panMaxVerticalDist) _panMaxVerticalDist = verticalDist;
         
-        // 意图裁决（灵敏丝滑但严密防误判）：
-        // 1. 如果尚未明确是换位模式：
+        // 模式判定（将向内拉出与沿边缘上下滑动明确分离）：
         if(!_panIsRepositioning && !_panIsDropletPull) {
-            // 当垂直位移大幅占优（沿边缘上下滑动），判定为微珠换位模式
-            if(verticalDist > 16.0 && verticalDist > inwardDist * 1.35) {
-                _panIsRepositioning=YES;
-                FMAnimateOrbShoulders(self.orb,self.left,1,YES);
-            } else if(inwardDist > 0.5 || verticalDist > 2.0) {
-                // 向内轻微拉动即刻无缝进入水滴拉丝吸附态，零突变
-                _panIsDropletPull=YES;
+            // 当垂直位移大幅占优，判定为边缘上下移动换位模式
+            if(verticalDist > 16.0 && verticalDist > inwardDist * 1.3) {
+                _panIsRepositioning = YES;
+                FMAnimateOrbShoulders(self.orb, self.left, 1, YES);
+            } else if(inwardDist > 1.0) {
+                // 向内轻拉即刻进入 iOS 视频靠边拖出模式
+                _panIsDropletPull = YES;
             }
         }
         
-        // 2. 如果在水滴拉伸过程中，用户突然大幅度上下拖动超过 42pt，平滑切换为换位
+        // 在向内拉出过程中，若用户突然大幅度垂直滑动，平滑切换为换位
         if(_panIsDropletPull && !_panIsRepositioning) {
-            if(verticalDist > 42.0 && verticalDist > inwardDist * 1.5) {
-                _panIsRepositioning=YES;
-                _panIsDropletPull=NO;
-                _panDropletTriggered=NO;
-                FMAnimateOrbShoulders(self.orb,self.left,1,YES);
+            if(verticalDist > 38.0 && verticalDist > inwardDist * 1.4) {
+                _panIsRepositioning = YES;
+                _panIsDropletPull = NO;
+                _panDropletTriggered = NO;
+                FMAnimateOrbShoulders(self.orb, self.left, 1, YES);
             }
         }
         
         if(_panIsRepositioning) {
-            // === 移动位置模式（自由平移跟手，100% 毫秒级零延迟） ===
+            // === 换位模式：自由平移，毫秒级跟手 ===
             CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
             CGFloat orbW=self.orbWidth,orbH=self.orbHeight;
             UIEdgeInsets safe=self.window.safeAreaInsets;
             CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
             CGFloat minY=MAX(60,safe.top+6)+orbH/2;
             CGFloat maxY=MAX(minY,h-MAX(36,safe.bottom+8)-orbH/2);
-            
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            self.orb.frame=CGRectMake(0,0,orbW,orbH);
             self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
-            self.orbUpdateLine.center=CGPointMake(orbW*0.5,orbH*0.5);
-            [CATransaction commit];
-            
         } else {
-            // === 水滴吸附向内拉丝模式（灵动岛纯正液态 Metaball 张力） ===
-            CGFloat maxPull=[self orbMaxPull];
-            CGFloat pullDist=0;
+            // === iOS 画中画视频靠边拖出模式（流体张力拉拽黏性） ===
+            CGFloat maxPull = 52.0 * FMOrbScale();
+            CGFloat pullDist = 0;
             if(inwardDist > 0) {
-                // 阻尼拔丝动力学：前 32pt 毫秒级 1:1 跟手，随后进入渐进表面张力
-                if(inwardDist <= 32.0) {
-                    pullDist=inwardDist;
+                // 阻尼动力学：前 20pt 毫秒级 1:1 跟手，超出后平滑过渡至表面张力阻尼
+                if(inwardDist <= 20.0) {
+                    pullDist = inwardDist;
                 } else {
-                    pullDist=32.0 + (inwardDist - 32.0) * (1.0 / (1.0 + (inwardDist - 32.0) / 48.0));
+                    pullDist = 20.0 + (inwardDist - 20.0) * (1.0 / (1.0 + (inwardDist - 20.0) / 48.0));
                 }
             }
-            pullDist=Clamp(pullDist,0,maxPull);
-            self.pullDistCache=pullDist;
+            pullDist = Clamp(pullDist, 0, maxPull);
             
-            // 垂直方向带极轻微弹性偏移（16% 手指移动），呈现有机柔性
-            CGFloat deltaY=(p.y - _panStartPoint.y) * 0.16;
-            CGFloat currentW=self.orbWidth + pullDist;
+            // 垂直方向带极轻微弹性偏移（14% 手指移动），呈现有机柔性
+            CGFloat deltaY = (p.y - _panStartPoint.y) * 0.14;
+            CGFloat targetX = _panOriginalLeft ? (_panOriginalCenter.x + pullDist) : (_panOriginalCenter.x - pullDist);
+            self.orb.center = CGPointMake(targetX, _panOriginalCenter.y + deltaY);
             
-            CGRect targetFrame;
-            if(_panOriginalLeft) {
-                targetFrame=CGRectMake(0,_panOriginalOrbFrame.origin.y + deltaY,currentW,self.orbHeight);
-            } else {
-                targetFrame=CGRectMake(self.window.bounds.size.width - currentW,_panOriginalOrbFrame.origin.y + deltaY,currentW,self.orbHeight);
-            }
+            // 形状从吸附贴边肩平滑过渡到外凸胶囊水滴
+            CGFloat pullRatio = Clamp(pullDist / (32.0 * FMOrbScale()), 0.0, 1.0);
+            FMAnimateOrbShoulders(self.orb, self.left, pullRatio, YES);
             
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            self.orb.frame=targetFrame;
-            
-            CGFloat tProgress=Clamp(pullDist / maxPull, 0.0, 1.0);
-            CGFloat scale=FMOrbScale();
-            CGFloat headR=(8.0*scale)*(1.0-tProgress) + (18.0*scale)*tProgress;
-            CGFloat headCenterX=_panOriginalLeft ? (currentW - headR - 1.0) : (headR + 1.0);
-            CGPoint headCenter=CGPointMake(headCenterX,self.orbHeight * 0.5);
-            self.orbUpdateLine.center=headCenter;
-            
-            // 慢慢拖拽、慢慢模糊化、慢慢变形、慢慢呼出（对齐灵动岛截图 1~5）
-            if(self.orbAppPreviewView) {
-                self.orbAppPreviewView.center=headCenter;
-                self.orbUpdateLine.alpha=Clamp(1.0 - tProgress * 1.8, 0.0, 1.0);
-                self.orbAppPreviewView.alpha=Clamp((tProgress - 0.18) / 0.55, 0.0, 1.0);
-                CGFloat iconScale=0.50 + 0.50 * tProgress;
-                self.orbAppPreviewView.transform=CGAffineTransformMakeScale(iconScale, iconScale);
-            }
-            
-            UIBezierPath *dropPath=FMDropletPath(self.orb.bounds,_panOriginalLeft,pullDist,maxPull);
-            [self applyDropletPath:dropPath];
-            [CATransaction commit];
-            
-            // 达到呼出阈值（不产生独立脱圆圈，仅触感提醒）
-            if(pullDist >= [self orbDetachDist] && !_panDropletTriggered) {
-                _panDropletTriggered=YES;
-                if(BoolPref(@"haptic",YES)) {
+            // 达到拉出阈值时触发触感反馈
+            if(pullDist >= 30.0 * FMOrbScale() && !_panDropletTriggered) {
+                _panDropletTriggered = YES;
+                if(BoolPref(@"haptic", YES)) {
                     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
                 }
             }
         }
-        
     } else if(g.state==UIGestureRecognizerStateEnded) {
-        CGPoint v=CGPointZero;
+        CGPoint v = CGPointZero;
         @try {
-            v=[g velocityInView:self.overlayView];
+            v = [g velocityInView:self.overlayView];
         } @catch(id e) {}
-        CGFloat inwardV=_panOriginalLeft ? v.x : -v.x;
-        CGFloat finalVerticalDist=fabs(p.y - _panStartPoint.y);
-        CGFloat finalTotalDist=hypot(p.x - _panStartPoint.x, p.y - _panStartPoint.y);
+        CGFloat inwardV = _panOriginalLeft ? v.x : -v.x;
+        CGFloat finalVerticalDist = fabs(p.y - _panStartPoint.y);
+        CGFloat finalTotalDist = hypot(p.x - _panStartPoint.x, p.y - _panStartPoint.y);
         
         if(_panIsRepositioning) {
-            // === 移动位置模式：吸附最近边缘并持久化（严禁异步调用 draw 重建视图，杜绝重叠微珠） ===
+            // === 移动位置模式：吸附最近边缘并持久化（严禁异步调用破坏尺寸，0.25s 后彻底重绘复原） ===
             self.left=self.orb.center.x<self.window.bounds.size.width*.5;
             ((FMHitButton *)self.orb).docksLeft=self.left;
             self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
             SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
             if(UIAccessibilityIsReduceMotionEnabled()) {
                 self.orb.frame=[self orbFrame];
-                FMAnimateOrbShoulders(self.orb,self.left,0,NO);
+                [self draw];
                 [self scheduleOrbFade];
             } else {
                 UIButton *dragged=self.orb;
@@ -1684,85 +1476,60 @@ static id FMLayoutChangeObserver=nil;
                     completion:^(BOOL finished){
                         if(!finished || self.orb!=dragged) return;
                         FMAnimateOrbShoulders(dragged,self.left,0,YES);
-                        [self scheduleOrbFade];
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.25*NSEC_PER_SEC),
+                            dispatch_get_main_queue(),^{
+                                if(self.orb==dragged) {
+                                    [self draw];
+                                    [self scheduleOrbFade];
+                                }
+                            });
                     }];
                 [self scheduleOrbFade];
             }
-            
         } else {
-            // === 水滴模式松手 ===
-            BOOL shouldOpen=_panDropletTriggered;
-            if(!shouldOpen && inwardV > 180.0 && finalVerticalDist < 50.0) {
-                shouldOpen=YES;
+            // === 向内拉出模式松手 ===
+            BOOL shouldOpen = _panDropletTriggered;
+            if(!shouldOpen && inwardV > 180.0 && finalVerticalDist < 60.0) {
+                shouldOpen = YES;
             }
             if(!shouldOpen && finalTotalDist < 6.0) {
                 // 点击等效
-                shouldOpen=YES;
-            }
-            // 手势开始时被误判为水滴但实际未生效拉伸时，不得误开菜单
-            if(shouldOpen && self.pullDistCache < 2.0 && finalTotalDist >= 6.0) {
-                shouldOpen=NO;
+                shouldOpen = YES;
             }
             
             if(shouldOpen) {
-                // 呼出生效！先无动画恢复微珠标准边缘形态（不产生任何独立圆圈残留）
-                if(BoolPref(@"haptic",YES)) {
-                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-                }
-                
-                [CATransaction begin];
-                [CATransaction setDisableActions:YES];
-                self.orb.frame=_panOriginalOrbFrame;
-                UIBezierPath *notchPath=FMSideNotchPath(self.orb.bounds,self.left,YES,YES);
-                [self applyDropletPath:notchPath];
-                self.orbUpdateLine.center=CGPointMake(self.orb.bounds.size.width*0.5,self.orb.bounds.size.height*0.5);
-                self.orbUpdateLine.alpha=1;
-                if(self.orbAppPreviewView) {
-                    self.orbAppPreviewView.center=self.orbUpdateLine.center;
-                    self.orbAppPreviewView.alpha=0;
-                    self.orbAppPreviewView.transform=CGAffineTransformIdentity;
-                }
-                [CATransaction commit];
-                self.pullDistCache=0;
-                
+                // 达到拉出阈值：微珠原位复位，触发呼出抽屉动画！
+                self.orb.center = _panOriginalCenter;
+                self.left = _panOriginalLeft;
+                ((FMHitButton *)self.orb).docksLeft = self.left;
+                FMAnimateOrbShoulders(self.orb, self.left, 0, NO);
                 if(!self.isOpen) {
                     [self toggle];
                 }
             } else {
-                // 未达阈值松手：水滴无痕迹弹簧回缩至边缘原位
-                [self resetDropletVisualStateAnimated:YES];
+                // 未达阈值松手：高质感 iOS 弹簧缩回贴边，彻底恢复尺寸与形状！
+                UIButton *dragged=self.orb;
+                [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.72
+                    initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState
+                    animations:^{dragged.frame=[self orbFrame];}
+                    completion:^(BOOL finished){
+                        if(!finished || self.orb!=dragged) return;
+                        FMAnimateOrbShoulders(dragged,self.left,0,YES);
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.20*NSEC_PER_SEC),
+                            dispatch_get_main_queue(),^{
+                                if(self.orb==dragged) {
+                                    [self draw];
+                                    [self scheduleOrbFade];
+                                }
+                            });
+                    }];
+                [self scheduleOrbFade];
             }
         }
-        
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
-        if(_panIsDropletPull) {
-            [self resetDropletVisualStateAnimated:YES];
-        } else {
-            self.orb.frame=[self orbFrame];
-            FMAnimateOrbShoulders(self.orb,self.left,0,YES);
-            [self scheduleOrbFade];
-        }
-    }
-}
-// 重置水滴形变、边框、阴影与内部图层到标准边缘微珠状态，确保不会残留独立圆形/圆锥/错位图层
-- (void)resetDropletVisualStateAnimated:(BOOL)animated {
-    if(!self.orb) return;
-    self.pullDistCache=0;
-    CGRect targetFrame=_panOriginalOrbFrame;
-    if(CGRectIsEmpty(targetFrame)) targetFrame=[self orbFrame];
-    
-    // 立刻恢复视觉状态
-    [UIView animateWithDuration:0.22 animations:^{
-        self.orbUpdateLine.alpha=1;
-        if(self.orbAppPreviewView) {
-            self.orbAppPreviewView.alpha=0;
-            self.orbAppPreviewView.transform=CGAffineTransformIdentity;
-        }
-    }];
-    
-    [self springRestoreOrbToFrame:targetFrame completion:^{
+        [self draw];
         [self scheduleOrbFade];
-    }];
+    }
 }
 - (void)toggle {
     BOOL opening=!self.isOpen;
