@@ -24,7 +24,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.8"
+#define FM_MENU_VERSION @"1.0.9"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -368,6 +368,106 @@ static CGFloat FMReadableRowAlpha(void) {
     if(UIAccessibilityDarkerSystemColorsEnabled()) return FMClearGlassEnabled()?.72:.90;
     return FMClearGlassEnabled()?(FMMenuDark()?.55:.52):.84;
 }
+static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
+    Method origMethod = class_getInstanceMethod(cls, orig);
+    Method swizMethod = class_getInstanceMethod(cls, swiz);
+    if(!origMethod || !swizMethod) return;
+    if(class_addMethod(cls, orig, method_getImplementation(swizMethod), method_getTypeEncoding(swizMethod))) {
+        class_replaceMethod(cls, swiz, method_getImplementation(origMethod), method_getTypeEncoding(origMethod));
+    } else {
+        method_exchangeImplementations(origMethod, swizMethod);
+    }
+}
+
+static void FMCheckAndFixOrientationLayout(void) {
+    if(!BoolPref(@"unlockOrientation", YES)) return;
+    UIWindowScene *scene = [LCOrbitHost activeScene];
+    if(!scene && @available(iOS 13.0, *)) {
+        for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive) {
+                scene = (UIWindowScene *)s;
+                break;
+            }
+        }
+    }
+    if(!scene) return;
+    UIInterfaceOrientation orientation = scene.interfaceOrientation;
+    if(!UIInterfaceOrientationIsLandscape(orientation)) return;
+    
+    CGRect screenBounds = scene.coordinateSpace.bounds;
+    CGFloat targetWidth = MAX(screenBounds.size.width, screenBounds.size.height);
+    CGFloat targetHeight = MIN(screenBounds.size.width, screenBounds.size.height);
+    CGRect landscapeBounds = CGRectMake(0, 0, targetWidth, targetHeight);
+    
+    for(UIWindow *w in scene.windows) {
+        if(w.windowLevel >= UIWindowLevelAlert) continue;
+        if(w.bounds.size.width < targetWidth || w.bounds.size.height < targetHeight) {
+            w.frame = landscapeBounds;
+            w.bounds = landscapeBounds;
+        }
+        UIViewController *root = w.rootViewController;
+        if(root && root.isViewLoaded) {
+            if(root.view.bounds.size.width < targetWidth || root.view.bounds.size.height < targetHeight) {
+                root.view.frame = landscapeBounds;
+                root.view.bounds = landscapeBounds;
+                [root.view setNeedsLayout];
+                [root.view layoutIfNeeded];
+            }
+        }
+    }
+}
+
+@interface UIViewController (FMOrientationUnlock)
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations;
+- (BOOL)fm_shouldAutorotate;
+- (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator;
+@end
+
+@implementation UIViewController (FMOrientationUnlock)
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations {
+    UIInterfaceOrientationMask mask = [self fm_supportedInterfaceOrientations];
+    if(BoolPref(@"unlockOrientation", YES)) {
+        if(!(mask & UIInterfaceOrientationMaskLandscape)) {
+            mask |= UIInterfaceOrientationMaskLandscape;
+        }
+        if(mask == 0) mask = UIInterfaceOrientationMaskAllButUpsideDown;
+    }
+    return mask;
+}
+- (BOOL)fm_shouldAutorotate {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return YES;
+    }
+    return [self fm_shouldAutorotate];
+}
+- (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [self fm_viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if(BoolPref(@"unlockOrientation", YES)) {
+        if(coordinator) {
+            [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+                FMCheckAndFixOrientationLayout();
+            } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+                FMCheckAndFixOrientationLayout();
+            }];
+        } else {
+            FMCheckAndFixOrientationLayout();
+        }
+    }
+}
+@end
+
+static void FMInstallOrientationHooks(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        FMSwizzle(UIViewController.class, @selector(supportedInterfaceOrientations), @selector(fm_supportedInterfaceOrientations));
+        FMSwizzle(UIViewController.class, @selector(shouldAutorotate), @selector(fm_shouldAutorotate));
+        FMSwizzle(UIViewController.class, @selector(viewWillTransitionToSize:withTransitionCoordinator:), @selector(fm_viewWillTransitionToSize:withTransitionCoordinator:));
+        [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            FMCheckAndFixOrientationLayout();
+        }];
+    });
+}
+
 static void FMApplyNavigationTheme(UINavigationController *nav) {
     if(!nav) return;
     UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
@@ -1902,6 +2002,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [self addRow:mode height:38 to:s];
             [self spacer:s size:14];
         }
+        [self section:@"屏幕与旋转" sub:@"让短视频与单向应用跟随设备自由旋转，消除横屏下半边白屏与缩放断裂。" in:s];
+        [self settingSwitch:s title:@"解除横竖屏限制（自适应旋转）" key:@"unlockOrientation" defaultValue:YES tag:22];
+        [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
         [self settingSwitch:s title:@"自动淡化" key:@"idleFade" defaultValue:YES tag:21];
@@ -2583,6 +2686,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
         case 16:key=@"compactMode";break;
         case 20:key=@"recentAppsFirst";break;
+        case 22:key=@"unlockOrientation";break;
         case 21: {
             key=@"idleFade";
             if(!sw.isOn) {
@@ -2719,6 +2823,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"recentAppsFirst",@NO);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
     SetPref(@"appearanceMode",@(0));
+    SetPref(@"unlockOrientation",@YES);
     for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth"]) {
         [HostDefaults() removeObjectForKey:Pref(key)];
     }
@@ -3405,6 +3510,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 @end
 void LCFloatingMenuRegisterWithOrbit(LCOrbitCore *core) {
+    FMInstallOrientationHooks();
     [core registerModule:[LCFloatingMenuModule new]];
     [LCOrbitHostSettings installWithOpenSettings:^(UIWindowScene *scene) { [[FMManager shared] openSettingsInScene:scene]; }];
 }
