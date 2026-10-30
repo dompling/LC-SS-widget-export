@@ -383,29 +383,40 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
 - (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations;
 - (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations;
 - (UIInterfaceOrientationMask)fm__supportedInterfaceOrientations;
+- (UIInterfaceOrientation)fm_preferredInterfaceOrientationForPresentation;
 - (BOOL)fm_shouldAutorotate;
 - (BOOL)fm_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation;
+- (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator;
 @end
 
 @implementation UIViewController (FMOrientationUnlock)
 - (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations {
-    UIInterfaceOrientationMask mask = [self fm_supportedInterfaceOrientations];
     if(BoolPref(@"unlockOrientation", YES)) {
-        mask |= UIInterfaceOrientationMaskAllButUpsideDown;
+        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
     }
-    return mask;
+    return [self fm_supportedInterfaceOrientations];
 }
 - (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations {
     if(BoolPref(@"unlockOrientation", YES)) {
-        return UIInterfaceOrientationMaskAllButUpsideDown;
+        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
     }
     return [self fm___supportedInterfaceOrientations];
 }
 - (UIInterfaceOrientationMask)fm__supportedInterfaceOrientations {
     if(BoolPref(@"unlockOrientation", YES)) {
-        return UIInterfaceOrientationMaskAllButUpsideDown;
+        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
     }
     return [self fm__supportedInterfaceOrientations];
+}
+- (UIInterfaceOrientation)fm_preferredInterfaceOrientationForPresentation {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        UIDeviceOrientation dev = UIDevice.currentDevice.orientation;
+        if(dev == UIDeviceOrientationLandscapeLeft) {
+            return UIInterfaceOrientationLandscapeRight;
+        }
+        return UIInterfaceOrientationPortrait;
+    }
+    return [self fm_preferredInterfaceOrientationForPresentation];
 }
 - (BOOL)fm_shouldAutorotate {
     if(BoolPref(@"unlockOrientation", YES)) {
@@ -415,15 +426,171 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
 }
 - (BOOL)fm_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation {
     if(BoolPref(@"unlockOrientation", YES)) {
-        return YES;
+        return (orientation == UIInterfaceOrientationPortrait || orientation == UIInterfaceOrientationLandscapeRight);
     }
     return [self fm_shouldAutorotateToInterfaceOrientation:orientation];
+}
+- (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [self fm_viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if(BoolPref(@"unlockOrientation", YES)) {
+        if(coordinator) {
+            [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+                FMEnsureWindowOrientationLayout();
+            } completion:^(id<UIViewControllerTransitionCoordinatorContext> _Nonnull context) {
+                FMEnsureWindowOrientationLayout();
+            }];
+        } else {
+            FMEnsureWindowOrientationLayout();
+        }
+    }
+}
+@end
+
+static UIInterfaceOrientationMask FMHooked_appDelegate_supportedInterfaceOrientations(id self, SEL _cmd, UIApplication *application, UIWindow *window) {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+    }
+    SEL origSel = NSSelectorFromString(@"fm_orig_supportedInterfaceOrientationsForWindow:");
+    if([self respondsToSelector:origSel]) {
+        return ((UIInterfaceOrientationMask(*)(id, SEL, id, id))objc_msgSend)(self, origSel, application, window);
+    }
+    return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+}
+
+static void FMHookAppDelegate(id<UIApplicationDelegate> delegate) {
+    if(!delegate) return;
+    Class cls = [delegate class];
+    SEL sel = @selector(application:supportedInterfaceOrientationsForWindow:);
+    SEL origSel = NSSelectorFromString(@"fm_orig_supportedInterfaceOrientationsForWindow:");
+    if([cls instancesRespondToSelector:origSel]) return;
+    Method origMethod = class_getInstanceMethod(cls, sel);
+    if(origMethod) {
+        class_addMethod(cls, origSel, method_getImplementation(origMethod), method_getTypeEncoding(origMethod));
+        method_setImplementation(origMethod, (IMP)FMHooked_appDelegate_supportedInterfaceOrientations);
+    } else {
+        class_addMethod(cls, sel, (IMP)FMHooked_appDelegate_supportedInterfaceOrientations, "Q@:@@");
+    }
+}
+
+@interface UIApplication (FMOrientationUnlock)
+- (void)fm_setDelegate:(id<UIApplicationDelegate>)delegate;
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientationsForWindow:(UIWindow *)window;
+@end
+
+@implementation UIApplication (FMOrientationUnlock)
+- (void)fm_setDelegate:(id<UIApplicationDelegate>)delegate {
+    if(delegate) FMHookAppDelegate(delegate);
+    [self fm_setDelegate:delegate];
+}
+- (UIInterfaceOrientationMask)fm_supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskLandscapeRight);
+    }
+    return [self fm_supportedInterfaceOrientationsForWindow:window];
+}
+@end
+
+static void FMEnsureWindowOrientationLayout(void) {
+    if(!BoolPref(@"unlockOrientation", YES)) return;
+    UIScreen *screen = UIScreen.mainScreen;
+    if(!screen) return;
+    CGSize screenSize = screen.bounds.size;
+    CGFloat portraitW = MIN(screenSize.width, screenSize.height);
+    CGFloat portraitH = MAX(screenSize.width, screenSize.height);
+    
+    BOOL isLandscape = NO;
+    if(@available(iOS 13.0, *)) {
+        for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive) {
+                UIInterfaceOrientation orient = ((UIWindowScene *)s).interfaceOrientation;
+                if(orient == UIInterfaceOrientationLandscapeRight) {
+                    isLandscape = YES;
+                    break;
+                }
+            }
+        }
+    }
+    if(!isLandscape) {
+        UIDeviceOrientation dev = UIDevice.currentDevice.orientation;
+        if(dev == UIDeviceOrientationLandscapeLeft) {
+            isLandscape = YES;
+        }
+    }
+    
+    CGRect targetBounds = isLandscape ? CGRectMake(0, 0, portraitH, portraitW) : CGRectMake(0, 0, portraitW, portraitH);
+    CGFloat targetW = targetBounds.size.width;
+    CGFloat targetH = targetBounds.size.height;
+    
+    NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
+    if(@available(iOS 13.0, *)) {
+        for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if([s isKindOfClass:UIWindowScene.class]) {
+                [windows addObjectsFromArray:((UIWindowScene *)s).windows];
+            }
+        }
+    }
+    if(windows.count == 0) {
+        [windows addObjectsFromArray:UIApplication.sharedApplication.windows];
+    }
+    
+    for(UIWindow *w in windows) {
+        if(w.windowLevel >= UIWindowLevelAlert) continue;
+        if(fabs(w.bounds.size.width - targetW) > 1.0 || fabs(w.bounds.size.height - targetH) > 1.0) {
+            w.frame = targetBounds;
+            w.bounds = targetBounds;
+            UIViewController *root = w.rootViewController;
+            if(root && root.isViewLoaded) {
+                root.view.frame = targetBounds;
+                root.view.bounds = targetBounds;
+                [root.view setNeedsLayout];
+            }
+        }
+    }
+}
+
+@interface UIWindow (FMOrientationLayout)
+- (void)fm_layoutSubviews;
+@end
+
+@implementation UIWindow (FMOrientationLayout)
+- (void)fm_layoutSubviews {
+    [self fm_layoutSubviews];
+    if(!BoolPref(@"unlockOrientation", YES) || self.windowLevel >= UIWindowLevelAlert) return;
+    
+    BOOL isLandscape = NO;
+    if(@available(iOS 13.0, *)) {
+        UIWindowScene *scene = self.windowScene;
+        if(scene && scene.interfaceOrientation == UIInterfaceOrientationLandscapeRight) {
+            isLandscape = YES;
+        }
+    }
+    if(!isLandscape && UIDevice.currentDevice.orientation == UIDeviceOrientationLandscapeLeft) {
+        isLandscape = YES;
+    }
+    if(isLandscape) {
+        CGSize s = self.screen ? self.screen.bounds.size : UIScreen.mainScreen.bounds.size;
+        CGFloat targetW = MAX(s.width, s.height);
+        CGFloat targetH = MIN(s.width, s.height);
+        if(self.bounds.size.width < targetW - 1.0 || self.bounds.size.height < targetH - 1.0) {
+            CGRect full = CGRectMake(0, 0, targetW, targetH);
+            self.frame = full;
+            self.bounds = full;
+            UIViewController *root = self.rootViewController;
+            if(root && root.isViewLoaded && (root.view.bounds.size.width < targetW - 1.0 || root.view.bounds.size.height < targetH - 1.0)) {
+                root.view.frame = full;
+                root.view.bounds = full;
+                [root.view setNeedsLayout];
+            }
+        }
+    }
 }
 @end
 
 static void FMInstallOrientationHooks(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+        
         FMSwizzle(UIViewController.class, @selector(supportedInterfaceOrientations), @selector(fm_supportedInterfaceOrientations));
         SEL dunder = NSSelectorFromString(@"__supportedInterfaceOrientations");
         if(class_getInstanceMethod(UIViewController.class, dunder)) {
@@ -433,11 +600,31 @@ static void FMInstallOrientationHooks(void) {
         if(class_getInstanceMethod(UIViewController.class, single)) {
             FMSwizzle(UIViewController.class, single, @selector(fm__supportedInterfaceOrientations));
         }
+        FMSwizzle(UIViewController.class, @selector(preferredInterfaceOrientationForPresentation), @selector(fm_preferredInterfaceOrientationForPresentation));
         FMSwizzle(UIViewController.class, @selector(shouldAutorotate), @selector(fm_shouldAutorotate));
         SEL shouldTo = NSSelectorFromString(@"shouldAutorotateToInterfaceOrientation:");
         if(class_getInstanceMethod(UIViewController.class, shouldTo)) {
             FMSwizzle(UIViewController.class, shouldTo, @selector(fm_shouldAutorotateToInterfaceOrientation:));
         }
+        FMSwizzle(UIViewController.class, @selector(viewWillTransitionToSize:withTransitionCoordinator:), @selector(fm_viewWillTransitionToSize:withTransitionCoordinator:));
+        
+        FMSwizzle(UIWindow.class, @selector(layoutSubviews), @selector(fm_layoutSubviews));
+        
+        FMSwizzle(UIApplication.class, @selector(setDelegate:), @selector(fm_setDelegate:));
+        FMSwizzle(UIApplication.class, @selector(supportedInterfaceOrientationsForWindow:), @selector(fm_supportedInterfaceOrientationsForWindow:));
+        if(UIApplication.sharedApplication.delegate) {
+            FMHookAppDelegate(UIApplication.sharedApplication.delegate);
+        }
+        
+        [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            FMEnsureWindowOrientationLayout();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                FMEnsureWindowOrientationLayout();
+            });
+        }];
+        [NSNotificationCenter.defaultCenter addObserverForName:UIWindowDidBecomeVisibleNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            FMEnsureWindowOrientationLayout();
+        }];
     });
 }
 
