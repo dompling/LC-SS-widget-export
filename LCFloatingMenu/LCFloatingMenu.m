@@ -422,7 +422,7 @@ static void FMCenterPortraitVideoContent(UIWindow *win, BOOL isLandscape) {
                     if([l isKindOfClass:NSClassFromString(@"AVPlayerLayer")]) {
                         containsVideo = YES;
                         @try {
-                            [l setValue:AVLayerVideoGravityResizeAspect forKey:@"videoGravity"];
+                            [l setValue:@"AVLayerVideoGravityResizeAspect" forKey:@"videoGravity"];
                         } @catch(id e){}
                         break;
                     }
