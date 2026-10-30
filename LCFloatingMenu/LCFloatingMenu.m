@@ -974,6 +974,7 @@ static id FMLayoutChangeObserver=nil;
     BOOL _panIsRepositioning;
     BOOL _panIsDropletPull;
     BOOL _panDropletTriggered;
+    BOOL _isPanning;
 }
 + (instancetype)shared {
     static FMManager *m;
@@ -1065,16 +1066,19 @@ static id FMLayoutChangeObserver=nil;
     [self checkOrbUpdateIfNeeded];
 }
 - (void)handleOrientationOrLayoutChange {
+    if(_isPanning) return;
     [self refreshLayoutForOrientation];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.12*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        if(self->_isPanning) return;
         [self refreshLayoutForOrientation];
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        if(self->_isPanning) return;
         [self refreshLayoutForOrientation];
     });
 }
 - (void)refreshLayoutForOrientation {
-    if(!self.window) return;
+    if(_isPanning || !self.window) return;
     UIWindowScene *scene=self.window.windowScene?:[self foregroundScene];
     if(!scene) return;
     CGRect sceneBounds=scene.coordinateSpace.bounds;
@@ -1332,10 +1336,17 @@ static id FMLayoutChangeObserver=nil;
 }
 
 - (void)drawOrb {
+    if(_isPanning) return;
     [self cancelOrbFade];
-    [self.orb removeFromSuperview]; self.orb=nil;
+    for(UIView *sub in [self.overlayView.subviews copy]) {
+        if([sub isKindOfClass:[FMHitButton class]] || sub.tag==9200 || sub==self.orb) {
+            [sub removeFromSuperview];
+        }
+    }
+    self.orb=nil;
     CGRect f=[self orbFrame];
     FMHitButton *button=[FMHitButton buttonWithType:UIButtonTypeCustom];
+    button.tag=9200;
     button.docksLeft=self.left;
     button.frame=f;
     button.layer.shadowColor=FMAccent().CGColor;
@@ -1402,7 +1413,7 @@ static id FMLayoutChangeObserver=nil;
     [self openSettings];
 }
 - (void)draw {
-    if(!self.window) return;
+    if(_isPanning || !self.window) return;
     if(self.settingsWindow) { [self updateSettingsContent]; return; }
     BOOL visible=[LCOrbitMultitask shouldShowFloatingMenu];
     [self.orbitContext.overlays setModule:@"FloatingMenu" visible:visible];
@@ -1451,15 +1462,21 @@ static id FMLayoutChangeObserver=nil;
     CGRect targetFrame=_panOriginalOrbFrame;
     if(CGRectIsEmpty(targetFrame) || targetFrame.size.width <= 0) targetFrame=[self orbFrame];
     
-    if(!animated || UIAccessibilityIsReduceMotionEnabled()) {
-        [self draw];
-        [self scheduleOrbFade];
-        return;
-    }
-    
     UIView *bead=[self.orb viewWithTag:9202];
     UIBezierPath *notchPath=FMSideNotchPath(CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height),self.left,YES,YES);
     CGPathRef destPath=notchPath.CGPath;
+    
+    if(!animated || UIAccessibilityIsReduceMotionEnabled()) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        self.orb.frame=targetFrame;
+        if(bead) bead.frame=self.orb.bounds;
+        [self applyDropletPath:notchPath];
+        self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
+        [CATransaction commit];
+        [self scheduleOrbFade];
+        return;
+    }
     
     // 给 mask, rim, shadow 做平滑形变动画
     if(bead) {
@@ -1482,17 +1499,22 @@ static id FMLayoutChangeObserver=nil;
             if(bead) bead.frame=dragged.bounds;
             self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
         } completion:^(BOOL finished){
-            // 动画结束后以标准 orbFrame 彻底重新绘制，确保尺寸 100% 恢复，绝不拉长变形
-            if(self.orb==dragged) {
-                [self draw];
-                [self scheduleOrbFade];
-            }
+            if(!finished || self.orb!=dragged) return;
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            dragged.frame=targetFrame;
+            if(bead) bead.frame=dragged.bounds;
+            [self applyDropletPath:notchPath];
+            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*0.5,targetFrame.size.height*0.5);
+            [CATransaction commit];
+            [self scheduleOrbFade];
         }];
 }
 
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
     if(g.state==UIGestureRecognizerStateBegan) {
+        _isPanning=YES;
         _panStartPoint=p;
         _panOriginalCenter=self.orb.center;
         _panOriginalOrbFrame=self.orb.frame;
@@ -1506,6 +1528,7 @@ static id FMLayoutChangeObserver=nil;
         self.orbFaded=NO;
         self.orb.alpha=1;
     } else if(g.state==UIGestureRecognizerStateChanged) {
+        _isPanning=YES;
         [self cancelOrbFade];
         self.orbFaded=NO;
         self.orb.alpha=1;
@@ -1603,6 +1626,7 @@ static id FMLayoutChangeObserver=nil;
             }
         }
     } else if(g.state==UIGestureRecognizerStateEnded) {
+        _isPanning=NO;
         CGPoint v = CGPointZero;
         @try {
             v = [g velocityInView:self.overlayView];
@@ -1612,13 +1636,17 @@ static id FMLayoutChangeObserver=nil;
         CGFloat finalTotalDist = hypot(p.x - _panStartPoint.x, p.y - _panStartPoint.y);
         
         if(_panIsRepositioning) {
-            // === 移动位置模式：吸附最近边缘并持久化，0.20s 后彻底重绘复原 ===
+            // === 移动位置模式：吸附最近边缘并持久化 ===
             self.left=self.orb.center.x<self.window.bounds.size.width*.5;
             ((FMHitButton *)self.orb).docksLeft=self.left;
             self.orbY=Clamp(self.orb.center.y/self.window.bounds.size.height,.1,.9);
             SetPref(@"onLeft",@(self.left));SetPref(@"orbY",@(self.orbY));
             if(UIAccessibilityIsReduceMotionEnabled()) {
-                [self draw];
+                self.orb.frame=[self orbFrame];
+                UIView *bead=[self.orb viewWithTag:9202];
+                if(bead) bead.frame=self.orb.bounds;
+                UIBezierPath *notchPath=FMSideNotchPath(self.orb.bounds,self.left,YES,YES);
+                [self applyDropletPath:notchPath];
                 [self scheduleOrbFade];
             } else {
                 UIButton *dragged=self.orb;
@@ -1627,14 +1655,10 @@ static id FMLayoutChangeObserver=nil;
                     animations:^{dragged.frame=[self orbFrame];}
                     completion:^(BOOL finished){
                         if(!finished || self.orb!=dragged) return;
+                        UIView *bead=[dragged viewWithTag:9202];
+                        if(bead) bead.frame=dragged.bounds;
                         FMAnimateOrbShoulders(dragged,self.left,0,YES);
-                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.20*NSEC_PER_SEC),
-                            dispatch_get_main_queue(),^{
-                                if(self.orb==dragged) {
-                                    [self draw];
-                                    [self scheduleOrbFade];
-                                }
-                            });
+                        [self scheduleOrbFade];
                     }];
                 [self scheduleOrbFade];
             }
@@ -1672,6 +1696,7 @@ static id FMLayoutChangeObserver=nil;
             }
         }
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
+        _isPanning=NO;
         [self restoreDropletToOriginalAnimated:NO];
     }
 }
