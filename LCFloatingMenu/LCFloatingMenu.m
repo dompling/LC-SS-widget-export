@@ -367,13 +367,15 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
     CGFloat detachDist = 52.0 * FMOrbScale();
     CGFloat t = Clamp(pullDist / detachDist, 0.0, 1.0);
     CGFloat cy = h * 0.5;
-    CGFloat w0 = MAX(8.0, w - pullDist);
     
-    // 脱离临界态 (拉断脱离，对应灵动岛截图 5：细丝断裂弹回，头部化为纯净独立正圆水珠)
+    // 水滴头部饱满膨胀：从微珠宽度(8pt半径)平滑膨胀为饱满大圆水珠(20pt半径，直径40pt)
+    CGFloat targetR = 20.0 * FMOrbScale();
+    CGFloat r = (8.0 * FMOrbScale()) * (1.0 - t) + targetR * t;
+    CGFloat headCenterX = r + 2.0;
+    
+    // 脱离临界态 (拉断脱离，对应灵动岛截图 5：细丝断开，头部化为纯净独立正圆水球)
     if(pullDist >= detachDist) {
-        CGFloat detachedR = 19.0 * FMOrbScale();
-        CGFloat detachedCenterX = detachedR + 2.0;
-        UIBezierPath *spherePath = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(detachedCenterX - detachedR, cy - detachedR, detachedR * 2, detachedR * 2)];
+        UIBezierPath *spherePath = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(headCenterX - r, cy - r, r * 2, r * 2)];
         if(dockLeft) {
             CGAffineTransform flip = CGAffineTransformMake(-1, 0, 0, 1, w, 0);
             [spherePath applyTransform:flip];
@@ -381,55 +383,48 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
         return spherePath;
     }
     
-    // 黏连拉丝态 (对应灵动岛截图 1~4：基底锚定边缘、头部膨胀正圆、腰身逐渐收窄拔丝)
-    CGFloat r = (w0 * 0.5) * (1.0 - t * 0.35) + (19.0 * FMOrbScale()) * (t * 0.35);
-    CGFloat flare = MIN(w0 * 1.3, h * 0.32);
+    // 连接处变小收窄：从初始微珠高度 h 迅速收缩收窄，拉出越远连接处越小，临界断裂前形成极细液丝
+    CGFloat baseHeight = h * pow(1.0 - t, 2.0) + (3.0 * FMOrbScale()) * (1.0 - t);
+    CGFloat baseTopY = cy - baseHeight * 0.5;
+    CGFloat baseBottomY = cy + baseHeight * 0.5;
     
-    // 屏幕边缘基底锚点 (吸附屏幕边缘)
-    CGFloat baseTopY = (flare * 0.12) * t;
-    CGFloat baseBottomY = h - (flare * 0.12) * t;
+    // 腰身液态内凹收缩 (Metaball 颈部受表面张力作用收窄)
+    CGFloat waistHalf = MIN(baseHeight * 0.5, r) * pow(1.0 - t, 1.2) + (1.5 * FMOrbScale()) * (1.0 - t);
     
-    // 头部饱满水珠圆切点
-    CGFloat headTopY = cy - r;
-    CGFloat headBottomY = cy + r;
+    CGFloat cp1X = w - (w - headCenterX) * 0.40;
+    CGFloat cp1Y = cy - waistHalf * 0.85;
     
-    // 腰身液态细丝内凹 (随着拉伸距离增加，腰身急剧收窄成极细丝线，截图 4 拔丝态)
-    CGFloat waistR = (cy - baseTopY) * pow(1.0 - t, 1.40) + (2.0 * (1.0 - t));
-    
-    CGFloat cp1X = w - (w - r) * 0.40;
-    CGFloat cp1Y = baseTopY * (1.0 - t) + (cy - waistR) * 0.35 * t;
-    
-    CGFloat cp2X = r + (w - r) * 0.22;
-    CGFloat cp2Y = (cy - r) * (1.0 - t * 0.35) + (cy - waistR) * 0.95 * t;
+    CGFloat cp2X = headCenterX + (w - headCenterX) * 0.28;
+    CGFloat cp2Y = cy - waistHalf;
     
     UIBezierPath *path = [UIBezierPath bezierPath];
-    // 1. 基底上锚点出发
+    // 1. 边缘连接处上端点
     [path moveToPoint:CGPointMake(w, baseTopY)];
     
-    // 2. 上侧流体颈部平滑向内收窄
-    [path addCurveToPoint:CGPointMake(r, headTopY)
+    // 2. 颈部向内凹陷收窄平滑过渡至大圆球上切点
+    [path addCurveToPoint:CGPointMake(headCenterX, cy - r)
             controlPoint1:CGPointMake(cp1X, cp1Y)
             controlPoint2:CGPointMake(cp2X, cp2Y)];
             
-    // 3. 头部饱满正圆水珠圆弧 (使用三次贝塞尔参数 0.55228475 保证完美圆切)
+    // 3. 头部饱满大圆弧 (使用三次贝塞尔参数 0.55228475 保证完美圆球切线)
     CGFloat k = r * 0.55228475;
-    [path addCurveToPoint:CGPointMake(0, cy)
-            controlPoint1:CGPointMake(r - k, headTopY)
-            controlPoint2:CGPointMake(0, cy - k)];
-    [path addCurveToPoint:CGPointMake(r, headBottomY)
-            controlPoint1:CGPointMake(0, cy + k)
-            controlPoint2:CGPointMake(r - k, headBottomY)];
+    [path addCurveToPoint:CGPointMake(headCenterX - r, cy)
+            controlPoint1:CGPointMake(headCenterX - k, cy - r)
+            controlPoint2:CGPointMake(headCenterX - r, cy - k)];
+    [path addCurveToPoint:CGPointMake(headCenterX, cy + r)
+            controlPoint1:CGPointMake(headCenterX - r, cy + k)
+            controlPoint2:CGPointMake(headCenterX - k, cy + r)];
             
-    // 4. 下侧流体颈部对称延展回边缘基底
+    // 4. 下侧颈部对称延展回收缩的边缘连接处
     CGFloat cp3X = cp2X;
-    CGFloat cp3Y = h - cp2Y;
+    CGFloat cp3Y = cy + waistHalf;
     CGFloat cp4X = cp1X;
-    CGFloat cp4Y = h - cp1Y;
+    CGFloat cp4Y = cy + waistHalf * 0.85;
     [path addCurveToPoint:CGPointMake(w, baseBottomY)
             controlPoint1:CGPointMake(cp3X, cp3Y)
             controlPoint2:CGPointMake(cp4X, cp4Y)];
             
-    // 5. 闭合回边缘基底
+    // 5. 闭合回到边缘连接处
     [path closePath];
     
     if(dockLeft) {
@@ -1613,18 +1608,18 @@ static id FMLayoutChangeObserver=nil;
             [CATransaction setDisableActions:YES];
             self.orb.frame=targetFrame;
             
-            CGFloat headR=(pullDist >= detachDist) ? (19.0*FMOrbScale()) : ((self.orbWidth*0.5)*(1.0-pullDist/detachDist*0.35) + 19.0*FMOrbScale()*(pullDist/detachDist*0.35));
-            CGFloat headCenterX=_panOriginalLeft ? (currentW - headR - 1.0) : (headR + 1.0);
+            CGFloat tProgress=Clamp(pullDist / detachDist, 0.0, 1.0);
+            CGFloat headR=(pullDist >= detachDist) ? (20.0*FMOrbScale()) : ((8.0*FMOrbScale())*(1.0-tProgress) + (20.0*FMOrbScale())*tProgress);
+            CGFloat headCenterX=_panOriginalLeft ? (currentW - headR - 2.0) : (headR + 2.0);
             CGPoint headCenter=CGPointMake(headCenterX,self.orbHeight * 0.5);
             self.orbUpdateLine.center=headCenter;
             
             // 慢慢拖拽、慢慢模糊化、慢慢变形、慢慢脱离（对齐灵动岛截图 1~5）
             if(self.orbAppPreviewView) {
                 self.orbAppPreviewView.center=headCenter;
-                CGFloat tProgress=Clamp(pullDist / (46.0 * FMOrbScale()), 0.0, 1.0);
                 self.orbUpdateLine.alpha=Clamp(1.0 - tProgress * 1.8, 0.0, 1.0);
                 self.orbAppPreviewView.alpha=Clamp((tProgress - 0.20) / 0.55, 0.0, 1.0);
-                CGFloat iconScale=0.55 + 0.45 * tProgress;
+                CGFloat iconScale=0.50 + 0.50 * tProgress;
                 self.orbAppPreviewView.transform=CGAffineTransformMakeScale(iconScale, iconScale);
             }
             
