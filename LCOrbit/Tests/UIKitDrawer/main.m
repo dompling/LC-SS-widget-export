@@ -20,6 +20,9 @@
 @property(nonatomic,strong) LCOrbitContext *orbitContext;
 @property(nonatomic,strong) UIButton *orb;
 @property(nonatomic,strong) UIView *panel;
+@property(nonatomic,strong) UIView *orbPreviewHost;
+@property(nonatomic,strong) UIWindow *settingsWindow;
+@property(nonatomic,strong) UINavigationController *settingsNavigation;
 @property(nonatomic,strong) NSArray *apps;
 @property(nonatomic,copy) NSString *page;
 @property(nonatomic,assign) CGFloat orbY;
@@ -41,6 +44,8 @@
 - (void)pan:(UIPanGestureRecognizer *)gesture;
 - (void)sliderChanged:(UISlider *)slider;
 - (void)sliderFinished:(UISlider *)slider;
+- (void)refreshOrbPreview;
+- (void)themeColorChanged:(UIColorWell *)well;
 @end
 @interface FMSettingsRootController : UIViewController
 - (void)tryAutomaticUpdatePrompt;
@@ -689,13 +694,46 @@ static void RunTests(void) {
     Check(@"orb-style-has-ten-adjustments",styleSliders.count==10,@(styleSliders.count));
     UISlider *extension=nil;
     for(UISlider *slider in styleSliders) if(slider.tag==30) extension=slider;
-    extension.value=31;[style sliderChanged:extension];[style sliderFinished:extension];
+    style.orbPreviewHost=[[UIView alloc] initWithFrame:CGRectMake(0,0,667,667)];
+    style.orbPreviewHost.userInteractionEnabled=NO;
+    [style.overlayView addSubview:style.orbPreviewHost];
+    style.orbY=0;[style refreshOrbPreview];
+    Check(@"orb-preview-works-before-overlay-install",fabs(CGRectGetMidY([style.orbPreviewHost viewWithTag:9211].frame)-333.5)<.01,nil);
+    style.orbY=.5;
+    extension.value=31;[style sliderChanged:extension];
+    Check(@"orb-preview-live-before-slider-release",fabs([style.orbPreviewHost viewWithTag:9211].bounds.size.height-114)<.01,nil);
+    [style sliderFinished:extension];
     Check(@"orb-style-slider-applies-and-persists",fabs(style.orb.bounds.size.height-114)<.01 &&
         [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,NSStringFromCGRect(style.orb.bounds));
     UIStackView *reopened=[UIStackView new];[style populateSettingsCategory:@"appearance" stack:reopened];
     BOOL restored=NO;for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag==30) restored=fabs(((UISlider *)view).value-31)<.01;
     Check(@"orb-style-restores-on-reopen",restored,nil);
     [prefs removeObjectForKey:@"LCFloatingMenu.orbExtension"];
+    id savedMode=[prefs objectForKey:@"LCFloatingMenu.appearanceMode"];
+    id savedAccent=[prefs objectForKey:@"LCFloatingMenu.accentLight"];
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.appearanceMode"];
+    FMManager *theme=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    UIViewController *themePage=[UIViewController new];UIStackView *themeStack=[UIStackView new];
+    [themePage.view addSubview:themeStack];[theme populateSettingsCategory:@"appearance" stack:themeStack];
+    theme.settingsNavigation=[[UINavigationController alloc] initWithRootViewController:themePage];
+    theme.settingsWindow=[[UIWindow alloc] initWithFrame:CGRectMake(0,0,667,667)];
+    theme.settingsWindow.rootViewController=theme.settingsNavigation;
+    theme.orbPreviewHost=[[UIView alloc] initWithFrame:theme.settingsWindow.bounds];
+    theme.orbPreviewHost.userInteractionEnabled=NO;[theme.settingsWindow addSubview:theme.orbPreviewHost];
+    UIColorWell *well=nil;UISlider *themeSlider=nil;
+    for(UIView *view in Views(themeStack)) {
+        if([view isKindOfClass:UIColorWell.class] && view.tag==200) well=(UIColorWell *)view;
+        if([view isKindOfClass:UISlider.class] && view.tag==30) themeSlider=(UISlider *)view;
+    }
+    UIView *wellParent=well.superview;UIColor *green=[UIColor colorWithRed:0 green:1 blue:0 alpha:1];
+    well.selectedColor=green;[theme themeColorChanged:well];
+    Check(@"theme-color-applies-without-replacing-picker",[themeSlider.tintColor isEqual:green] && well.superview==wellParent && [prefs objectForKey:@"LCFloatingMenu.accentLight"]!=nil,nil);
+    UIView *firstPreview=[theme.orbPreviewHost viewWithTag:9211];
+    well.selectedColor=UIColor.redColor;[theme themeColorChanged:well];
+    Check(@"theme-color-refreshes-preview-immediately",firstPreview!=[theme.orbPreviewHost viewWithTag:9211] && [themeSlider.tintColor isEqual:UIColor.redColor],nil);
+    [prefs setObject:savedMode forKey:@"LCFloatingMenu.appearanceMode"];
+    [prefs setObject:savedAccent forKey:@"LCFloatingMenu.accentLight"];
+    theme.settingsWindow=nil;theme.settingsNavigation=nil;theme.orbPreviewHost=nil;
     dispatch_async(dispatch_get_main_queue(), ^{
     FMManager *snap=Manager(NO,1,667,ordinary,NO,NO,@"apps");
     snap.window.hidden=NO;

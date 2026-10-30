@@ -290,6 +290,39 @@ static UIColor *FMAccent(void) { return FMThemeColor(FMColorAccent); }
 static UIColor *FMSwitchGreen(void) {
     return [UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0];
 }
+// Recolor existing settings controls without replacing an active UIColorWell.
+static NSArray<UIColor *> *FMSettingsPalette(void) {
+    NSMutableArray *colors=[NSMutableArray array];
+    for(NSUInteger role=FMColorAccent;role<=FMColorBorder;role++) [colors addObject:FMThemeColor(role)];
+    for(NSNumber *alpha in @[@.20,@.25,@.35,@.50]) [colors addObject:[FMAccent() colorWithAlphaComponent:alpha.doubleValue]];
+    return colors;
+}
+static UIColor *FMUpdatedSettingsColor(UIColor *color,NSArray *before,NSArray *after) {
+    if(!color) return nil;
+    NSUInteger index=[before indexOfObject:color];
+    return index==NSNotFound?color:after[index];
+}
+static void FMRefreshSettingsColors(UIView *view,NSArray *before,NSArray *after) {
+    if([view isKindOfClass:UIColorWell.class]) return;
+    view.backgroundColor=FMUpdatedSettingsColor(view.backgroundColor,before,after);
+    view.tintColor=FMUpdatedSettingsColor(view.tintColor,before,after);
+    if(view.layer.borderColor) view.layer.borderColor=FMUpdatedSettingsColor(
+        [UIColor colorWithCGColor:view.layer.borderColor],before,after).CGColor;
+    if([view isKindOfClass:UILabel.class]) {
+        UILabel *label=(UILabel *)view;
+        label.textColor=FMUpdatedSettingsColor(label.textColor,before,after);
+    }
+    if([view isKindOfClass:UIButton.class]) {
+        UIButton *button=(UIButton *)view;
+        for(NSNumber *state in @[@(UIControlStateNormal),@(UIControlStateSelected)]) {
+            UIColor *color=[button titleColorForState:state.unsignedIntegerValue];
+            if(color) [button setTitleColor:FMUpdatedSettingsColor(color,before,after) forState:state.unsignedIntegerValue];
+        }
+    }
+    if([view isKindOfClass:UISlider.class]) {view.tintColor=FMAccent();return;}
+    if([view isKindOfClass:UISwitch.class]) {((UISwitch *)view).onTintColor=FMAccent();return;}
+    for(UIView *child in view.subviews) FMRefreshSettingsColors(child,before,after);
+}
 static CGFloat FMOrbScale(void) {
     return Clamp(FloatPref(@"orbScale",Clamp(FloatPref(@"orbWidth",12)/12.,.70,1.90)),.70,1.90);
 }
@@ -1004,6 +1037,7 @@ static id FMLayoutChangeObserver=nil;
 @property(nonatomic,assign) BOOL launchSystemMenuMode;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
+@property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
 @property(nonatomic,weak) UIWindow *previousKeyWindow;
 @property(nonatomic,assign) UIUserInterfaceStyle lastSystemStyle;
@@ -2554,12 +2588,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     nav.navigationBar.prefersLargeTitles=YES;
     FMApplyNavigationTheme(nav);
     home.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc]
-        initWithTitle:@"完成" style:UIBarButtonItemStyleDone
+        initWithImage:[UIImage systemImageNamed:@"chevron.left"] style:UIBarButtonItemStylePlain
         target:self action:@selector(closeSettings)];
+    home.navigationItem.leftBarButtonItem.accessibilityLabel=@"返回";
     settings.rootViewController=nav;
     self.settingsNavigation=nav;
     self.settingsWindow=settings;
     [settings makeKeyAndVisible];
+    self.orbPreviewHost=[[UIView alloc] initWithFrame:settings.bounds];
+    self.orbPreviewHost.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    self.orbPreviewHost.userInteractionEnabled=NO;
+    self.orbPreviewHost.accessibilityElementsHidden=YES;
+    [settings addSubview:self.orbPreviewHost];
+    [self refreshOrbPreview];
     FMLog(@"settings-open",@"navigation-window");
 }
 - (void)closeSettings {
@@ -2567,6 +2608,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIWindow *prior=self.previousKeyWindow;
     UIWindow *old=self.settingsWindow;
     UIWindowScene *scene=old.windowScene;
+    [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;
     self.settingsWindow=nil;
     self.settingsNavigation=nil;
     self.previousKeyWindow=nil;
@@ -2591,7 +2633,35 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMLog(@"settings-close",FMHostUI()?@"lc-host-foreground":@"guest-foreground");
     [self draw];
 }
+- (void)refreshOrbPreview {
+    UIView *host=self.orbPreviewHost;
+    if(!host) return;
+    if(self.settingsWindow) host.frame=self.settingsWindow.bounds;
+    for(UIView *view in [host.subviews copy]) [view removeFromSuperview];
+    CGFloat w=self.orbWidth,h=self.orbHeight;
+    CGFloat position=Clamp(FloatPref(@"orbY",self.orbY>0?self.orbY:.5),.1,.9);
+    CGFloat y=Clamp(host.bounds.size.height*position-h*.5,0,MAX(0,host.bounds.size.height-h));
+    BOOL left=BoolPref(@"onLeft",self.left);
+    UIView *body=[[UIView alloc] initWithFrame:CGRectMake(left?0:host.bounds.size.width-w,y,w,h)];
+    body.tag=9211;body.userInteractionEnabled=NO;
+    FMAddOrbBackdrop(body,left);
+    UIView *glass=[self glass:body.bounds radius:w*.5 strong:NO];
+    FMApplySideNotch(glass,body.layer,left,YES,YES);
+    FMAddOrbCapsule(glass,left);
+    [body addSubview:glass];
+    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,3*FMOrbScale(),MIN(18*FMOrbScale(),h*.30))];
+    line.center=CGPointMake(w*.5+(left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),h*.5);
+    line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
+    line.layer.cornerRadius=line.bounds.size.width*.5;
+    [glass addSubview:line];
+    CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
+        FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
+        FloatPref(@"idleAlpha",.72);
+    body.alpha=Clamp(alpha,.25,1);
+    [host addSubview:body];
+}
 - (void)updateSettingsContent {
+    [self refreshOrbPreview];
     self.settingsWindow.backgroundColor=FMThemeColor(FMColorBackground);
     FMApplyNavigationTheme(self.settingsNavigation);
     // Refresh all loaded pages so Back never reveals the previous palette.
@@ -2752,6 +2822,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL restoreKey=settings.isKeyWindow && prior && !prior.hidden &&
         prior.windowScene==settings.windowScene &&
         settings.windowScene.activationState==UISceneActivationStateForegroundActive;
+    [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;
     self.settingsWindow=nil;
     self.settingsNavigation=nil;
     self.settingsScreen=nil;
@@ -2933,9 +3004,16 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL dark=well.tag==201;
     NSString *hex=FMHex(well.selectedColor);
     if(!hex) return;
+    NSArray *before=FMSettingsPalette();
     SetPref(dark?@"accentDark":@"accentLight",hex);
-    // Native UIColorWell retains the picker while the user chooses colors.
-    // Refresh the settings surface only after it is dismissed.
+    if(self.settingsWindow) {
+        NSArray *after=FMSettingsPalette();
+        self.settingsWindow.backgroundColor=FMThemeColor(FMColorBackground);
+        FMApplyNavigationTheme(self.settingsNavigation);
+        for(UIViewController *controller in self.settingsNavigation.viewControllers)
+            if(controller.isViewLoaded) FMRefreshSettingsColors(controller.view,before,after);
+        [self refreshOrbPreview];
+    } else [self draw];
     FMLog(@"theme-color",[NSString stringWithFormat:@"%@=%@",dark?@"dark":@"light",hex]);
 }
 - (void)customThemeColorRow:(UIStackView *)stack title:(NSString *)title dark:(BOOL)dark {
@@ -2977,7 +3055,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
     [self orbScaleControl:s];
     [self settingSlider:s title:@"玻璃主题着色增强" key:@"glassTint" min:0 max:.15 def:0 tag:13];
-    [self section:@"微珠外观与回弹" sub:@"尺寸随微珠缩放；松开滑块后生效。阻尼越低，回弹越明显。" in:s];
+    [self section:@"微珠外观与回弹" sub:@"尺寸随微珠缩放；调整时可查看屏幕边缘的实时胶囊。阻尼越低，回弹越明显。" in:s];
     NSInteger styleTag=30;
     for(NSDictionary *option in FMOrbStyleOptions()) {
         [self settingSlider:s title:option[@"title"] key:option[@"key"]
@@ -3379,6 +3457,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(!key) return;
     SetPref(key,@(slider.value));
+    [self refreshOrbPreview];
     if(slider.tag==14 || slider.tag==11) {
         UILabel *value=objc_getAssociatedObject(slider,@selector(sliderChanged:));
         value.text=[NSString stringWithFormat:@"%.0f%%",round(slider.value*100)];

@@ -11,6 +11,12 @@ static NSString *const UIApplicationDidReceiveMemoryWarningNotification=@"memory
 static NSString *const UISceneWillDeactivateNotification=@"scene-inactive";
 static NSString *const UISceneDidDisconnectNotification=@"scene-disconnected";
 static NSString *const LCOrbitMultitaskConfigurationChangedNotification=@"configuration";
+@interface UIView : NSObject
+- (void)removeFromSuperview;
+@end
+@implementation UIView
+- (void)removeFromSuperview {}
+@end
 @interface UIWindowScene : NSObject
 @property NSInteger activationState;
 - (void)unregisterForTraitChanges:(id)registration;
@@ -113,6 +119,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 @end
 @interface FMManager : NSObject
 @property(nonatomic,strong) UIWindow *window,*settingsWindow,*previousKeyWindow;
+@property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,strong) LCOrbitContext *orbitContext;
 @property(nonatomic,strong) UIWindowScene *appearanceScene;
 @property(nonatomic,strong) id appearanceRegistration,settingsNavigation,settingsScreen,settingsScroll;
