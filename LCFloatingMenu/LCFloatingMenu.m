@@ -379,27 +379,46 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
     }
 }
 
-static void FMCheckAndFixOrientationLayout(void) {
-    if(!BoolPref(@"unlockOrientation", YES)) return;
+static BOOL FMDeviceIsLandscape(void) {
+    if(UIDeviceOrientationIsLandscape(UIDevice.currentDevice.orientation)) return YES;
+    CGSize screen = UIScreen.mainScreen.bounds.size;
+    if(screen.width > screen.height) return YES;
     UIWindowScene *scene = [LCOrbitHost activeScene];
-    if(!scene && @available(iOS 13.0, *)) {
+    if(scene && UIInterfaceOrientationIsLandscape(scene.interfaceOrientation)) return YES;
+    if(@available(iOS 13.0, *)) {
         for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
             if([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive) {
-                scene = (UIWindowScene *)s;
-                break;
+                if(UIInterfaceOrientationIsLandscape(((UIWindowScene *)s).interfaceOrientation)) return YES;
             }
         }
     }
-    if(!scene) return;
-    UIInterfaceOrientation orientation = scene.interfaceOrientation;
-    if(!UIInterfaceOrientationIsLandscape(orientation)) return;
+    return NO;
+}
+
+static void FMFixSubviewsLandscapeLayout(UIView *view, CGFloat targetWidth, CGFloat targetHeight, int depth) {
+    if(!view || depth > 8) return;
+    CGRect f = view.frame;
+    // If a container/player view is stuck at portrait width while we are in landscape
+    if(f.size.width > 300 && f.size.width < 450 && targetWidth > 600) {
+        view.frame = CGRectMake(f.origin.x, f.origin.y, targetWidth, f.size.height < targetHeight ? targetHeight : f.size.height);
+        [view setNeedsLayout];
+    }
+    for(UIView *sub in view.subviews) {
+        FMFixSubviewsLandscapeLayout(sub, targetWidth, targetHeight, depth + 1);
+    }
+}
+
+static void FMCheckAndFixOrientationLayout(void) {
+    if(!BoolPref(@"unlockOrientation", YES)) return;
+    if(!FMDeviceIsLandscape()) return;
     
-    CGRect screenBounds = scene.coordinateSpace.bounds;
-    CGFloat targetWidth = MAX(screenBounds.size.width, screenBounds.size.height);
-    CGFloat targetHeight = MIN(screenBounds.size.width, screenBounds.size.height);
+    CGSize screen = UIScreen.mainScreen.bounds.size;
+    CGFloat targetWidth = MAX(screen.width, screen.height);
+    CGFloat targetHeight = MIN(screen.width, screen.height);
     CGRect landscapeBounds = CGRectMake(0, 0, targetWidth, targetHeight);
     
-    for(UIWindow *w in scene.windows) {
+    NSArray<UIWindow *> *windows = UIApplication.sharedApplication.windows;
+    for(UIWindow *w in windows) {
         if(w.windowLevel >= UIWindowLevelAlert) continue;
         if(w.bounds.size.width < targetWidth || w.bounds.size.height < targetHeight) {
             w.frame = landscapeBounds;
@@ -410,16 +429,20 @@ static void FMCheckAndFixOrientationLayout(void) {
             if(root.view.bounds.size.width < targetWidth || root.view.bounds.size.height < targetHeight) {
                 root.view.frame = landscapeBounds;
                 root.view.bounds = landscapeBounds;
-                [root.view setNeedsLayout];
-                [root.view layoutIfNeeded];
             }
+            FMFixSubviewsLandscapeLayout(root.view, targetWidth, targetHeight, 0);
+            [root.view setNeedsLayout];
+            [root.view layoutIfNeeded];
         }
     }
 }
 
 @interface UIViewController (FMOrientationUnlock)
 - (UIInterfaceOrientationMask)fm_supportedInterfaceOrientations;
+- (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations;
+- (UIInterfaceOrientationMask)fm__supportedInterfaceOrientations;
 - (BOOL)fm_shouldAutorotate;
+- (BOOL)fm_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation;
 - (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator;
 @end
 
@@ -434,11 +457,29 @@ static void FMCheckAndFixOrientationLayout(void) {
     }
     return mask;
 }
+- (UIInterfaceOrientationMask)fm___supportedInterfaceOrientations {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return UIInterfaceOrientationMaskAllButUpsideDown;
+    }
+    return [self fm___supportedInterfaceOrientations];
+}
+- (UIInterfaceOrientationMask)fm__supportedInterfaceOrientations {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return UIInterfaceOrientationMaskAllButUpsideDown;
+    }
+    return [self fm__supportedInterfaceOrientations];
+}
 - (BOOL)fm_shouldAutorotate {
     if(BoolPref(@"unlockOrientation", YES)) {
         return YES;
     }
     return [self fm_shouldAutorotate];
+}
+- (BOOL)fm_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation {
+    if(BoolPref(@"unlockOrientation", YES)) {
+        return YES;
+    }
+    return [self fm_shouldAutorotateToInterfaceOrientation:orientation];
 }
 - (void)fm_viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     [self fm_viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
@@ -460,7 +501,19 @@ static void FMInstallOrientationHooks(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         FMSwizzle(UIViewController.class, @selector(supportedInterfaceOrientations), @selector(fm_supportedInterfaceOrientations));
+        SEL dunder = NSSelectorFromString(@"__supportedInterfaceOrientations");
+        if(class_getInstanceMethod(UIViewController.class, dunder)) {
+            FMSwizzle(UIViewController.class, dunder, @selector(fm___supportedInterfaceOrientations));
+        }
+        SEL single = NSSelectorFromString(@"_supportedInterfaceOrientations");
+        if(class_getInstanceMethod(UIViewController.class, single)) {
+            FMSwizzle(UIViewController.class, single, @selector(fm__supportedInterfaceOrientations));
+        }
         FMSwizzle(UIViewController.class, @selector(shouldAutorotate), @selector(fm_shouldAutorotate));
+        SEL shouldTo = NSSelectorFromString(@"shouldAutorotateToInterfaceOrientation:");
+        if(class_getInstanceMethod(UIViewController.class, shouldTo)) {
+            FMSwizzle(UIViewController.class, shouldTo, @selector(fm_shouldAutorotateToInterfaceOrientation:));
+        }
         FMSwizzle(UIViewController.class, @selector(viewWillTransitionToSize:withTransitionCoordinator:), @selector(fm_viewWillTransitionToSize:withTransitionCoordinator:));
         [NSNotificationCenter.defaultCenter addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
             FMCheckAndFixOrientationLayout();

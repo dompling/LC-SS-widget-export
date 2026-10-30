@@ -171,7 +171,7 @@ static UIEdgeInsets PortraitInsets(UIEdgeInsets insets, UIInterfaceOrientation o
         case UIInterfaceOrientationLandscapeLeft:
             return UIEdgeInsetsMake(insets.left,0,insets.right,insets.bottom);
         case UIInterfaceOrientationLandscapeRight:
-            return UIEdgeInsetsMake(insets.left,insets.bottom,insets.right,0);
+            return UIEdgeInsetsMake(insets.right,insets.bottom,insets.left,0);
         default: return insets;
     }
 }
