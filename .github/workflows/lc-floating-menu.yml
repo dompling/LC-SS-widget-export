@@ -98,7 +98,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" \
               --title "LCFloatingMenu $VERSION" \
               --notes-file "$NOTES" \
-              --latest=false
+              --latest
           fi
 
           cat > dist/latest-info.txt <<EOF
