@@ -385,7 +385,10 @@ static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
         @{@"key":@"menuCornerRadius",@"title":@"外框圆角半径",@"min":@8,@"max":@36,@"default":@26,@"unit":@"点",@"step":@1},
         @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%",@"step":@.01},
         @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点",@"step":@1},
-        @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点",@"step":@1}
+        @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点",@"step":@1},
+        // On top of whatever the head needs cleared, none of it by default; below zero it
+        // lifts the whole block instead, as far as the top edge.
+        @{@"key":@"menuTopPadding",@"title":@"上方留白",@"min":@(-16),@"max":@40,@"default":@0,@"unit":@"点",@"step":@1}
     ];
 }
 static CGFloat FMMenuStyleValue(NSString *key) {
@@ -3062,6 +3065,18 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [row.heightAnchor constraintEqualToConstant:height].active=YES;
     [stack addArrangedSubview:row];
 }
+// Where the drawer's content starts, measured from the top of its glass. A head that
+// sweeps onto the wall has to clear the sweep; a rounded one only has to clear its own
+// corner, and that corner hugs the top edge closely enough that a row's far end meets it
+// below four points at the widest settings. 上方留白 is added to whichever it is.
+- (CGFloat)menuHeadroom:(BOOL)compact {
+    CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(compact?22./28:1);
+    CGFloat base=FMDrawerRoundedTop()?(compact?6:8):(compact?shoulder+8:shoulder+6);
+    // A negative setting lifts the whole block; it can reach the top edge but not pass it.
+    return MAX(0,base+FMMenuStyleValue(@"menuTopPadding"));
+}
+// The strip of favorites and the row below it, from that same start.
+- (CGFloat)menuHeaderDepth { return 58; }
 - (void)buildPanel {
     CGRect bounds=self.window.bounds;
     CGFloat safeTop=MAX(38,self.window.safeAreaInsets.top+6);
@@ -3101,7 +3116,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         self.panelShowsHeader=showsFavorites && !tight;
         footerHeight=compact?(tight?MAX(50,44/actualScale)*compactActions+4:10+compactActions*63+3):
                               (small?44:(tight?MAX(60,44/actualScale)+8:74));
-        top=compact?shoulder+8:(self.panelShowsHeader?64+shoulder:shoulder+6);
+        CGFloat headroom=[self menuHeadroom:compact];
+        top=headroom+(self.panelShowsHeader?[self menuHeaderDepth]:0);
         bottom=footerHeight+6+shoulder;
         CGFloat rowHeight=compact?63:[self appRowHeight];
         if(!small || (top+bottom+rowHeight)*actualScale<=available) { fits=YES;break; }
@@ -3110,7 +3126,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(!fits) return;
     self.panelFooterHeight=footerHeight;
-    CGFloat target=small?(compact?MIN(566,20+MAX(1,MIN(appCount,5))*65+footerHeight+12+2*shoulder):
+    CGFloat target=small?(compact?MIN(566,top+bottom+MAX(1,MIN(appCount,5))*65+18):
         top+bottom+MAX(1,MIN(appCount,5))*([self appRowHeight]+4)):610;
     if(small) target=MAX(target,top+bottom+(compact?63:[self appRowHeight]));
     if([self.page isEqualToString:@"manage"]) target=620;
@@ -3421,7 +3437,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     for(NSUInteger i=0;i<pinned.count;i++) {
         NSDictionary *app=pinned[i];
         UIControl *tile=[[UIControl alloc] initWithFrame:
-            CGRectMake(left+i*(cell+gap),(compact?5:8)+(compact?22:28),cell,compact?48:40)];
+            CGRectMake(left+i*(cell+gap),[self menuHeadroom:compact]+2,cell,compact?48:40)];
         tile.backgroundColor=UIColor.clearColor;
         CGFloat iconSize=compact?40:32;
         UIView *icon=[self iconViewForApp:app size:iconSize];
@@ -5423,7 +5439,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     FMNotchParams _beadParams,_dropletParams,_drawerParams;
     NSArray<NSDictionary *> *_favorites;
     BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded,_rebuildScheduled;
-    CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop;
+    CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop,_headroom;
     CGFloat _idleAlpha,_fadedAlpha;
     CGFloat _progress,_velocity,_omega,_zeta;
     CFTimeInterval _tick,_elapsed,_builtAt;
@@ -5491,12 +5507,14 @@ static UIView *FMDockCard(UIStackView *rows) {
     _compact=BoolPref(@"compactMode",NO);
     _actual=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
     CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(_compact?22./28:1);
+    CGFloat headroom=[manager menuHeadroom:_compact];
     CGFloat rowHeight=_compact?63:MAX(56,48/MAX(.50,_actual));
     CGFloat footer=_compact?76:44;
     _pw=_compact?76:240;
     _favorites=_compact?@[]:[manager pinnedApps];
-    _listTop=_compact?shoulder+8:(_favorites.count?64+shoulder:shoulder+6);
-    _ph=_compact?20+3*65+footer+12+2*shoulder:_listTop+(footer+6+shoulder)+3*(rowHeight+4);
+    _headroom=headroom;
+    _listTop=headroom+(_favorites.count?[manager menuHeaderDepth]:0);
+    _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:3*(rowHeight+4));
     _closedHeight=MAX([manager orbHeight]+100,190);
     // A short window cannot spare that much: the card gives way before the options do.
     if(_maxHeight>0) _closedHeight=MIN(_closedHeight,MAX(_maxHeight,[manager orbHeight]+24));
@@ -5636,7 +5654,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         NSUInteger pins=_favorites.count;
         CGFloat strip=12+(inner-(cell*pins+gap*(pins?pins-1:0)))*.5;
         for(NSUInteger index=0;index<pins;index++) {
-            UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(strip+index*(cell+gap),36,cell,40)];
+            UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(strip+index*(cell+gap),_headroom+2,cell,40)];
             UIView *icon=[self iconForSlot:index size:32 apps:_favorites];
             icon.frame=CGRectMake((cell-32)*.5,4,32,32);
             [tile addSubview:icon];
@@ -5644,7 +5662,7 @@ static UIView *FMDockCard(UIStackView *rows) {
             [items addObject:tile];
         }
         if(pins) {
-            UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(12,84,inner,hairline)];
+            UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(12,_headroom+50,inner,hairline)];
             divider.backgroundColor=rule;
             [_content addSubview:divider];
             [dividers addObject:divider];
@@ -6182,6 +6200,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self add:[self switchRow:@"上方常规圆角" key:@"roundedTop" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"预览底色跟随深浅" key:@"previewFollowsMode" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"panelScale",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"menuTopPadding",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"menuExtension",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"menuCornerRadius",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"menuCurveSoftness",nil) to:rows group:group when:FMDockWhenAlways];
@@ -6195,7 +6214,7 @@ static UIView *FMDockCard(UIStackView *rows) {
                to:rows group:group when:FMDockWhenAlways];
     }
     [self addSlider:FMDockOption(@"glassTint",nil) to:rows group:group when:FMDockWhenAlways];
-    [self addNote:@"「上方常规圆角」开着时菜单上方是普通圆角、只有下方顺着屏幕边缘扫出去；关掉则上下都是对称的贴合弧。「预览底色跟随深浅」让上面那张预览卡在夜间换成深色底，看玻璃更接近真机；关掉就一直是浅色。\n展开后，长按某个 App 再上下滑，一块玻璃镜片会跟着手指走，松手切换，拖出菜单外松手则取消。App 很多时，把手指推到列表上下边缘，列表会自己滚动。" to:rows group:group];
+    [self addNote:@"「上方常规圆角」开着时菜单上方是普通圆角、只有下方顺着屏幕边缘扫出去；关掉则上下都是对称的贴合弧。「上方留白」默认是 0，也就是只让开头部本身；想松一点往右调，嫌这点也多就往左调成负数，整块内容会往上提，一直提到贴着顶边。「预览底色跟随深浅」让上面那张预览卡在夜间换成深色底，看玻璃更接近真机；关掉就一直是浅色。\n展开后，长按某个 App 再上下滑，一块玻璃镜片会跟着手指走，松手切换，拖出菜单外松手则取消。App 很多时，把手指推到列表上下边缘，列表会自己滚动。" to:rows group:group];
 }
 - (void)addResetCard {
     UIControl *button=[UIControl new];
