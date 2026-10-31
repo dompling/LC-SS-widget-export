@@ -50,6 +50,30 @@ int main(void) { @autoreleasepool {
         [stylePreferences removeObjectForKey:key];
     }
 
+    for(NSDictionary *option in FMMenuStyleOptions()) {
+        NSString *key=option[@"key"];
+        Expect(FMMenuStyleValue(key)==[option[@"default"] doubleValue],"menu default preserved");
+        stylePreferences[key]=@(NAN);
+        Expect(FMMenuStyleValue(key)==[option[@"default"] doubleValue],"menu rejects nonfinite preference");
+        stylePreferences[key]=@(-1000);
+        Expect(FMMenuStyleValue(key)==[option[@"min"] doubleValue],"menu minimum clamp");
+        stylePreferences[key]=@(1000);
+        Expect(FMMenuStyleValue(key)==[option[@"max"] doubleValue],"menu maximum clamp");
+        [stylePreferences removeObjectForKey:key];
+    }
+    for(NSNumber *ext in @[@12,@28,@44]) for(NSNumber *radius in @[@8,@26,@36])
+    for(NSNumber *curve in @[@.2,@.64,@.9]) for(NSNumber *compact in @[@NO,@YES]) {
+        stylePreferences[@"menuExtension"]=ext;stylePreferences[@"menuCornerRadius"]=radius;stylePreferences[@"menuCurveSoftness"]=curve;
+        CGFloat w=compact.boolValue?76:240,h=320;
+        UIBezierPath *right=FMSideNotchPath(CGRectMake(0,0,w,h),NO,compact.boolValue,NO);
+        UIBezierPath *left=FMSideNotchPath(CGRectMake(0,0,w,h),YES,compact.boolValue,NO);
+        CGRect box=CGPathGetPathBoundingBox(right.CGPath);
+        Expect(isfinite(box.size.width) && CGRectContainsRect(CGRectMake(-.01,-.01,w+.02,h+.02),box),"menu extrema stay bounded");
+        Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(w*.5,h*.5),NO),"menu center remains filled");
+        for(CGFloat x=3;x<w;x+=11) for(CGFloat y=3;y<h;y+=17)
+            Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(x,y),NO)==CGPathContainsPoint(left.CGPath,NULL,CGPointMake(w-x,y),NO),"menu shapes mirror at all settings");
+    }
+    [stylePreferences removeAllObjects];
     // The exposed outline must follow the visible body's circular caps,
     // regardless of the edge gap or any independent size setting.
     BOOL capsAligned=YES;

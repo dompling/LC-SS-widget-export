@@ -21,6 +21,7 @@
 @property(nonatomic,strong) UIButton *orb;
 @property(nonatomic,strong) UIView *panel;
 @property(nonatomic,strong) UIView *orbPreviewHost;
+@property(nonatomic,strong) UIView *dimensionsPreview;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
 @property(nonatomic,strong) NSArray *apps;
@@ -46,6 +47,8 @@
 - (void)sliderFinished:(UISlider *)slider;
 - (void)refreshOrbPreview;
 - (void)themeColorChanged:(UIColorWell *)well;
+- (void)resetMenuDimensions;
+- (void)resetOrbDimensions;
 @end
 @interface FMSettingsRootController : UIViewController
 - (void)tryAutomaticUpdatePrompt;
@@ -688,7 +691,7 @@ static void RunTests(void) {
     }
     FMManager *style=Manager(NO,1,667,ordinary,NO,NO,@"apps");
     UIStackView *styleStack=[UIStackView new];
-    [style populateSettingsCategory:@"appearance" stack:styleStack];
+    [style populateSettingsCategory:@"dimensions" stack:styleStack];
     NSMutableArray<UISlider *> *styleSliders=[NSMutableArray array];
     for(UIView *view in Views(styleStack)) if([view isKindOfClass:UISlider.class] && view.tag>=30 && view.tag<40) [styleSliders addObject:(UISlider *)view];
     Check(@"orb-style-has-ten-adjustments",styleSliders.count==10,@(styleSliders.count));
@@ -705,9 +708,32 @@ static void RunTests(void) {
     [style sliderFinished:extension];
     Check(@"orb-style-slider-applies-and-persists",fabs(style.orb.bounds.size.height-114)<.01 &&
         [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,NSStringFromCGRect(style.orb.bounds));
-    UIStackView *reopened=[UIStackView new];[style populateSettingsCategory:@"appearance" stack:reopened];
+    UIStackView *reopened=[UIStackView new];[style populateSettingsCategory:@"dimensions" stack:reopened];
     BOOL restored=NO;for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag==30) restored=fabs(((UISlider *)view).value-31)<.01;
     Check(@"orb-style-restores-on-reopen",restored,nil);
+    NSMutableArray<UISlider *> *menuSliders=[NSMutableArray array];
+    for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag>=40 && view.tag<45) [menuSliders addObject:(UISlider *)view];
+    Check(@"menu-dimensions-has-five-adjustments",menuSliders.count==5,@(menuSliders.count));
+    UIView *oldPreview=style.dimensionsPreview.subviews.firstObject;
+    for(UISlider *slider in menuSliders) {
+        slider.value=slider.maximumValue;[style sliderChanged:slider];
+    }
+    Check(@"menu-preview-updates-during-sliding",oldPreview!=style.dimensionsPreview.subviews.firstObject,nil);
+    Check(@"menu-dimensions-persist-independently",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==44 && [prefs doubleForKey:@"LCFloatingMenu.menuCompactIconSize"]==50 && [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,nil);
+    for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *left in @[@NO,@YES]) {
+        FMManager *extreme=Manager(compact.boolValue,1,667,ordinary,left.boolValue,YES,@"apps");
+        Check([NSString stringWithFormat:@"menu-extreme-layout-%@-%@",compact,left],extreme.panel && extreme.appsScroll.bounds.size.height>0,nil);
+        Snapshot(extreme,[NSString stringWithFormat:@"menu-extreme-%@-%@",compact,left]);
+    }
+    [style resetMenuDimensions];
+    Check(@"menu-reset-preserves-orb",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==28 && [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,nil);
+    [prefs setObject:@33 forKey:@"LCFloatingMenu.menuExtension"];
+    [style resetOrbDimensions];
+    Check(@"orb-reset-preserves-menu",[prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==25 && [prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==33,nil);
+    [style resetMenuDimensions];
+    UIStackView *appearanceOnly=[UIStackView new];[style populateSettingsCategory:@"appearance" stack:appearanceOnly];
+    BOOL relocated=YES;for(UIView *view in Views(appearanceOnly)) if([view isKindOfClass:UISlider.class] && (view.tag==11 || view.tag==14 || view.tag>=30)) relocated=NO;
+    Check(@"dimensions-removed-from-appearance",relocated,nil);
     [prefs removeObjectForKey:@"LCFloatingMenu.orbExtension"];
     id savedMode=[prefs objectForKey:@"LCFloatingMenu.appearanceMode"];
     id savedAccent=[prefs objectForKey:@"LCFloatingMenu.accentLight"];
@@ -731,7 +757,7 @@ static void RunTests(void) {
     UIColorWell *well=nil;UISlider *themeSlider=nil;
     for(UIView *view in Views(themeStack)) {
         if([view isKindOfClass:UIColorWell.class] && view.tag==200) well=(UIColorWell *)view;
-        if([view isKindOfClass:UISlider.class] && view.tag==30) themeSlider=(UISlider *)view;
+        if([view isKindOfClass:UISlider.class] && view.tag==13) themeSlider=(UISlider *)view;
     }
     UIView *wellParent=well.superview;UIColor *green=[UIColor colorWithRed:0 green:1 blue:0 alpha:1];
     well.selectedColor=green;[theme themeColorChanged:well];

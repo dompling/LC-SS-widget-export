@@ -120,6 +120,7 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 @interface FMManager : NSObject
 @property(nonatomic,strong) UIWindow *window,*settingsWindow,*previousKeyWindow;
 @property(nonatomic,strong) UIView *orbPreviewHost;
+@property(nonatomic,strong) UIView *dimensionsPreview;
 @property(nonatomic,strong) LCOrbitContext *orbitContext;
 @property(nonatomic,strong) UIWindowScene *appearanceScene;
 @property(nonatomic,strong) id appearanceRegistration,settingsNavigation,settingsScreen,settingsScroll;

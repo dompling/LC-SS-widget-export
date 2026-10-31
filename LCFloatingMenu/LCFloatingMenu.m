@@ -342,6 +342,22 @@ static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
     ]; });
     return options;
 }
+static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
+    return @[
+        @{@"key":@"menuExtension",@"title":@"上下延展长度",@"min":@12,@"max":@44,@"default":@28,@"unit":@"点"},
+        @{@"key":@"menuCornerRadius",@"title":@"外框圆角半径",@"min":@8,@"max":@36,@"default":@26,@"unit":@"点"},
+        @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%"},
+        @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点"},
+        @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点"}
+    ];
+}
+static CGFloat FMMenuStyleValue(NSString *key) {
+    for(NSDictionary *option in FMMenuStyleOptions()) if([option[@"key"] isEqualToString:key]) {
+        CGFloat fallback=[option[@"default"] doubleValue],value=FloatPref(key,fallback);
+        return Clamp(isfinite(value)?value:fallback,[option[@"min"] doubleValue],[option[@"max"] doubleValue]);
+    }
+    return 0;
+}
 static CGFloat FMOrbStyleValue(NSString *key) {
     for(NSDictionary *option in FMOrbStyleOptions()) if([option[@"key"] isEqualToString:key]) {
         CGFloat fallback=[option[@"default"] doubleValue];
@@ -378,7 +394,7 @@ static UIBezierPath *FMOrbBodyPath(CGRect bounds) {
 // The glass and its shadow use exactly the same path.
 static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact, BOOL collapsed) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat r=MIN(compact?26:30,MIN(w*.48,h*.17));
+    CGFloat r=MIN(FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28),MIN(w*.48,h*.17));
     UIBezierPath *path=[UIBezierPath bezierPath];
     if(collapsed) {
         CGRect body=FMOrbBodyRect(bounds,NO,0);
@@ -399,24 +415,26 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
                 controlPoint1:CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder)
                 controlPoint2:CGPointMake(w,h-shoulder*.40)];
     } else {
-        // The screen edge is straight; two reverse curves join it to the body.
+        CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
+        CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
+        // Keep extension and the inward-facing corner radius independent.
         [path moveToPoint:CGPointMake(w,0)];
         [path addCurveToPoint:CGPointMake(w-r,r)
-                controlPoint1:CGPointMake(w,r*.64)
+                controlPoint1:CGPointMake(w,r*softness)
                 controlPoint2:CGPointMake(w,r)];
-        CGFloat inner=MIN(r,w-r);
+        CGFloat inner=radius;
         [path addLineToPoint:CGPointMake(inner,r)];
-        [path addCurveToPoint:CGPointMake(0,r*2)
+        [path addCurveToPoint:CGPointMake(0,r+radius)
                 controlPoint1:CGPointMake(0,r)
-                controlPoint2:CGPointMake(0,r*1.45)];
-        [path addLineToPoint:CGPointMake(0,h-r*2)];
+                controlPoint2:CGPointMake(0,r+radius*(1-softness)*1.25)];
+        [path addLineToPoint:CGPointMake(0,h-r-radius)];
         [path addCurveToPoint:CGPointMake(inner,h-r)
-                controlPoint1:CGPointMake(0,h-r*1.45)
+                controlPoint1:CGPointMake(0,h-r-radius*(1-softness)*1.25)
                 controlPoint2:CGPointMake(0,h-r)];
         [path addLineToPoint:CGPointMake(w-r,h-r)];
         [path addCurveToPoint:CGPointMake(w,h)
                 controlPoint1:CGPointMake(w,h-r)
-                controlPoint2:CGPointMake(w,h-r*.64)];
+                controlPoint2:CGPointMake(w,h-r*softness)];
     }
     [path closePath];
     if(dockLeft) {
@@ -1072,6 +1090,7 @@ static id FMLayoutChangeObserver=nil;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UIView *orbPreviewHost;
+@property(nonatomic,strong) UIView *dimensionsPreview;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
 @property(nonatomic,weak) UIWindow *previousKeyWindow;
 @property(nonatomic,assign) UIUserInterfaceStyle lastSystemStyle;
@@ -2032,8 +2051,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // Localized contrast only under list text, not behind the entire glass.
     row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
         FMHostUI()?(FMClearGlassEnabled()?.79:.88):FMReadableRowAlpha()];
-    UIView *icon=[self iconViewForApp:app size:36];
-    icon.frame=CGRectMake(12,(height-36)*.5,36,36);icon.userInteractionEnabled=NO;
+    CGFloat iconSize=FMMenuStyleValue(@"menuListIconSize");
+    UIView *icon=[self iconViewForApp:app size:iconSize];
+    icon.frame=CGRectMake(12,(height-iconSize)*.5,iconSize,iconSize);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
     UILabel *title=[self label:FMAppCaption(app) size:13 weight:UIFontWeightSemibold];
     title.translatesAutoresizingMaskIntoConstraints=NO;
@@ -2110,7 +2130,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(!isfinite(available) || available<96 || bounds.size.width<90) return;
     BOOL small=[self.page isEqualToString:@"apps"];
     BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat shoulder=compact?22:28;
+    CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(compact?22./28:1);
     // Compact drawer is 76pt before scaling; only the icon column scrolls.
     // Keep the 63pt logical row hit region even when users choose 50% visual scale.
     UIEdgeInsets safe=self.window.safeAreaInsets;
@@ -2353,7 +2373,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             row.accessibilityLabel=FMAppCaption(app);
             row.accessibilityTraits=UIAccessibilityTraitButton;
             row.enabled=![LCOrbitGuestService isCurrentGuest:app];
-            UIView *icon=[self iconViewForApp:app size:46];
+            CGFloat iconSize=FMMenuStyleValue(@"menuCompactIconSize");
+            UIView *icon=[self iconViewForApp:app size:iconSize];
             icon.translatesAutoresizingMaskIntoConstraints=NO;
             icon.userInteractionEnabled=NO;
             icon.layer.borderWidth=.55;
@@ -2366,8 +2387,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [NSLayoutConstraint activateConstraints:@[
                 [icon.centerXAnchor constraintEqualToAnchor:row.centerXAnchor],
                 [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-                [icon.widthAnchor constraintEqualToConstant:46],
-                [icon.heightAnchor constraintEqualToConstant:46]
+                [icon.widthAnchor constraintEqualToConstant:iconSize],
+                [icon.heightAnchor constraintEqualToConstant:iconSize]
             ]];
             objc_setAssociatedObject(row,@selector(switchFromRow:),
                                      app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2644,7 +2665,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIWindow *prior=self.previousKeyWindow;
     UIWindow *old=self.settingsWindow;
     UIWindowScene *scene=old.windowScene;
-    [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;
+    [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;self.dimensionsPreview=nil;
     self.settingsWindow=nil;
     self.settingsNavigation=nil;
     self.previousKeyWindow=nil;
@@ -2670,6 +2691,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self draw];
 }
 - (void)refreshOrbPreview {
+    [self refreshDimensionsPreview];
     UIView *host=self.orbPreviewHost;
     if(!host) return;
     if(self.settingsWindow) host.frame=self.settingsWindow.bounds;
@@ -2724,9 +2746,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
         [self settingSwitch:s title:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO tag:16];
-        [self settingScaleControl:s];
+        [self addRow:[self rowForTitle:@"尺寸与形状" icon:@"slider.horizontal.3" height:54 action:@selector(openDimensions)] height:54 to:s];
         [self spacer:s size:16];
         [self diyPage:s];
+    } else if([category isEqualToString:@"dimensions"]) {
+        [self dimensionsPage:s];
     } else if([category isEqualToString:@"behavior"]) {
         if(FMHostUI()) {
             [self section:@"多任务" sub:@"开启后切换 App 会保留其他任务；子任务不需要单独启用微珠。" in:s];
@@ -2858,7 +2882,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL restoreKey=settings.isKeyWindow && prior && !prior.hidden &&
         prior.windowScene==settings.windowScene &&
         settings.windowScene.activationState==UISceneActivationStateForegroundActive;
-    [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;
+    [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;self.dimensionsPreview=nil;
     self.settingsWindow=nil;
     self.settingsNavigation=nil;
     self.settingsScreen=nil;
@@ -2914,7 +2938,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UISlider *slider=[UISlider new];slider.minimumValue=min;slider.maximumValue=max;
     slider.value=FloatPref(key,def);slider.tag=tag;
     slider.tintColor=FMAccent();
-    if(tag>=30 && tag<40) {
+    if(tag>=30 && tag<45) {
         objc_setAssociatedObject(slider,@selector(sliderFinished:),key,OBJC_ASSOCIATION_COPY_NONATOMIC);
         objc_setAssociatedObject(slider,@selector(sliderChanged:),l,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         slider.accessibilityLabel=title;
@@ -2982,7 +3006,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)settingsPage:(UIStackView*)s {
     [self section:@"显示布局" sub:nil in:s];
     [self settingSwitch:s title:@"精简模式 · 只显示 App 图标" key:@"compactMode" defaultValue:NO tag:16];
-    [self settingScaleControl:s];
+    [self addRow:[self rowForTitle:@"尺寸与形状" icon:@"slider.horizontal.3" height:54 action:@selector(openDimensions)] height:54 to:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
     [self settingSwitch:s title:@"最近打开的 App 置顶"
@@ -3089,15 +3113,75 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self section:@"玻璃与微珠" sub:nil in:s];
     [self settingSwitch:s title:@"全菜单透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
     [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
-    [self orbScaleControl:s];
     [self settingSlider:s title:@"玻璃主题着色增强" key:@"glassTint" min:0 max:.15 def:0 tag:13];
-    [self section:@"微珠外观与回弹" sub:@"尺寸随微珠缩放；调整时可查看屏幕边缘的实时胶囊。阻尼越低，回弹越明显。" in:s];
-    NSInteger styleTag=30;
+}
+- (void)openDimensions {
+    [self.settingsNavigation pushViewController:[[FMSettingsSectionController alloc] initWithSection:@"dimensions"] animated:YES];
+}
+- (void)dimensionsPage:(UIStackView *)s {
+    [self section:@"展开菜单预览" sub:@"预览跟随当前图标或列表模式；滑动参数立即生效。屏幕边缘同时显示微珠。" in:s];
+    UIView *preview=[UIView new];preview.tag=9220;
+    preview.backgroundColor=FMThemeColor(FMColorBackground);
+    self.dimensionsPreview=preview;
+    [self addRow:preview height:240 to:s];
+    [self section:@"微珠胶囊" sub:@"尺寸随微珠缩放，保留当前已保存的参数。" in:s];
+    [self orbScaleControl:s];
+    NSInteger tag=30;
     for(NSDictionary *option in FMOrbStyleOptions()) {
         [self settingSlider:s title:option[@"title"] key:option[@"key"]
             min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
-            def:[option[@"default"] floatValue] tag:styleTag++];
+            def:[option[@"default"] floatValue] tag:tag++];
     }
+    [self addRow:[self rowForTitle:@"恢复微珠尺寸默认值" icon:@"arrow.counterclockwise" height:48 action:@selector(resetOrbDimensions)] height:48 to:s];
+    [self spacer:s size:16];
+    [self section:@"展开菜单" sub:@"形状形状尺寸随菜单缩放；两种模式分别调整图标大小，点击区域保持不变。" in:s];
+    [self settingScaleControl:s];
+    tag=40;
+    for(NSDictionary *option in FMMenuStyleOptions()) {
+        [self settingSlider:s title:option[@"title"] key:option[@"key"]
+            min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
+            def:[option[@"default"] floatValue] tag:tag++];
+    }
+    [self addRow:[self rowForTitle:@"恢复菜单尺寸默认值" icon:@"arrow.counterclockwise" height:48 action:@selector(resetMenuDimensions)] height:48 to:s];
+    [self refreshDimensionsPreview];
+}
+- (void)resetOrbDimensions {
+    for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
+    SetPref(@"orbScale",@1);
+    [self updateSettingsContent];[self refreshOrbPreview];[self draw];
+}
+- (void)resetMenuDimensions {
+    for(NSDictionary *option in FMMenuStyleOptions()) SetPref(option[@"key"],option[@"default"]);
+    SetPref(@"panelScale",@1);
+    [self updateSettingsContent];[self refreshOrbPreview];[self draw];
+}
+- (void)refreshDimensionsPreview {
+    UIView *host=self.dimensionsPreview;if(!host) return;
+    for(UIView *view in [host.subviews copy]) [view removeFromSuperview];
+    BOOL compact=BoolPref(@"compactMode",NO),left=BoolPref(@"onLeft",self.left);
+    CGFloat width=compact?76:240,height=280;
+    CGFloat scale=.65*Clamp(FloatPref(@"panelScale",1),.5,1.2);
+    UIView *body=[[UIView alloc] initWithFrame:CGRectMake(0,0,width,height)];
+    FMAddOrbBackdrop(body,left);
+    UIView *glass=[self glass:body.bounds radius:26 strong:YES];
+    FMApplySideNotch(glass,body.layer,left,compact,NO);[body addSubview:glass];
+    CGFloat start=FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28)+10;
+    CGFloat size=FMMenuStyleValue(compact?@"menuCompactIconSize":@"menuListIconSize");
+    NSArray *apps=[self orderedAppsForMenu];
+    for(NSUInteger i=0;i<MIN((NSUInteger)3,MAX((NSUInteger)1,apps.count));i++) {
+        UIView *icon=apps.count?[self iconViewForApp:apps[i] size:size]:[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"app.fill"]];
+        icon.frame=CGRectMake(compact?(width-size)*.5:16,start+i*63+(54-size)*.5,size,size);
+        icon.tintColor=FMAccent();[glass addSubview:icon];
+        if(!compact) {
+            UILabel *title=[self label:apps.count?FMAppCaption(apps[i]):@"应用预览" size:13 weight:UIFontWeightMedium];
+            title.frame=CGRectMake(24+size,start+i*63+12,width-size-40,30);
+            title.lineBreakMode=NSLineBreakByTruncatingTail;[glass addSubview:title];
+        }
+    }
+    body.transform=CGAffineTransformMakeScale(scale,scale);
+    body.frame=CGRectMake(12,10,width*scale,height*scale);
+    body.userInteractionEnabled=NO;[host addSubview:body];
+
 }
 - (void)pinApp:(UIControl *)button {
     NSDictionary *app=objc_getAssociatedObject(button,@selector(pinApp:));
@@ -3471,9 +3555,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
 - (void)updateOrbStyleLabel:(UISlider *)slider {
-    NSInteger index=slider.tag-30;
-    if(index<0 || index>=(NSInteger)FMOrbStyleOptions().count) return;
-    NSDictionary *option=FMOrbStyleOptions()[index];
+    NSArray *options=slider.tag>=40?FMMenuStyleOptions():FMOrbStyleOptions();
+    NSInteger index=slider.tag-(slider.tag>=40?40:30);
+    if(index<0 || index>=(NSInteger)options.count) return;
+    NSDictionary *option=options[index];
     NSString *unit=option[@"unit"];
     CGFloat value=slider.value*([unit isEqualToString:@"%"]?100:1);
     NSString *number=[unit isEqualToString:@"秒"]?[NSString stringWithFormat:@"%.2f",value]:
@@ -3487,7 +3572,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         slider.tag==11?@"orbScale":
         slider.tag==13?@"glassTint":
         slider.tag==12?[@"appAlpha." stringByAppendingString:GuestID()]:nil;
-    if(slider.tag>=30 && slider.tag<40) {
+    if(slider.tag>=30 && slider.tag<45) {
         key=objc_getAssociatedObject(slider,@selector(sliderFinished:));
         [self updateOrbStyleLabel:slider];
     }
@@ -3507,7 +3592,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
 }
 - (void)sliderFinished:(UISlider*)slider {
-    if(slider.tag==11||slider.tag==13||(slider.tag>=30 && slider.tag<40)) [self draw];
+    if(slider.tag==14||slider.tag==11||slider.tag==13||(slider.tag>=30 && slider.tag<45)) [self draw];
 }
 - (void)openMenuLogs {
     if(!self.settingsNavigation) return;
@@ -3596,6 +3681,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)resetStyle {
     for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
+    for(NSDictionary *option in FMMenuStyleOptions()) SetPref(option[@"key"],option[@"default"]);
     SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"recentAppsFirst",@NO);
@@ -4214,7 +4300,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
-    NSDictionary *titles=@{@"appearance":@"显示与外观",@"behavior":@"交互与切换",
+    NSDictionary *titles=@{@"dimensions":@"尺寸与形状",@"appearance":@"显示与外观",@"behavior":@"交互与切换",
                            @"apps":@"应用管理",@"diagnostics":@"诊断与日志",@"github":@"GitHub 访问"};
     self.title=titles[self.sectionKey]?:@"设置";
     self.view.backgroundColor=FMThemeColor(FMColorBackground);

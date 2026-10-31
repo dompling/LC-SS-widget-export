@@ -55,5 +55,5 @@ assert 'slider.minimumValue=.50;slider.maximumValue=1.20;' in src, "menu scale m
 assert 'Clamp(FloatPref(@"panelScale",1.0),.50,1.20)' in src, "50% menu scale must not get clamped up"
 assert 'if(actualScale<=.50) break;' in src, "panel fit must accommodate 50% scale"
 assert '[backing.widthAnchor constraintEqualToConstant:54]' in compact, "compact icon backing must be smaller than row"
-assert '[icon.widthAnchor constraintEqualToConstant:46]' in compact, "compact icon should have more breathing room"
+assert 'FMMenuStyleValue(@"menuCompactIconSize")' in compact and '[icon.widthAnchor constraintEqualToConstant:iconSize]' in compact, "compact icons must honor the bounded configured size"
 print("Running-task controls, compact tiles and 50% menu scale: PASS")
