@@ -9,16 +9,13 @@ import sys
 source=(Path(sys.argv[1])/'LCFloatingMenu/LCFloatingMenu.m').read_text()
 start=source.index('static UIBezierPath *FMSideNotchPath(')
 end=source.index('\n}',start)+2
-begin_capsule=source.index('static UIBezierPath *FMOrbDragPath(')
-end_capsule=source.index('\n}',begin_capsule)+2
-begin_drop=source.index('static UIBezierPath *FMDropletPath(')
-end_drop=source.index('\n}',begin_drop)+2
-# Pure geometry only: skip UIKit mask/shadow implementation.
+# Pure geometry only: skip UIKit mask/shadow implementation. This covers the
+# style settings, the notch family and the handle metrics.
 style=source[source.index('static NSArray<NSDictionary *> *FMOrbStyleOptions'):source.index('// A mirrored, gently concave')]
 # The drawer morph is a self-contained block between two markers.
 begin_motion=source.index('// FMDrawerMotion:begin')
 end_motion=source.index('// FMDrawerMotion:end')
-Path(sys.argv[2]).write_text(style+'\n'+source[start:end]+'\n'+source[begin_capsule:end_capsule]+'\n'+source[begin_drop:end_drop]+'\n'+source[begin_motion:end_motion])
+Path(sys.argv[2]).write_text(style+'\n'+source[start:end]+'\n'+source[begin_motion:end_motion])
 PYTEST
 xcrun --sdk macosx clang -fobjc-arc -fblocks -Wall -Wextra -Werror \
     -framework Foundation -framework CoreGraphics -framework ImageIO -I "$WORK" \
