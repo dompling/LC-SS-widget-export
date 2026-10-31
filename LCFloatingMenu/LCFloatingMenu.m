@@ -393,11 +393,12 @@ static UIBezierPath *FMOrbBodyPath(CGRect bounds) {
     [path closePath];
     return path;
 }
-// Map the legacy setting onto the drawer's vertical-root curvature model.
+// Vary the vertical root handle only: moving the horizontal handle as well
+// counteracts concavity on this narrow shoulder and makes the slider look inert.
 // The historical .33 setting retains the original .40 control position.
 static CGFloat FMOrbRootCurveFactor(void) {
     CGFloat value=FMOrbStyleValue(@"orbCurveSoftness");
-    return value<=.33?.20+value/.33*.20:.40+(value-.33)/.52*.50;
+    return value<=.33?.05+value/.33*.35:.40+(value-.33)/.52*.55;
 }
 // A mirrored, gently concave inner shoulder joins the side edge to the drawer.
 // The glass and its shadow use exactly the same path.
@@ -412,7 +413,7 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
         [path moveToPoint:CGPointMake(w,0)];
         [path addCurveToPoint:CGPointMake(crown,shoulder)
                 controlPoint1:CGPointMake(w,shoulder*FMOrbRootCurveFactor())
-                controlPoint2:CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder)];
+                controlPoint2:CGPointMake(w-(w-crown)*.33,shoulder)];
         [path addCurveToPoint:CGPointMake(0,shoulder+radius)
                 controlPoint1:CGPointMake(crown-capK,shoulder)
                 controlPoint2:CGPointMake(0,shoulder+radius-capK)];
@@ -421,7 +422,7 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
                 controlPoint1:CGPointMake(0,h-shoulder-radius+capK)
                 controlPoint2:CGPointMake(crown-capK,h-shoulder)];
         [path addCurveToPoint:CGPointMake(w,h)
-                controlPoint1:CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder)
+                controlPoint1:CGPointMake(w-(w-crown)*.33,h-shoulder)
                 controlPoint2:CGPointMake(w,h-shoulder*FMOrbRootCurveFactor())];
     } else {
         CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
@@ -511,7 +512,7 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
     [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,rootTop))];
     [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(cx,cy-r))
             controlPoint1:mix(CGPointMake(w,shoulder*FMOrbRootCurveFactor()),CGPointMake(tipControlX,cy-neck*(1-t)))
-            controlPoint2:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(cx+r*.9,cy-r))];
+            controlPoint2:mix(CGPointMake(w-(w-crown)*.33,shoulder),CGPointMake(cx+r*.9,cy-r))];
     [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,cy))
             controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(cx-k,cy-r))
             controlPoint2:mix(CGPointMake(0,shoulder+radius-capK),CGPointMake(0,cy-k))];
@@ -520,7 +521,7 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
             controlPoint1:mix(CGPointMake(0,h-shoulder-radius+capK),CGPointMake(0,cy+k))
             controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(cx-k,cy+r))];
     [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-rootTop))
-            controlPoint1:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(cx+r*.9,cy+r))
+            controlPoint1:mix(CGPointMake(w-(w-crown)*.33,h-shoulder),CGPointMake(cx+r*.9,cy+r))
             controlPoint2:mix(CGPointMake(w,h-shoulder*FMOrbRootCurveFactor()),CGPointMake(tipControlX,cy+neck*(1-t)))];
     [path closePath];
     if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
@@ -623,7 +624,7 @@ static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
     [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,r))];
     [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(w*.5,0))
             controlPoint1:mix(CGPointMake(w,shoulder*FMOrbRootCurveFactor()),CGPointMake(w,r-k))
-            controlPoint2:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(w*.5+k,0))];
+            controlPoint2:mix(CGPointMake(w-(w-crown)*.33,shoulder),CGPointMake(w*.5+k,0))];
     [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,r))
             controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(w*.5-k,0))
             controlPoint2:mix(CGPointMake(0,shoulder+radius-capK),CGPointMake(0,r-k))];
@@ -632,7 +633,7 @@ static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
             controlPoint1:mix(CGPointMake(0,h-shoulder-radius+capK),CGPointMake(0,h-r+k))
             controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(w*.5-k,h))];
     [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-r))
-            controlPoint1:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(w*.5+k,h))
+            controlPoint1:mix(CGPointMake(w-(w-crown)*.33,h-shoulder),CGPointMake(w*.5+k,h))
             controlPoint2:mix(CGPointMake(w,h-shoulder*FMOrbRootCurveFactor()),CGPointMake(w,h-r+k))];
     [path closePath];
     if(left) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];

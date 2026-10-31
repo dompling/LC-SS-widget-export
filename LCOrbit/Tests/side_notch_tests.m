@@ -77,7 +77,17 @@ int main(void) { @autoreleasepool {
     Expect(fabs(FMOrbRootCurveFactor()-.40)<.000001,"legacy default root curve preserved");
     stylePreferences[@"orbCurveSoftness"]=@0;CGFloat shallow=FMOrbRootCurveFactor();
     stylePreferences[@"orbCurveSoftness"]=@.85;
-    Expect(fabs(shallow-.20)<.000001 && fabs(FMOrbRootCurveFactor()-.90)<.000001,"orb concavity covers menu-style vertical root range");
+    Expect(fabs(shallow-.05)<.000001 && fabs(FMOrbRootCurveFactor()-.95)<.000001,"orb concavity covers menu-style vertical root range");
+    [stylePreferences removeObjectForKey:@"orbCurveSoftness"];
+    // The slider must visibly move the shoulder, not merely its control points.
+    CGFloat shoulderWidths[2]={0,0};
+    for(int endpoint=0;endpoint<2;endpoint++) {
+        stylePreferences[@"orbCurveSoftness"]=endpoint?@.85:@0;
+        UIBezierPath *outline=FMSideNotchPath(CGRectMake(0,0,14,102),NO,YES,YES);
+        for(CGFloat x=0;x<14;x+=.01)
+            if(CGPathContainsPoint(outline.CGPath,NULL,CGPointMake(x,12.5),NO)) shoulderWidths[endpoint]+=.01;
+    }
+    Expect(fabs(shoulderWidths[1]-shoulderWidths[0])>1.4,"orb concavity slider visibly changes shoulder by over 1.4 points");
     [stylePreferences removeObjectForKey:@"orbCurveSoftness"];
     // The exposed outline must follow the visible body's circular caps,
     // regardless of the edge gap or any independent size setting.
