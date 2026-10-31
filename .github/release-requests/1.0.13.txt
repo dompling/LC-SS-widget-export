@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.13 formal release request
+
+Version: 1.0.13
+Source: lcss-original, fixed dark orb on forced-Light Guest and improved shape settings previews
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.13.md
+Publish: compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.13 tag, GitHub Release, and refresh fm-latest.
