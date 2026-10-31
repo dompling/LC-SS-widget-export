@@ -622,6 +622,25 @@ int main(void) { @autoreleasepool {
         Expect(fabs(damping/(2*sqrt(stiffness))-.62)<1e-12,"damping coefficient gives the requested damping fraction");
         Expect(fabs(FMSpringStiffness(0)-FMSpringStiffness(1e-3))<1e-3 && isfinite(FMSpringStiffness(0)),"a zero response stays finite");
     }
+    // The pop-in setting: one after another, all together, or off.
+    {
+        Expect(FMPopMode()==0,"the pop-in defaults to one element after another");
+        const struct { double stored; int mode; } modes[]={
+            {0,0},{.49,0},{.5,1},{1,1},{1.49,1},{1.5,2},{2,2},{9,2},{-3,0}};
+        for(size_t index=0;index<sizeof modes/sizeof modes[0];index++) {
+            stylePreferences[@"popAnimation"]=@(modes[index].stored);
+            Expect(FMPopMode()==modes[index].mode,"the pop-in setting reads as the nearest of its three modes");
+        }
+        stylePreferences[@"popAnimation"]=@(NAN);
+        Expect(FMPopMode()==0,"a garbled pop-in setting falls back to one after another");
+        [stylePreferences removeAllObjects];
+        Expect(fabs(FMPopStart(0,3,6)-FMPopDelay(3,6))<1e-12 && fabs(FMPopStart(0,0,1)-FMPopDelay(0,1))<1e-12,
+               "one after another keeps the stagger");
+        BOOL together=YES;
+        for(NSUInteger index=0;index<8;index++) if(fabs(FMPopStart(1,index,8)-FMPopDelay(0,1))>1e-12) together=NO;
+        Expect(together,"all together starts every element at the moment the first would");
+        Expect(FMPopStart(2,0,6)<0 && FMPopStart(2,5,6)<0,"off never starts an animation");
+    }
     // Long-press scrub (after the wloc dock): which row, where the lens sits, when it is a cancel.
     {
         const CGFloat tops[3]={10,80,150},bottoms[3]={70,140,210};

@@ -46,11 +46,9 @@
 - (void)sortDrag:(UILongPressGestureRecognizer *)gesture;
 - (void)pan:(UIPanGestureRecognizer *)gesture;
 - (void)sliderChanged:(UISlider *)slider;
-- (void)sliderFinished:(UISlider *)slider;
 - (void)refreshOrbPreview;
 - (void)themeColorChanged:(UIColorWell *)well;
-- (void)resetMenuDimensions;
-- (void)resetOrbDimensions;
+- (void)resetDockSettings;
 @end
 @interface FMSettingsRootController : UIViewController
 - (void)tryAutomaticUpdatePrompt;
@@ -63,6 +61,14 @@
 - (void)verifyGitHubConnection;
 - (void)clearGitHubCredentials;
 - (void)rebuild;
+@end
+// The sidebar settings page; its controls are driven through the same actions a finger would.
+@interface FMDockSettingsController : UIViewController
+- (void)rebuild;
+- (void)sliderChanged:(UISlider *)slider;
+- (void)switchChanged:(UISwitch *)toggle;
+- (void)segmentChanged:(UISegmentedControl *)control;
+- (void)headerTapped:(UIControl *)header;
 @end
 @interface NSUserDefaults (DrawerFixture) @end
 @implementation NSUserDefaults (DrawerFixture)
@@ -534,6 +540,38 @@ static void Snapshot(FMManager *m,NSString *name) {
         [m.overlayView.layer renderInContext:context.CGContext];
     }];[UIImagePNGRepresentation(image) writeToFile:[EvidencePath stringByAppendingPathComponent:[name stringByAppendingString:@".png"]] atomically:YES];
 }
+// The sidebar page's controls are found by what they edit.
+static NSString *DockKey(UIView *view) {
+    if([view respondsToSelector:NSSelectorFromString(@"option")]) return [[view valueForKey:@"option"] objectForKey:@"key"];
+    if([view respondsToSelector:NSSelectorFromString(@"key")]) return [view valueForKey:@"key"];
+    return nil;
+}
+static UIView *DockControl(UIView *root,NSString *className,NSString *key) {
+    for(UIView *view in Views(root)) if([view isKindOfClass:NSClassFromString(className)] && [DockKey(view) isEqual:key]) return view;
+    return nil;
+}
+// The page hides a row by hiding the row, not the control inside it.
+static BOOL ShownIn(UIView *view,UIView *root) {
+    for(UIView *walk=view;walk && walk!=root;walk=walk.superview) if(walk.hidden || walk.alpha<.01) return NO;
+    return YES;
+}
+static NSArray<NSString *> *ShownKeys(UIView *root,NSString *className) {
+    NSMutableArray<NSString *> *keys=[NSMutableArray array];
+    for(UIView *view in Views(root)) if([view isKindOfClass:NSClassFromString(className)] && ShownIn(view,root)) [keys addObject:DockKey(view)];
+    return keys;
+}
+static FMDockSettingsController *PresentDockPage(FMManager *manager,CGSize size) {
+    GeometryWindow *window=[[GeometryWindow alloc] initWithFrame:(CGRect){CGPointZero,size}];
+    window.fixtureSize=size;window.fixtureInsets=UIEdgeInsetsMake(0,0,21,0);
+    UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:[UIViewController new]];
+    window.rootViewController=nav;manager.settingsNavigation=nav;manager.settingsWindow=window;
+    UIView *edge=[[UIView alloc] initWithFrame:window.bounds];[window addSubview:edge];manager.orbPreviewHost=edge;
+    window.hidden=NO;
+    FMDockSettingsController *page=[FMDockSettingsController new];
+    [nav pushViewController:page animated:NO];
+    [window layoutIfNeeded];[page.view layoutIfNeeded];[page.view layoutIfNeeded];
+    return page;
+}
 static void RunShapePageTests(void) {
     FMManager *manager=[FMManager shared];
     UIWindow *oldWindow=manager.settingsWindow;
@@ -546,24 +584,21 @@ static void RunShapePageTests(void) {
                           [NSValue valueWithCGSize:CGSizeMake(375,667)],
                           [NSValue valueWithCGSize:CGSizeMake(844,390)]]) {
         CGSize bounds=size.CGSizeValue;
-        GeometryWindow *window=[[GeometryWindow alloc] initWithFrame:(CGRect){CGPointZero,bounds}];
-        window.fixtureSize=bounds;window.fixtureInsets=UIEdgeInsetsMake(0,0,21,0);
-        UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:[UIViewController new]];
-        window.rootViewController=nav;manager.settingsNavigation=nav;manager.settingsWindow=window;
-        UIView *edge=[[UIView alloc] initWithFrame:window.bounds];[window addSubview:edge];manager.orbPreviewHost=edge;
-        window.hidden=NO;
-        FMSettingsSectionController *page=[[FMSettingsSectionController alloc] initWithSection:@"dimensions"];
-        [nav pushViewController:page animated:NO];
-        [window layoutIfNeeded];[page.view layoutIfNeeded];[page.view layoutIfNeeded];
-        UIView *preview=[page.view viewWithTag:9220];
-        UIScrollView *scroll=[page valueForKey:@"contentScroll"];
+        FMDockSettingsController *page=PresentDockPage(manager,bounds);
+        UIWindow *window=manager.settingsWindow;UIView *edge=manager.orbPreviewHost;
+        UIView *preview=[page valueForKey:@"preview"];
+        UISegmentedControl *state=[page valueForKey:@"stateControl"];
+        UIScrollView *scroll=[page valueForKey:@"scroll"];
         CGRect fixed=preview.frame;
-        Check([NSString stringWithFormat:@"native-shape-page-pinned-%@",size],preview.superview==page.view && manager.dimensionsPreview==preview && edge.hidden && CGRectGetMinY(scroll.frame)>=CGRectGetMaxY(preview.frame)-.5 && scroll.bounds.size.height>40,@{@"preview":NSStringFromCGRect(preview.frame),@"scroll":NSStringFromCGRect(scroll.frame)});
+        Check([NSString stringWithFormat:@"dock-page-pinned-%@",size],preview.superview==page.view && manager.dimensionsPreview==preview && edge.hidden && CGRectGetMinY(scroll.frame)>=CGRectGetMaxY(state.frame)-.5 && scroll.bounds.size.height>40,@{@"preview":NSStringFromCGRect(preview.frame),@"scroll":NSStringFromCGRect(scroll.frame)});
         [scroll setContentOffset:CGPointMake(0,MAX(0,scroll.contentSize.height-scroll.bounds.size.height)) animated:NO];
         [page.view layoutIfNeeded];
-        Check([NSString stringWithFormat:@"native-shape-preview-stays-on-scroll-%@",size],CGRectEqualToRect(fixed,preview.frame) && [preview viewWithTag:9211]!=nil && [preview viewWithTag:9221]!=nil,nil);
-        [nav popViewControllerAnimated:NO];[window layoutIfNeeded];
-        Check([NSString stringWithFormat:@"native-shape-page-restores-edge-preview-%@",size],manager.dimensionsPreview==nil && !edge.hidden && [prefs boolForKey:@"LCFloatingMenu.onLeft"],nil);
+        UIView *bead=[preview viewWithTag:9211];
+        CGRect beadInCard=[bead.superview convertRect:bead.frame toView:preview];
+        Check([NSString stringWithFormat:@"dock-preview-stays-on-scroll-%@",size],CGRectEqualToRect(fixed,preview.frame) && bead!=nil,nil);
+        Check([NSString stringWithFormat:@"dock-preview-bead-on-the-saved-side-%@",size],bead && CGRectGetMinX(beadInCard)<.5 && CGRectGetHeight(preview.frame)<=420,NSStringFromCGRect(beadInCard));
+        [manager.settingsNavigation popViewControllerAnimated:NO];[window layoutIfNeeded];
+        Check([NSString stringWithFormat:@"dock-page-restores-edge-preview-%@",size],manager.dimensionsPreview==nil && !edge.hidden && [prefs boolForKey:@"LCFloatingMenu.onLeft"],nil);
         window.hidden=YES;window.rootViewController=nil;
     }
     [prefs setObject:oldSide forKey:@"LCFloatingMenu.onLeft"];
@@ -763,99 +798,87 @@ static void RunTests(void) {
         Check([@"removed-native-category-" stringByAppendingString:category],removed,nil);Snapshot(m,[@"settings-native-" stringByAppendingString:category]);
     }
     FMManager *style=Manager(NO,1,667,ordinary,NO,NO,@"apps");
-    UIStackView *styleStack=[UIStackView new];
-    [style populateSettingsCategory:@"dimensions" stack:styleStack];
-    NSMutableArray<UISlider *> *styleSliders=[NSMutableArray array];
-    for(UIView *view in Views(styleStack)) if([view isKindOfClass:UISlider.class] && view.tag>=30 && view.tag<40) [styleSliders addObject:(UISlider *)view];
-    Check(@"orb-style-has-eight-adjustments-for-the-capsule",styleSliders.count==8,@(styleSliders.count));
-    UISegmentedControl *handleStyle=nil;
-    for(UIView *view in Views(styleStack)) if([view isKindOfClass:UISegmentedControl.class] && [view.accessibilityLabel isEqual:@"微珠样式"]) handleStyle=(UISegmentedControl *)view;
-    Check(@"orb-style-picker-defaults-to-the-capsule",handleStyle && handleStyle.numberOfSegments==2 && handleStyle.selectedSegmentIndex==0,nil);
-    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
-    UIStackView *dropletStack=[UIStackView new];
-    [style populateSettingsCategory:@"dimensions" stack:dropletStack];
-    NSUInteger dropletSliders=0;BOOL cornerShown=NO;
-    for(UIView *view in Views(dropletStack)) if([view isKindOfClass:UISlider.class] && view.tag>=30 && view.tag<40) {dropletSliders++;if(view.tag==32) cornerShown=YES;}
-    Check(@"droplet-style-hides-the-corner-slider",dropletSliders==7 && !cornerShown,@(dropletSliders));
-    [prefs removeObjectForKey:@"LCFloatingMenu.orbHandleStyle"];
-    UISlider *extension=nil;
-    for(UISlider *slider in styleSliders) if(slider.tag==30) extension=slider;
-    style.orbPreviewHost=[[UIView alloc] initWithFrame:CGRectMake(0,0,667,667)];
-    style.orbPreviewHost.userInteractionEnabled=NO;
-    [style.overlayView addSubview:style.orbPreviewHost];
-    style.orbY=0;[style refreshOrbPreview];
-    Check(@"orb-preview-works-before-overlay-install",fabs(CGRectGetMidY([style.orbPreviewHost viewWithTag:9211].frame)-333.5)<.01,nil);
-    style.orbY=.5;
-    extension.value=31;[style sliderChanged:extension];
-    Check(@"orb-preview-live-before-slider-release",fabs([style.orbPreviewHost viewWithTag:9211].bounds.size.width-31)<.01,nil);
-    [style sliderFinished:extension];
-    Check(@"orb-style-slider-applies-and-persists",fabs(style.orb.bounds.size.width-31)<.01 &&
-        [prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31,NSStringFromCGRect(style.orb.bounds));
-    UIView *fixedPreview=[[UIView alloc] initWithFrame:CGRectMake(0,0,667,220)];
-    [style.overlayView addSubview:fixedPreview];style.dimensionsPreview=fixedPreview;
+    // The sidebar page as it opens on a phone: the handle group, with the capsule docked in the preview.
     id savedSide=[prefs objectForKey:@"LCFloatingMenu.onLeft"];
     [prefs setObject:@YES forKey:@"LCFloatingMenu.onLeft"];
-    NSUInteger previewWrites=PositionWrites;[style refreshOrbPreview];
-    UIView *previewOrb=[fixedPreview viewWithTag:9211],*previewMenu=[fixedPreview viewWithTag:9221];
-    Check(@"shape-preview-left-menu-right-orb",fabs(CGRectGetMaxX(previewOrb.frame)-667)<.01 && fabs(previewMenu.frame.origin.x)<.01,nil);
-    Check(@"shape-preview-keeps-saved-docking-position",[prefs boolForKey:@"LCFloatingMenu.onLeft"] && previewWrites==PositionWrites,nil);
-    Check(@"shape-preview-hides-duplicate-edge-capsule",style.orbPreviewHost.hidden,nil);
+    FMManager *dockManager=[FMManager shared];
+    UIWindow *dockOldWindow=dockManager.settingsWindow;UINavigationController *dockOldNavigation=dockManager.settingsNavigation;
+    UIView *dockOldHost=dockManager.orbPreviewHost,*dockOldPreview=dockManager.dimensionsPreview;
+    FMDockSettingsController *dock=PresentDockPage(dockManager,CGSizeMake(375,667));
+    UIView *dockPreview=[dock valueForKey:@"preview"];
+    UISegmentedControl *dockState=[dock valueForKey:@"stateControl"];
+    NSArray<NSString *> *handleKeys=@[@"orbHandleReach",@"orbHandleLength",@"orbCapsuleCorner",@"orbSoftness",@"orbScale",@"orbGlowLength",@"orbGlowBrightness"];
+    Check(@"dock-page-opens-on-the-handle-group",[ShownKeys(dock.view,@"FMDockSlider") isEqual:handleKeys],ShownKeys(dock.view,@"FMDockSlider"));
+    UISegmentedControl *handleStyle=(UISegmentedControl *)DockControl(dock.view,@"FMDockSegments",@"orbHandleStyle");
+    Check(@"dock-style-picker-defaults-to-the-capsule",handleStyle && handleStyle.numberOfSegments==2 && handleStyle.selectedSegmentIndex==0,nil);
+    handleStyle.selectedSegmentIndex=1;[dock segmentChanged:handleStyle];
+    NSArray<NSString *> *dropletKeys=ShownKeys(dock.view,@"FMDockSlider");
+    Check(@"dock-droplet-style-hides-the-corner-slider",dropletKeys.count==6 && ![dropletKeys containsObject:@"orbCapsuleCorner"],dropletKeys);
+    handleStyle.selectedSegmentIndex=0;[dock segmentChanged:handleStyle];
+    UISlider *reach=(UISlider *)DockControl(dock.view,@"FMDockSlider",@"orbHandleReach");
+    Check(@"dock-slider-moves-in-the-dock-steps",reach && reach.minimumValue==14 && reach.maximumValue==34 && reach.value==22,nil);
+    reach.value=31.4;[dock sliderChanged:reach];[dock.view layoutIfNeeded];
+    Check(@"dock-slider-applies-and-persists",[prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31 && reach.value==31 && fabs([dockPreview viewWithTag:9211].bounds.size.width-31)<.01,@([prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]));
+    UIControl *trayHeader=nil;
+    for(UIView *view in Views(dock.view)) if([view isKindOfClass:UIControl.class] && view.tag==3 &&
+        [[(UIControl *)view actionsForTarget:dock forControlEvent:UIControlEventTouchUpInside] containsObject:@"headerTapped:"]) trayHeader=(UIControl *)view;
+    [trayHeader sendActionsForControlEvents:UIControlEventTouchUpInside];[dock.view layoutIfNeeded];
+    Check(@"dock-tray-group-opens-the-preview",trayHeader && [[dockPreview valueForKey:@"isOpen"] boolValue] && dockState.selectedSegmentIndex==1,nil);
+    Check(@"dock-opening-a-group-closes-the-other",![ShownKeys(dock.view,@"FMDockSegments") containsObject:@"orbHandleStyle"] && [ShownKeys(dock.view,@"FMDockSegments") containsObject:@"popAnimation"],ShownKeys(dock.view,@"FMDockSegments"));
+    UISegmentedControl *popChoice=(UISegmentedControl *)DockControl(dock.view,@"FMDockSegments",@"popAnimation");
+    Check(@"dock-pop-in-choice-defaults-to-one-by-one",popChoice && popChoice.numberOfSegments==3 && popChoice.selectedSegmentIndex==0,nil);
+    popChoice.selectedSegmentIndex=2;[dock segmentChanged:popChoice];
+    Check(@"dock-pop-in-choice-persists",[prefs doubleForKey:@"LCFloatingMenu.popAnimation"]==2,nil);
+    UISwitch *compactSwitch=(UISwitch *)DockControl(dock.view,@"FMDockSwitch",@"compactMode");
+    compactSwitch.on=YES;[dock switchChanged:compactSwitch];[dock.view layoutIfNeeded];
+    NSArray<NSString *> *compactKeys=ShownKeys(dock.view,@"FMDockSlider");
+    Check(@"dock-compact-mode-shows-its-own-icon-size",[compactKeys containsObject:@"menuCompactIconSize"] && ![compactKeys containsObject:@"menuListIconSize"] && [prefs boolForKey:@"LCFloatingMenu.compactMode"],compactKeys);
+    compactSwitch.on=NO;[dock switchChanged:compactSwitch];
+    NSArray<NSString *> *listKeys=ShownKeys(dock.view,@"FMDockSlider");
+    Check(@"dock-list-mode-shows-its-own-icon-size",[listKeys containsObject:@"menuListIconSize"] && ![listKeys containsObject:@"menuCompactIconSize"],listKeys);
+    // Fade: the two fade sliders follow the switch.
+    UIControl *opacityHeader=nil;
+    for(UIView *view in Views(dock.view)) if([view isKindOfClass:UIControl.class] && view.tag==2 &&
+        [[(UIControl *)view actionsForTarget:dock forControlEvent:UIControlEventTouchUpInside] containsObject:@"headerTapped:"]) opacityHeader=(UIControl *)view;
+    [opacityHeader sendActionsForControlEvents:UIControlEventTouchUpInside];[dock.view layoutIfNeeded];
+    NSArray<NSString *> *fadeKeys=ShownKeys(dock.view,@"FMDockSlider");
+    Check(@"dock-fade-sliders-show-while-fading-is-on",[fadeKeys containsObject:@"fadeDelay"] && [fadeKeys containsObject:@"fadedOpacity"] && [fadeKeys containsObject:@"idleAlpha"],fadeKeys);
+    UISwitch *fadeSwitch=(UISwitch *)DockControl(dock.view,@"FMDockSwitch",@"idleFade");
+    fadeSwitch.on=NO;[dock switchChanged:fadeSwitch];
+    NSArray<NSString *> *steadyKeys=ShownKeys(dock.view,@"FMDockSlider");
+    Check(@"dock-fade-sliders-hide-when-fading-is-off",![steadyKeys containsObject:@"fadeDelay"] && ![steadyKeys containsObject:@"fadedOpacity"] && [steadyKeys containsObject:@"idleAlpha"],steadyKeys);
+    // Reset puts every one of the page's settings back.
+    [prefs setObject:@44 forKey:@"LCFloatingMenu.menuExtension"];
+    [style resetDockSettings];
+    Check(@"dock-reset-restores-every-default",[prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==22 && [prefs doubleForKey:@"LCFloatingMenu.popAnimation"]==0 &&
+          [prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==28 && ![prefs boolForKey:@"LCFloatingMenu.compactMode"] && [prefs boolForKey:@"LCFloatingMenu.idleFade"],nil);
+    [dock rebuild];[dock.view layoutIfNeeded];
+    UISlider *restored=(UISlider *)DockControl(dock.view,@"FMDockSlider",@"fadeDelay");
+    Check(@"dock-page-reads-the-defaults-after-a-reset",restored && restored.value==5 && restored.minimumValue==2 && restored.maximumValue==15,nil);
+    dockManager.settingsWindow.hidden=YES;dockManager.settingsWindow.rootViewController=nil;
+    dockManager.settingsWindow=dockOldWindow;dockManager.settingsNavigation=dockOldNavigation;
+    dockManager.orbPreviewHost=dockOldHost;dockManager.dimensionsPreview=dockOldPreview;
     [prefs setObject:savedSide forKey:@"LCFloatingMenu.onLeft"];
-    UIStackView *reopened=[UIStackView new];[style populateSettingsCategory:@"dimensions" stack:reopened];
-    BOOL restored=NO;for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag==30) restored=fabs(((UISlider *)view).value-31)<.01;
-    Check(@"orb-style-restores-on-reopen",restored,nil);
-    NSMutableArray<UISlider *> *menuSliders=[NSMutableArray array];
-    for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag>=40 && view.tag<45) [menuSliders addObject:(UISlider *)view];
-    Check(@"menu-dimensions-has-five-adjustments",menuSliders.count==5,@(menuSliders.count));
-    UIView *oldPreview=style.dimensionsPreview.subviews.firstObject;
-    for(UISlider *slider in menuSliders) {
-        slider.value=slider.maximumValue;[style sliderChanged:slider];
-    }
-    Check(@"menu-preview-updates-during-sliding",oldPreview!=style.dimensionsPreview.subviews.firstObject,nil);
-    Check(@"menu-dimensions-persist-independently",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==44 && [prefs doubleForKey:@"LCFloatingMenu.menuCompactIconSize"]==50 && [prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31,nil);
+    // The drawer itself at the largest settings the page allows.
+    NSDictionary<NSString *,NSNumber *> *largest=@{@"menuExtension":@44,@"menuCornerRadius":@36,@"menuCurveSoftness":@.9,@"menuCompactIconSize":@50,@"menuListIconSize":@44};
+    for(NSString *key in largest) [prefs setObject:largest[key] forKey:[@"LCFloatingMenu." stringByAppendingString:key]];
     for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *left in @[@NO,@YES]) {
         FMManager *extreme=Manager(compact.boolValue,1,667,ordinary,left.boolValue,YES,@"apps");
         Check([NSString stringWithFormat:@"menu-extreme-layout-%@-%@",compact,left],extreme.panel && extreme.appsScroll.bounds.size.height>0,nil);
         Snapshot(extreme,[NSString stringWithFormat:@"menu-extreme-%@-%@",compact,left]);
     }
-    [style resetMenuDimensions];
-    Check(@"menu-reset-preserves-orb",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==28 && [prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31,nil);
-    [prefs setObject:@33 forKey:@"LCFloatingMenu.menuExtension"];
-    [style resetOrbDimensions];
-    Check(@"orb-reset-preserves-menu",[prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==22 && [prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==33,nil);
-    [style resetMenuDimensions];
+    [style resetDockSettings];
+    // What moved to the sidebar page is gone from the root page, and its entry looks like the others.
     UIStackView *appearanceOnly=[UIStackView new];[style populateSettingsCategory:@"appearance" stack:appearanceOnly];
-    BOOL relocated=YES;for(UIView *view in Views(appearanceOnly)) if([view isKindOfClass:UISlider.class] && (view.tag==11 || view.tag==14 || view.tag>=30)) relocated=NO;
-    Check(@"dimensions-removed-from-appearance",relocated,nil);
-    UIControl *entry=nil;for(UIView *view in Views(appearanceOnly)) if([view isKindOfClass:UIControl.class] && [[(UIControl *)view actionsForTarget:style forControlEvent:UIControlEventTouchUpInside] containsObject:@"openDimensions"]) entry=(UIControl *)view;
+    BOOL relocated=YES;for(UIView *view in Views(appearanceOnly)) if(([view isKindOfClass:UISlider.class] && view.tag>=10 && view.tag<45) ||
+        ([view isKindOfClass:UISwitch.class] && (view.tag==16 || view.tag==18))) relocated=NO;
+    Check(@"dock-settings-removed-from-appearance",relocated,nil);
+    UIStackView *behaviorOnly=[UIStackView new];[style populateSettingsCategory:@"behavior" stack:behaviorOnly];
+    BOOL fadeMoved=YES;for(UIView *view in Views(behaviorOnly)) if([view isKindOfClass:UISwitch.class] && view.tag==21) fadeMoved=NO;
+    Check(@"fade-switch-moved-off-the-interaction-page",fadeMoved,nil);
+    UIControl *entry=nil;for(UIView *view in Views(appearanceOnly)) if([view isKindOfClass:UIControl.class] && [[(UIControl *)view actionsForTarget:style forControlEvent:UIControlEventTouchUpInside] containsObject:@"openDock"]) entry=(UIControl *)view;
     BOOL entryHeight=NO;for(NSLayoutConstraint *constraint in entry.constraints) if(constraint.firstAttribute==NSLayoutAttributeHeight && constraint.constant==65) entryHeight=YES;
-    Check(@"dimensions-entry-uses-settings-card",entryHeight && entry.layer.cornerRadius==16 && [entry viewWithTag:9235]!=nil,nil);
-    NSUInteger resetCards=0;
-    for(UIView *view in Views(reopened)) if([view isKindOfClass:UIControl.class]) {
-        NSArray *actions=[(UIControl *)view actionsForTarget:style forControlEvent:UIControlEventTouchUpInside];
-        if([actions containsObject:@"resetOrbDimensions"] || [actions containsObject:@"resetMenuDimensions"]) {
-            UIView *card=view.superview;BOOL height=NO;
-            for(NSLayoutConstraint *constraint in card.constraints) if(constraint.firstAttribute==NSLayoutAttributeHeight && constraint.constant==65) height=YES;
-            if(height && card.layer.cornerRadius==16) resetCards++;
-        }
-    }
-    Check(@"dimensions-reset-cards-match-root-style",resetCards==2,@(resetCards));
-    BOOL handleNamed=NO,cornerNamed=NO,softnessNamed=NO;
-    for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class]) {
-        if(view.tag==30) handleNamed=[view.accessibilityLabel isEqual:@"凸出宽度"];
-        if(view.tag==32) cornerNamed=[view.accessibilityLabel isEqual:@"圆角"];
-        if(view.tag==33) softnessNamed=[view.accessibilityLabel isEqual:@"柔和度"];
-    }
-    Check(@"orb-handle-sliders-use-the-dock-names",handleNamed && cornerNamed && softnessNamed,nil);
-    for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *width in @[@320,@667]) {
-        [prefs setObject:compact forKey:@"LCFloatingMenu.compactMode"];
-        fixedPreview.frame=CGRectMake(0,0,width.doubleValue,100);
-        [style refreshOrbPreview];
-        UIView *menu=[fixedPreview viewWithTag:9221],*orb=[fixedPreview viewWithTag:9211];
-        Check([NSString stringWithFormat:@"shape-preview-fits-short-window-%@-%@",compact,width],CGRectContainsRect(fixedPreview.bounds,menu.frame) && CGRectContainsRect(fixedPreview.bounds,orb.frame) && CGRectGetMaxX(menu.frame)<CGRectGetMinX(orb.frame),nil);
-    }
-    style.dimensionsPreview=nil;[fixedPreview removeFromSuperview];[style refreshOrbPreview];
-    Check(@"leaving-dimensions-restores-edge-preview",!style.orbPreviewHost.hidden && [style.orbPreviewHost viewWithTag:9211]!=nil,nil);
+    Check(@"dock-entry-uses-settings-card",entryHeight && entry.layer.cornerRadius==16 && [entry viewWithTag:9235]!=nil,nil);
 
     [prefs removeObjectForKey:@"LCFloatingMenu.orbHandleReach"];
     id savedMode=[prefs objectForKey:@"LCFloatingMenu.appearanceMode"];
@@ -877,17 +900,17 @@ static void RunTests(void) {
     theme.settingsWindow.rootViewController=theme.settingsNavigation;
     theme.orbPreviewHost=[[UIView alloc] initWithFrame:theme.settingsWindow.bounds];
     theme.orbPreviewHost.userInteractionEnabled=NO;[theme.settingsWindow addSubview:theme.orbPreviewHost];
-    UIColorWell *well=nil;UISlider *themeSlider=nil;
+    UIColorWell *well=nil;UIButton *themeMode=nil;
     for(UIView *view in Views(themeStack)) {
         if([view isKindOfClass:UIColorWell.class] && view.tag==200) well=(UIColorWell *)view;
-        if([view isKindOfClass:UISlider.class] && view.tag==13) themeSlider=(UISlider *)view;
+        if([view isKindOfClass:UIButton.class] && view.tag==71) themeMode=(UIButton *)view; // the selected (day) mode
     }
     UIView *wellParent=well.superview;UIColor *green=[UIColor colorWithRed:0 green:1 blue:0 alpha:1];
     well.selectedColor=green;[theme themeColorChanged:well];
-    Check(@"theme-color-applies-without-replacing-picker",[themeSlider.tintColor isEqual:green] && well.superview==wellParent && [prefs objectForKey:@"LCFloatingMenu.accentLight"]!=nil,nil);
+    Check(@"theme-color-applies-without-replacing-picker",[[UIColor colorWithCGColor:themeMode.layer.borderColor] isEqual:green] && well.superview==wellParent && [prefs objectForKey:@"LCFloatingMenu.accentLight"]!=nil,nil);
     UIView *firstPreview=[theme.orbPreviewHost viewWithTag:9211];
     well.selectedColor=UIColor.redColor;[theme themeColorChanged:well];
-    Check(@"theme-color-refreshes-preview-immediately",firstPreview!=[theme.orbPreviewHost viewWithTag:9211] && [themeSlider.tintColor isEqual:UIColor.redColor],nil);
+    Check(@"theme-color-refreshes-preview-immediately",firstPreview!=[theme.orbPreviewHost viewWithTag:9211] && [[UIColor colorWithCGColor:themeMode.layer.borderColor] isEqual:UIColor.redColor],nil);
     [prefs setObject:savedMode forKey:@"LCFloatingMenu.appearanceMode"];
     [prefs setObject:savedAccent forKey:@"LCFloatingMenu.accentLight"];
     theme.settingsWindow=nil;theme.settingsNavigation=nil;theme.orbPreviewHost=nil;
