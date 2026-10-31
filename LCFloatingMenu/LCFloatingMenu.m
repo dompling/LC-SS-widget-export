@@ -5331,13 +5331,14 @@ static UIView *FMDockRow(UIView *content,CGFloat padding,BOOL separator,CGFloat 
     }
     return row;
 }
-// A group's rounded container.
+// A group's rounded container: the same glass the drawer is made of, so the page has the
+// material rather than a painted copy of it. The rows sit above the glass instead of inside
+// its content view, because their height is what gives the card its own, and a view the
+// effect positions by itself cannot carry that.
 static UIView *FMDockCard(UIStackView *rows) {
-    UIView *card=[UIView new];
-    card.backgroundColor=FMThemeColor(FMColorSurface);
-    card.layer.cornerRadius=FMDockCardRadius();
+    UIView *card=[[FMManager shared] glass:CGRectMake(0,0,320,120) radius:FMDockCardRadius() strong:YES];
+    card.translatesAutoresizingMaskIntoConstraints=NO;
     card.layer.cornerCurve=kCACornerCurveContinuous;
-    card.clipsToBounds=YES;
     rows.translatesAutoresizingMaskIntoConstraints=NO;
     [card addSubview:rows];
     [NSLayoutConstraint activateConstraints:@[
@@ -5815,6 +5816,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 @property(nonatomic,strong) NSMutableArray<UIImageView *> *chevrons;
 @property(nonatomic,strong) NSMutableArray<UIControl *> *headers;
 @property(nonatomic,strong) UILabel *handleNote;
+@property(nonatomic,weak) CAGradientLayer *backdrop;
 @property(nonatomic,assign) NSInteger openGroup;
 @end
 
@@ -5872,9 +5874,31 @@ static UIView *FMDockCard(UIStackView *rows) {
 // The card may take about half of the room, so the options stay in reach on a small phone.
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    [self applyBackdrop];
     BOOL wide=CGRectGetWidth(self.view.bounds)>CGRectGetHeight(self.view.bounds);
     CGFloat cap=Clamp(self.view.safeAreaLayoutGuide.layoutFrame.size.height*(wide?.45:.55),120,420);
     if(fabs(self.preview.maxHeight-cap)>.5) self.preview.maxHeight=cap;
+}
+// Glass has to have something behind it, and a page painted one flat colour gives it
+// nothing: a gentle wash of the theme is enough for the cards to read as the material
+// rather than as a drawing of it.
+- (void)applyBackdrop {
+    CAGradientLayer *wash=self.backdrop;
+    if(!wash) {
+        wash=[CAGradientLayer layer];
+        [self.view.layer insertSublayer:wash atIndex:0];
+        self.backdrop=wash;
+    }
+    UIColor *base=FMThemeColor(FMColorBackground);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    wash.frame=self.view.bounds;
+    wash.colors=@[(id)FMMix(base,FMAccent(),.10).CGColor,(id)base.CGColor,
+                  (id)FMMix(base,FMThemeColor(FMColorGlass),.07).CGColor];
+    wash.locations=@[@0,@.55,@1];
+    wash.startPoint=CGPointMake(0,0);
+    wash.endPoint=CGPointMake(1,1);
+    [CATransaction commit];
 }
 // The page shows the bead itself, so the one floating over the settings steps aside.
 - (void)viewWillAppear:(BOOL)animated {
@@ -5894,7 +5918,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)rebuild {
     if(!self.isViewLoaded) return;
     self.view.backgroundColor=FMThemeColor(FMColorBackground);
-    self.stateControl.selectedSegmentTintColor=[FMAccent() colorWithAlphaComponent:.25];
+    [self applyBackdrop];
     UIScrollView *scroll=self.scroll;
     CGFloat offset=scroll.contentOffset.y;
     [self.stack removeFromSuperview];
@@ -5904,13 +5928,13 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self.headers removeAllObjects];
     UIStackView *stack=[UIStackView new];
     stack.axis=UILayoutConstraintAxisVertical;
-    stack.spacing=16;
+    stack.spacing=20;
     stack.translatesAutoresizingMaskIntoConstraints=NO;
     [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:16],
         [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-16],
-        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:8],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:24],
         [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-32],
         [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-32]
     ]];
@@ -6013,7 +6037,6 @@ static UIView *FMDockCard(UIStackView *rows) {
     FMDockSegments *control=[[FMDockSegments alloc] initWithItems:items];
     control.key=key;
     control.selectedSegmentIndex=selected;
-    control.selectedSegmentTintColor=[FMAccent() colorWithAlphaComponent:.25];
     control.accessibilityLabel=title?:key;
     [control addTarget:self action:@selector(segmentChanged:) forControlEvents:UIControlEventValueChanged];
     if(!title) return FMDockRow(control,10,YES,52);
