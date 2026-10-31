@@ -744,6 +744,9 @@ static void RunTests(void) {
         for(UIControl *c in Actions(m,@"switchFromRow:")) {CGRect f=Frame(c,m);safe &= CGRectGetMinX(f)>=insets.left-.01 && CGRectGetMaxX(f)<=667-insets.right+.01;}
         Check([NSString stringWithFormat:@"horizontal-safe-content-%@",left],safe,NSStringFromCGRect(m.panel.frame));Snapshot(m,[NSString stringWithFormat:@"safe-%@",left]);
     }
+    // The strip is drawn for pinned favorites only, so pin the one the checks below look for.
+    id savedPins=[prefs objectForKey:@"LCFloatingMenu.favoritePaths"];
+    [prefs setObject:@[FixtureApps.firstObject[@"identity"]] forKey:@"LCFloatingMenu.favoritePaths"];
     FixtureCurrent=YES;FMManager *header=Manager(NO,1,667,ordinary,NO,YES,@"apps");UIControl *tile=nil;
     for(UIControl *c in Actions(header,@"switchFromRow:")) if(![c isDescendantOfView:header.appsScroll]) {tile=c;break;}
     BOOL disabled=tile && !tile.enabled;Snapshot(header,@"current-running-close");FixtureCurrent=NO;[header refreshAppsContent];BOOL enabled=NO;
@@ -753,6 +756,27 @@ static void RunTests(void) {
     for(NSUInteger i=0;i<3;i++) [header refreshAppsContent];
     NSUInteger refreshedCount=0;for(UIControl *c in Actions(header,@"switchFromRow:")) if(![c isDescendantOfView:header.appsScroll]) refreshedCount++;
     Check(@"header-refresh-does-not-duplicate",headerCount>0 && refreshedCount==headerCount,@{@"before":@(headerCount),@"after":@(refreshedCount)});
+    // With nothing pinned the strip would only repeat the rows under it, so it is not drawn
+    // and the band it used to occupy is not reserved either.
+    [prefs removeObjectForKey:@"LCFloatingMenu.favoritePaths"];
+    FMManager *bare=Manager(NO,1,667,ordinary,NO,YES,@"apps");
+    NSUInteger bareTiles=0;
+    for(UIControl *control in Actions(bare,@"switchFromRow:")) if(![control isDescendantOfView:bare.appsScroll]) bareTiles++;
+    Check(@"no-favorites-no-strip",bareTiles==0 && bare.appsScroll.bounds.size.height>0 &&
+          CGRectGetHeight(bare.panel.bounds)<CGRectGetHeight(header.panel.bounds),
+          @{@"tiles":@(bareTiles),@"bare":NSStringFromCGRect(bare.panel.bounds),@"withStrip":NSStringFromCGRect(header.panel.bounds)});
+    // Two apps, both pinned: the strip would be the whole list over again (the case from
+    // the device screenshot), so it stays away as well.
+    NSArray *everyApp=FixtureApps;
+    FixtureApps=@[everyApp[0],everyApp[1]];
+    [prefs setObject:@[everyApp[0][@"identity"],everyApp[1][@"identity"]] forKey:@"LCFloatingMenu.favoritePaths"];
+    FMManager *twins=Manager(NO,1,667,ordinary,NO,YES,@"apps");
+    NSUInteger twinTiles=0;
+    for(UIControl *control in Actions(twins,@"switchFromRow:")) if(![control isDescendantOfView:twins.appsScroll]) twinTiles++;
+    Check(@"all-apps-pinned-no-strip",twinTiles==0,@(twinTiles));
+    Snapshot(twins,@"two-apps-no-duplicate-strip");
+    FixtureApps=everyApp;
+    [prefs setObject:savedPins forKey:@"LCFloatingMenu.favoritePaths"];
     for(NSNumber *compact in @[@NO,@YES]) {
         FixtureRunning=YES;FMManager *closing=Manager(compact.boolValue,1,667,ordinary,NO,YES,@"apps");
         UIControl *close=Actions(closing,@"closeTaskFromButton:").firstObject;
