@@ -892,6 +892,54 @@ static CGFloat FMReadableRowAlpha(void) {
     if(UIAccessibilityDarkerSystemColorsEnabled()) return FMClearGlassEnabled()?.72:.90;
     return FMClearGlassEnabled()?(FMMenuDark()?.55:.52):.84;
 }
+// The line down the middle of the handle, at rest. Its colour is the view's own fill, so
+// the red it turns while an update waits works the same on both styles.
+static void FMApplyOrbLineRest(UIView *line) {
+    BOOL glow=BoolPref(@"glowLine",YES);
+    line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
+    line.layer.shadowColor=line.backgroundColor.CGColor;
+    line.layer.shadowOffset=CGSizeZero;
+    line.layer.shadowOpacity=glow?.5:0;
+    line.layer.shadowRadius=glow?MAX(3,CGRectGetWidth(line.bounds)*.9):0;
+}
+// The author's line is a thin hairline. The other is the one from the reference render: a
+// bar about a fifth of the handle wide and a third of its body tall, lit from the top and
+// carrying a halo. bounds is the handle's frame, flares and all; the bar is measured
+// against the straight body so a droplet's neck does not stretch it.
+static UIView *FMOrbLine(CGRect bounds) {
+    BOOL glow=BoolPref(@"glowLine",YES);
+    CGFloat scale=FMOrbScale(),height=CGRectGetHeight(bounds);
+    FMHandleMetrics handle=FMOrbHandleMetrics(FMOrbHandleIsCapsule());
+    CGFloat body=2*handle.half;
+    CGFloat w=glow?MAX(3*scale,handle.reach*.22):3*scale;
+    CGFloat h=glow?MIN(body*.31,height*.42):MIN(18*scale,height*.30);
+    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,w,h)];
+    line.center=CGPointMake(CGRectGetWidth(bounds)*.5,height*.5);
+    line.layer.cornerRadius=w*.5;
+    line.layer.cornerCurve=kCACornerCurveCircular;
+    line.layer.borderWidth=glow?.5:.4;
+    line.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:glow?.55:.4].CGColor;
+    line.userInteractionEnabled=NO;
+    line.accessibilityIdentifier=@"fm.orb.update-indicator";
+    if(glow) {
+        // Lit from the top and deeper at the foot, over whatever colour the fill is. The
+        // gradient has to mask itself: the line cannot clip its own sublayers without
+        // losing the halo with them.
+        CAGradientLayer *lit=[CAGradientLayer layer];
+        lit.name=@"fm.orb.line.lit";
+        lit.frame=line.bounds;
+        lit.cornerRadius=w*.5;
+        lit.cornerCurve=kCACornerCurveCircular;
+        lit.masksToBounds=YES;
+        lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.42].CGColor,
+                     (id)UIColor.clearColor.CGColor,
+                     (id)[UIColor.blackColor colorWithAlphaComponent:.20].CGColor];
+        lit.locations=@[@0,@.45,@1];
+        [line.layer addSublayer:lit];
+    }
+    FMApplyOrbLineRest(line);
+    return line;
+}
 static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
     Method origMethod = class_getInstanceMethod(cls, orig);
     Method swizMethod = class_getInstanceMethod(cls, swiz);
@@ -1833,9 +1881,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(!line) return;
     [line.layer removeAnimationForKey:@"fm.update.red-breath"];
     if(!self.orbUpdateAvailable) {
-        line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
-        line.layer.shadowOpacity=0;
-        line.layer.shadowRadius=0;
+        FMApplyOrbLineRest(line);
         line.alpha=1;
         if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
         return;
@@ -1953,17 +1999,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     bead.userInteractionEnabled=NO;
     bead.tag=9202;
     [button addSubview:bead];
-    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,3*FMOrbScale(),
-        MIN(18*FMOrbScale(),f.size.height*.30))];
-    line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
-    line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
-    line.layer.cornerRadius=line.bounds.size.width*.5;
-    line.layer.cornerCurve=kCACornerCurveCircular;
-    line.layer.borderWidth=.4;
-    line.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.4].CGColor;
-    line.userInteractionEnabled=NO;
+    UIView *line=FMOrbLine(button.bounds);
     [bead addSubview:line];
-    line.accessibilityIdentifier=@"fm.orb.update-indicator";
     self.orbUpdateLine=line;
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
@@ -3631,14 +3668,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMApplySideNotch(glass,body.layer,left,YES,YES);
     FMAddOrbCapsule(glass,left);
     [body addSubview:glass];
-    UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,3*FMOrbScale(),MIN(18*FMOrbScale(),h*.30))];
-    line.center=CGPointMake(w*.5,h*.5);
-    line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
-    line.layer.cornerRadius=line.bounds.size.width*.5;
-    line.layer.cornerCurve=kCACornerCurveCircular;
-    line.layer.borderWidth=.4;
-    line.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.4].CGColor;
-    [glass addSubview:line];
+    [glass addSubview:FMOrbLine(body.bounds)];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
@@ -4004,7 +4034,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
-    SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);
+    SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);SetPref(@"glowLine",@YES);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
 }
 
@@ -6099,15 +6129,18 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addSlider:FMDockOption(@"orbScale",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbGlowLength",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbGlowBrightness",nil) to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"发光光条" key:@"glowLine" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     UILabel *note=FMDockLabel(nil,13,FMThemeColor(FMColorSecondary));
     self.handleNote=note;
     [self applyHandleNote];
     [self add:FMDockRow(note,10,YES,0) to:rows group:group when:FMDockWhenAlways];
 }
 - (void)applyHandleNote {
-    self.handleNote.text=FMOrbHandleIsCapsule()?
+    NSString *shape=FMOrbHandleIsCapsule()?
         @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
         @"柔和度越大，微珠和屏幕边缘连得越平缓。";
+    self.handleNote.text=[shape stringByAppendingString:
+        @"\n发光光条是中间那条线的另一种画法：更粗、顶亮底深、带一圈光晕；关掉就回到原来那条细线。有新版本时两种都会变红呼吸。"];
 }
 - (void)addOpacityRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupOpacity;
