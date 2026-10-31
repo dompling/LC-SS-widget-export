@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.11 formal release request
+
+Version: 1.0.11
+Source: lcss-original, improved day-mode orb capsule contrast and UIKit regression checks
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.11.md
+Publish: verify and compile arm64 LCFloatingMenu.dylib, create annotated 1.0.11 tag, GitHub Release, and refresh fm-latest.
