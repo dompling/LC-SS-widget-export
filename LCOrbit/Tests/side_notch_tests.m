@@ -320,6 +320,9 @@ int main(void) { @autoreleasepool {
                          PathRows(outline.CGPath),1e-9),"a capsule handle already is the free pill");
     }
     geometryScale=1;[stylePreferences removeAllObjects];
+    // Two of these describe a head that sweeps onto the wall the way the foot does, so they
+    // run against that one; the rounded head has its own block below.
+    stylePreferences[@"roundedTop"]=@0;
     for(NSNumber *width in @[@12,@76,@310]) {
         CGFloat w=width.doubleValue,h=w==12?52:360;
         for(NSNumber *compact in @[@YES,@NO]) {
@@ -335,6 +338,7 @@ int main(void) { @autoreleasepool {
                        CGPathContainsPoint(left.CGPath,NULL,CGPointMake(w-x,y),NO),"left and right outlines mirror exactly");
         }
     }
+    [stylePreferences removeObjectForKey:@"roundedTop"];
     // ---- Drawer morph: handle and drawer are one family of outlines ------------
     geometryScale=1;[stylePreferences removeAllObjects];
     // Drift guard. The parameter form must keep reproducing the production outlines,
@@ -355,20 +359,26 @@ int main(void) { @autoreleasepool {
     // The drawer's head: an ordinary rounded corner against the wall, or the same sweep its
     // foot has. The foot is untouched either way, both mirror, and both keep the parameter
     // form and the production outline in step.
-    for(NSNumber *compact in @[@NO,@YES]) {
-        CGFloat w=compact.boolValue?76:240,h=compact.boolValue?470:430;
+    [stylePreferences removeAllObjects];
+    for(NSNumber *width in @[@76,@240,@310]) for(NSNumber *compact in @[@NO,@YES]) {
+        CGFloat w=width.doubleValue,h=compact.boolValue?470:430;
+        // Nothing is set, so these are the production defaults, worked out the production way.
         CGFloat r=MIN(28*(compact.boolValue?26./28:30./28),MIN(w*.48,h*.17));
+        CGFloat radius=MIN(26*(compact.boolValue?1:30./26),MIN(w-r,h*.25));
+        CGFloat crown=(radius+(w-r))*.5;   // the middle of the body's own top edge
         stylePreferences[@"roundedTop"]=@1;
         UIBezierPath *rounded=FMSideNotchPath(CGRectMake(0,0,w,h),NO,compact.boolValue,NO);
         stylePreferences[@"roundedTop"]=@0;
         UIBezierPath *swept=FMSideNotchPath(CGRectMake(0,0,w,h),NO,compact.boolValue,NO);
-        Expect(CGPathContainsPoint(rounded.CGPath,NULL,CGPointMake(w*.5,.5),NO) &&
-               !CGPathContainsPoint(swept.CGPath,NULL,CGPointMake(w*.5,.5),NO),
+        Expect(CGPathContainsPoint(rounded.CGPath,NULL,CGPointMake(crown,.5),NO) &&
+               !CGPathContainsPoint(swept.CGPath,NULL,CGPointMake(crown,.5),NO),
                "a rounded head reaches the very top, where a swept one is still open");
-        Expect(!CGPathContainsPoint(rounded.CGPath,NULL,CGPointMake(w-.5,.5),NO),
-               "a rounded head cuts its own corner at the wall");
-        Expect(CGPathContainsPoint(swept.CGPath,NULL,CGPointMake(w*.5,r+.5),NO),
+        Expect(CGPathContainsPoint(swept.CGPath,NULL,CGPointMake(crown,r+.5),NO),
                "a swept head closes up below its sweep");
+        // The wall of a swept head starts at the very top; a rounded one's starts a corner down.
+        Expect(CGPathContainsPoint(swept.CGPath,NULL,CGPointMake(w-.001,4),NO) &&
+               !CGPathContainsPoint(rounded.CGPath,NULL,CGPointMake(w-.001,4),NO),
+               "a rounded head gives up its corner at the wall, a swept one keeps it");
         for(NSNumber *head in @[@1,@0]) {
             stylePreferences[@"roundedTop"]=head;
             UIBezierPath *right=FMSideNotchPath(CGRectMake(0,0,w,h),NO,compact.boolValue,NO);
@@ -376,8 +386,10 @@ int main(void) { @autoreleasepool {
             UIBezierPath *family=FMNotchFamilyPath(FMDrawerNotchParams(w,h,compact.boolValue));
             Expect(RowsMatch(PathRows(family.CGPath),PathRows(right.CGPath),1e-9),
                    "both heads keep the parameter form and the production outline in step");
-            Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(w-.5,h*.5),NO) &&
-                   CGPathContainsPoint(right.CGPath,NULL,CGPointMake(w*.5,h-r-.5),NO),
+            Expect(CGRectEqualToRect(CGPathGetBoundingBox(right.CGPath),CGRectMake(0,0,w,h)),
+                   "both heads still reach every edge of the drawer");
+            Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(w-.001,h*.5),NO) &&
+                   CGPathContainsPoint(right.CGPath,NULL,CGPointMake(crown,h-r-.5),NO),
                    "the foot and the docking wall are the same whichever head it has");
             for(CGFloat x=3;x<w;x+=7.3) for(CGFloat y=3;y<h;y+=11.7)
                 Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(x,y),NO)==
