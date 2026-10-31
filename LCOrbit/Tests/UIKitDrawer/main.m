@@ -631,8 +631,8 @@ static void RunTests(void) {
     }
     [prefs setObject:@1 forKey:@"LCFloatingMenu.orbScale"];
     FMManager *proportion=Manager(NO,1,667,ordinary,NO,NO,@"apps");
-    Check(@"bead-default-style-proportion",fabs(proportion.orb.bounds.size.width-14)<.01 &&
-          fabs(proportion.orb.bounds.size.height-102)<.01,NSStringFromCGRect(proportion.orb.bounds));
+    Check(@"bead-default-style-proportion",fabs(proportion.orb.bounds.size.width-22)<.01 &&
+          fabs(proportion.orb.bounds.size.height-80)<.01,NSStringFromCGRect(proportion.orb.bounds));
     Snapshot(proportion,@"collapsed-bead");
     for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *height in @[@320,@375]) {
         FMManager *m=Manager(compact.boolValue,1,height.doubleValue,ordinary,NO,YES,@"apps");
@@ -767,7 +767,17 @@ static void RunTests(void) {
     [style populateSettingsCategory:@"dimensions" stack:styleStack];
     NSMutableArray<UISlider *> *styleSliders=[NSMutableArray array];
     for(UIView *view in Views(styleStack)) if([view isKindOfClass:UISlider.class] && view.tag>=30 && view.tag<40) [styleSliders addObject:(UISlider *)view];
-    Check(@"orb-style-has-ten-adjustments",styleSliders.count==10,@(styleSliders.count));
+    Check(@"orb-style-has-eight-adjustments-for-the-capsule",styleSliders.count==8,@(styleSliders.count));
+    UISegmentedControl *handleStyle=nil;
+    for(UIView *view in Views(styleStack)) if([view isKindOfClass:UISegmentedControl.class] && [view.accessibilityLabel isEqual:@"微珠样式"]) handleStyle=(UISegmentedControl *)view;
+    Check(@"orb-style-picker-defaults-to-the-capsule",handleStyle && handleStyle.numberOfSegments==2 && handleStyle.selectedSegmentIndex==0,nil);
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    UIStackView *dropletStack=[UIStackView new];
+    [style populateSettingsCategory:@"dimensions" stack:dropletStack];
+    NSUInteger dropletSliders=0;BOOL cornerShown=NO;
+    for(UIView *view in Views(dropletStack)) if([view isKindOfClass:UISlider.class] && view.tag>=30 && view.tag<40) {dropletSliders++;if(view.tag==32) cornerShown=YES;}
+    Check(@"droplet-style-hides-the-corner-slider",dropletSliders==7 && !cornerShown,@(dropletSliders));
+    [prefs removeObjectForKey:@"LCFloatingMenu.orbHandleStyle"];
     UISlider *extension=nil;
     for(UISlider *slider in styleSliders) if(slider.tag==30) extension=slider;
     style.orbPreviewHost=[[UIView alloc] initWithFrame:CGRectMake(0,0,667,667)];
@@ -777,10 +787,10 @@ static void RunTests(void) {
     Check(@"orb-preview-works-before-overlay-install",fabs(CGRectGetMidY([style.orbPreviewHost viewWithTag:9211].frame)-333.5)<.01,nil);
     style.orbY=.5;
     extension.value=31;[style sliderChanged:extension];
-    Check(@"orb-preview-live-before-slider-release",fabs([style.orbPreviewHost viewWithTag:9211].bounds.size.height-114)<.01,nil);
+    Check(@"orb-preview-live-before-slider-release",fabs([style.orbPreviewHost viewWithTag:9211].bounds.size.width-31)<.01,nil);
     [style sliderFinished:extension];
-    Check(@"orb-style-slider-applies-and-persists",fabs(style.orb.bounds.size.height-114)<.01 &&
-        [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,NSStringFromCGRect(style.orb.bounds));
+    Check(@"orb-style-slider-applies-and-persists",fabs(style.orb.bounds.size.width-31)<.01 &&
+        [prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31,NSStringFromCGRect(style.orb.bounds));
     UIView *fixedPreview=[[UIView alloc] initWithFrame:CGRectMake(0,0,667,220)];
     [style.overlayView addSubview:fixedPreview];style.dimensionsPreview=fixedPreview;
     id savedSide=[prefs objectForKey:@"LCFloatingMenu.onLeft"];
@@ -802,17 +812,17 @@ static void RunTests(void) {
         slider.value=slider.maximumValue;[style sliderChanged:slider];
     }
     Check(@"menu-preview-updates-during-sliding",oldPreview!=style.dimensionsPreview.subviews.firstObject,nil);
-    Check(@"menu-dimensions-persist-independently",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==44 && [prefs doubleForKey:@"LCFloatingMenu.menuCompactIconSize"]==50 && [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,nil);
+    Check(@"menu-dimensions-persist-independently",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==44 && [prefs doubleForKey:@"LCFloatingMenu.menuCompactIconSize"]==50 && [prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31,nil);
     for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *left in @[@NO,@YES]) {
         FMManager *extreme=Manager(compact.boolValue,1,667,ordinary,left.boolValue,YES,@"apps");
         Check([NSString stringWithFormat:@"menu-extreme-layout-%@-%@",compact,left],extreme.panel && extreme.appsScroll.bounds.size.height>0,nil);
         Snapshot(extreme,[NSString stringWithFormat:@"menu-extreme-%@-%@",compact,left]);
     }
     [style resetMenuDimensions];
-    Check(@"menu-reset-preserves-orb",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==28 && [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,nil);
+    Check(@"menu-reset-preserves-orb",[prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==28 && [prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31,nil);
     [prefs setObject:@33 forKey:@"LCFloatingMenu.menuExtension"];
     [style resetOrbDimensions];
-    Check(@"orb-reset-preserves-menu",[prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==25 && [prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==33,nil);
+    Check(@"orb-reset-preserves-menu",[prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==22 && [prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==33,nil);
     [style resetMenuDimensions];
     UIStackView *appearanceOnly=[UIStackView new];[style populateSettingsCategory:@"appearance" stack:appearanceOnly];
     BOOL relocated=YES;for(UIView *view in Views(appearanceOnly)) if([view isKindOfClass:UISlider.class] && (view.tag==11 || view.tag==14 || view.tag>=30)) relocated=NO;
@@ -830,8 +840,13 @@ static void RunTests(void) {
         }
     }
     Check(@"dimensions-reset-cards-match-root-style",resetCards==2,@(resetCards));
-    BOOL concavityNamed=NO;for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag==36) concavityNamed=[view.accessibilityLabel isEqual:@"凹角弧度"];
-    Check(@"orb-connection-renamed-concavity",concavityNamed,nil);
+    BOOL handleNamed=NO,cornerNamed=NO,softnessNamed=NO;
+    for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class]) {
+        if(view.tag==30) handleNamed=[view.accessibilityLabel isEqual:@"凸出宽度"];
+        if(view.tag==32) cornerNamed=[view.accessibilityLabel isEqual:@"圆角"];
+        if(view.tag==33) softnessNamed=[view.accessibilityLabel isEqual:@"柔和度"];
+    }
+    Check(@"orb-handle-sliders-use-the-dock-names",handleNamed && cornerNamed && softnessNamed,nil);
     for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *width in @[@320,@667]) {
         [prefs setObject:compact forKey:@"LCFloatingMenu.compactMode"];
         fixedPreview.frame=CGRectMake(0,0,width.doubleValue,100);
@@ -842,7 +857,7 @@ static void RunTests(void) {
     style.dimensionsPreview=nil;[fixedPreview removeFromSuperview];[style refreshOrbPreview];
     Check(@"leaving-dimensions-restores-edge-preview",!style.orbPreviewHost.hidden && [style.orbPreviewHost viewWithTag:9211]!=nil,nil);
 
-    [prefs removeObjectForKey:@"LCFloatingMenu.orbExtension"];
+    [prefs removeObjectForKey:@"LCFloatingMenu.orbHandleReach"];
     id savedMode=[prefs objectForKey:@"LCFloatingMenu.appearanceMode"];
     id savedAccent=[prefs objectForKey:@"LCFloatingMenu.accentLight"];
     [prefs setObject:@1 forKey:@"LCFloatingMenu.appearanceMode"];

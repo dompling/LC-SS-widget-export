@@ -42,7 +42,7 @@ assert "FMApplySideNotch(glass,shadow.layer,self.left,compact,NO)" in src, "both
 assert "glass.layer.mask=clip" in src, "notch must clip native glass material"
 assert "bead.transform=CGAffineTransformMakeScale(stealth?.18:.32,.88)" not in src, "idle must not squash the glass handle"
 assert '@"roundOrb"' not in src and '@"autoFade"' not in src, "removed orb/fade modes must not reappear"
-assert "FMDrawerMorphPath(glass.bounds,_morphBead,_morphDrawer,self.left,_morphCompact,t,_morphRoundness)" in src, "drawer must grow out of the docked bead, not slide in from offscreen"
+assert "FMDrawerMorphPath(glass.bounds,_morphBead,_morphDroplet,_morphDrawer,self.left,_morphCompact,t)" in src, "drawer must grow out of the docked bead, not slide in from offscreen"
 assert "CGRectGetMaxX(bead)-CGRectGetMaxX(rest)" in src and "CGRectGetMinX(bead)-CGRectGetMinX(rest)" in src, "drawer wall must meet the bead on its docking side"
 assert "FMSpringStep(&x,&v,_morphTarget,_morphOmega,_morphZeta,dt)" in src, "release must settle with the spring, not a fixed-duration animation"
 assert "_morphZeta=open?.68:.82;" in src, "opening must be an underdamped spring so the drawer visibly bounces"

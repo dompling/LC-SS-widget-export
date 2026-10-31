@@ -332,14 +332,13 @@ static CGFloat FMOrbScale(void) {
 static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
     static NSArray *options;static dispatch_once_t once;
     dispatch_once(&once, ^{ options=@[
-        @{@"key":@"orbExtension",@"title":@"上下延展长度",@"min":@(8),@"max":@(48),@"default":@(25),@"unit":@"点"},
+        // The first four shape the handle, with the wloc dock's ranges and steps.
+        @{@"key":@"orbHandleReach",@"title":@"凸出宽度",@"min":@(14),@"max":@(34),@"default":@(22),@"unit":@"点",@"step":@(1)},
+        @{@"key":@"orbHandleLength",@"title":@"长度",@"min":@(56),@"max":@(140),@"default":@(80),@"unit":@"点",@"step":@(2)},
+        @{@"key":@"orbCapsuleCorner",@"title":@"圆角",@"min":@(0.55),@"max":@(1),@"default":@(0.83),@"unit":@"%",@"step":@(0.01)},
+        @{@"key":@"orbSoftness",@"title":@"柔和度",@"min":@(0.4),@"max":@(1.6),@"default":@(1),@"unit":@"%",@"step":@(0.05)},
         @{@"key":@"orbGlowLength",@"title":@"背景散光长度",@"min":@(0),@"max":@(100),@"default":@(56),@"unit":@"点"},
         @{@"key":@"orbGlowBrightness",@"title":@"背景散光亮度",@"min":@(0),@"max":@(0.35),@"default":@(0.16),@"unit":@"%"},
-        @{@"key":@"orbBodyWidth",@"title":@"胶囊宽度",@"min":@(8),@"max":@(20),@"default":@(12),@"unit":@"点"},
-        @{@"key":@"orbBodyHeight",@"title":@"胶囊高度",@"min":@(36),@"max":@(80),@"default":@(52),@"unit":@"点"},
-        @{@"key":@"orbEdgeGap",@"title":@"贴边间距",@"min":@(0),@"max":@(8),@"default":@(2),@"unit":@"点"},
-        @{@"key":@"orbCurveSoftness",@"title":@"凹角弧度",@"min":@(0),@"max":@(0.85),@"default":@(0.33),@"unit":@"%"},
-        @{@"key":@"orbDropletSize",@"title":@"水滴大小",@"min":@(0.65),@"max":@(1.25),@"default":@(1),@"unit":@"%"},
         @{@"key":@"orbSnapDuration",@"title":@"吸边动画时长",@"min":@(0.2),@"max":@(0.65),@"default":@(0.34),@"unit":@"秒"},
         @{@"key":@"orbSnapDamping",@"title":@"吸边回弹阻尼",@"min":@(0.65),@"max":@(1),@"default":@(0.78),@"unit":@"%"},
     ]; });
@@ -369,62 +368,126 @@ static CGFloat FMOrbStyleValue(NSString *key) {
     }
     return 0;
 }
-// The edge gap belongs to the connector, never to the visible cap radius.
-static CGRect FMOrbBodyRect(CGRect bounds,BOOL left,CGFloat progress) {
-    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat shoulder=MIN(FMOrbStyleValue(@"orbExtension")*FMOrbScale(),MAX(0,h*.5-1));
-    CGFloat gap=MIN(FMOrbStyleValue(@"orbEdgeGap")*FMOrbScale(),MAX(0,w-1));
-    gap*=1-Clamp(progress*2.5,0,1);
-    return CGRectMake(left?gap:0,shoulder,w-gap,h-shoulder*2);
+// 0 is the capsule, 1 the droplet.
+static BOOL FMOrbHandleIsCapsule(void) {
+    return !(FloatPref(@"orbHandleStyle",0)>=.5);
 }
-static UIBezierPath *FMOrbBodyPath(CGRect bounds) {
-    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat r=MIN(w,h)*.5,k=r*.55228475;
+// The side silhouettes (the docked handle, the drawer) are members of one
+// nine-segment family (M C L C L C L C Z), so any frame between two of them moves
+// a handful of parameters instead of blending Bezier controls, which would bulge
+// the shoulders. Values describe a right-hand dock; callers mirror the finished
+// path for a left dock. A root flare with a negative vertical size is a convex
+// corner of the body instead of a concave flare onto the wall.
+typedef struct {
+    CGFloat left,top,wall,bottom; // inner edge, top and bottom at the wall, docking wall
+    CGFloat rx,ryt,ryb;           // root flares: horizontal size, vertical size of the top and the bottom one
+    CGFloat a,b;                  // flare handle ratios (vertical / horizontal)
+    CGFloat rdx,rdy,kx,ky;        // inner corners: radii and handle lengths
+} FMNotchParams;
+static inline CGFloat FMLerp(CGFloat from,CGFloat to,CGFloat t) { return from+(to-from)*t; }
+static inline CGFloat FMSmooth(CGFloat x) { x=Clamp(x,0,1); return x*x*(3-2*x); }
+static UIBezierPath *FMNotchFamilyPath(FMNotchParams p) {
+    CGFloat x1=p.wall-p.rx,x2=p.left+p.rdx;
+    CGFloat t0=p.top+p.ryt,b0=p.bottom-p.ryb;
     UIBezierPath *path=[UIBezierPath bezierPath];
-    [path moveToPoint:CGPointMake(r,0)];
-    [path addLineToPoint:CGPointMake(w-r,0)];
-    [path addCurveToPoint:CGPointMake(w,r) controlPoint1:CGPointMake(w-r+k,0) controlPoint2:CGPointMake(w,r-k)];
-    [path addLineToPoint:CGPointMake(w,h-r)];
-    [path addCurveToPoint:CGPointMake(w-r,h) controlPoint1:CGPointMake(w,h-r+k) controlPoint2:CGPointMake(w-r+k,h)];
-    [path addLineToPoint:CGPointMake(r,h)];
-    [path addCurveToPoint:CGPointMake(0,h-r) controlPoint1:CGPointMake(r-k,h) controlPoint2:CGPointMake(0,h-r+k)];
-    [path addLineToPoint:CGPointMake(0,r)];
-    [path addCurveToPoint:CGPointMake(r,0) controlPoint1:CGPointMake(0,r-k) controlPoint2:CGPointMake(r-k,0)];
+    [path moveToPoint:CGPointMake(p.wall,p.top)];
+    [path addCurveToPoint:CGPointMake(x1,t0)
+            controlPoint1:CGPointMake(p.wall,p.top+p.ryt*p.a)
+            controlPoint2:CGPointMake(x1+p.rx*p.b,t0)];
+    [path addLineToPoint:CGPointMake(x2,t0)];
+    [path addCurveToPoint:CGPointMake(p.left,t0+p.rdy)
+            controlPoint1:CGPointMake(x2-p.kx,t0)
+            controlPoint2:CGPointMake(p.left,t0+p.rdy-p.ky)];
+    [path addLineToPoint:CGPointMake(p.left,b0-p.rdy)];
+    [path addCurveToPoint:CGPointMake(x2,b0)
+            controlPoint1:CGPointMake(p.left,b0-p.rdy+p.ky)
+            controlPoint2:CGPointMake(x2-p.kx,b0)];
+    [path addLineToPoint:CGPointMake(x1,b0)];
+    [path addCurveToPoint:CGPointMake(p.wall,p.bottom)
+            controlPoint1:CGPointMake(x1+p.rx*p.b,b0)
+            controlPoint2:CGPointMake(p.wall,p.bottom-p.ryb*p.a)];
     [path closePath];
     return path;
 }
-// Vary the vertical root handle only: moving the horizontal handle as well
-// counteracts concavity on this narrow shoulder and makes the slider look inert.
-// The historical .33 setting retains the original .40 control position.
-static CGFloat FMOrbRootCurveFactor(void) {
-    CGFloat value=FMOrbStyleValue(@"orbCurveSoftness");
-    return value<=.33?.05+value/.33*.35:.40+(value-.33)/.52*.55;
+// The open drawer, exactly as FMSideNotchPath draws it.
+static FMNotchParams FMDrawerNotchParams(CGFloat w,CGFloat h,BOOL compact) {
+    CGFloat r=MIN(FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28),MIN(w*.48,h*.17));
+    CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
+    CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
+    FMNotchParams p={0,0,w,h,r,r,r,softness,1,radius,radius,radius,radius*(1-(1-softness)*1.25)};
+    return p;
+}
+// The docked handle as the wloc dock draws it (its DockLayout.metrics(at: 0) with
+// DockMetrics.clamped()), in screen points and measured from the docking wall.
+// The capsule has four convex corners of one size; the droplet has concave
+// flares onto the wall (a negative length is a convex corner, as in the capsule).
+typedef struct {
+    CGFloat reach,half;                                  // protrusion from the wall, half the body length
+    CGFloat topLength,topDepth,bottomLength,bottomDepth; // wall corners: along the wall / out from it
+    CGFloat cornerX,cornerY,cornerK;                     // outer corner radii and handle ratio
+} FMHandleMetrics;
+static FMHandleMetrics FMHandleMetricsFor(CGFloat reach,CGFloat length,CGFloat softness,BOOL capsule,CGFloat cornerScale) {
+    CGFloat depth=MIN(.586*reach*softness,.8*reach),tail=.675*reach*softness;
+    FMHandleMetrics m={reach,length/2,depth*(.675/.586),depth,tail,depth,.413*reach,.525*reach,.575};
+    if(capsule) {
+        // The outer corners are rounded blunt ellipses (wider than they are tall)
+        // and the wall corners turn into the same shape.
+        CGFloat cx=cornerScale*reach/2,cy=MIN(cx*.525/.413,length/2);
+        m.topLength=m.bottomLength=-cy;
+        m.topDepth=m.bottomDepth=cx;
+        m.cornerX=cx;m.cornerY=cy;
+    }
+    m.reach=MAX(m.reach,4);
+    m.half=MAX(m.half,8);
+    m.cornerX=Clamp(m.cornerX,0,m.reach*.5);
+    m.cornerY=Clamp(m.cornerY,0,m.half);
+    // A wall corner's depth plus the outer corner's radius must fit in the reach.
+    CGFloat room=MAX(m.reach-m.cornerX,0);
+    if(m.topLength<0) m.topLength=-MIN(-m.topLength,m.half);
+    if(m.bottomLength<0) m.bottomLength=-MIN(-m.bottomLength,m.half);
+    m.topDepth=Clamp(m.topDepth,0,room);
+    m.bottomDepth=Clamp(m.bottomDepth,0,room);
+    return m;
+}
+// The handle's own frame: reach wide, and as tall as the body plus the longer
+// wall flare on each side.
+static CGSize FMHandleFrameSize(FMHandleMetrics m) {
+    return CGSizeMake(m.reach,2*m.half+2*MAX(0,MAX(m.topLength,m.bottomLength)));
+}
+// The handle as family parameters. unit converts screen points into the
+// coordinates of the path; left and top place the handle's frame. At rest the
+// top and bottom wall corners are equally deep and of one kind (see
+// FMHandleMetricsFor), so they share a depth and a handle ratio; only their
+// lengths along the wall can differ.
+static FMNotchParams FMHandleNotchParams(FMHandleMetrics m,CGFloat unit,CGFloat left,CGFloat top) {
+    CGFloat mid=FMHandleFrameSize(m).height*.5,bodyTop=mid-m.half,bodyBottom=mid+m.half;
+    CGFloat flare=m.topLength>=0?.725:m.cornerK;
+    FMNotchParams p={left,top+(bodyTop-m.topLength)*unit,left+m.reach*unit,top+(bodyBottom+m.bottomLength)*unit,
+        m.topDepth*unit,m.topLength*unit,m.bottomLength*unit,flare,flare,
+        m.cornerX*unit,m.cornerY*unit,m.cornerK*m.cornerX*unit,m.cornerK*m.cornerY*unit};
+    return p;
+}
+// The handle the settings describe, in screen points. The bead-size setting
+// scales reach and length; the rest follows from them.
+static FMHandleMetrics FMOrbHandleMetrics(BOOL capsule) {
+    CGFloat scale=FMOrbScale();
+    return FMHandleMetricsFor(FMOrbStyleValue(@"orbHandleReach")*scale,FMOrbStyleValue(@"orbHandleLength")*scale,
+        FMOrbStyleValue(@"orbSoftness"),capsule,FMOrbStyleValue(@"orbCapsuleCorner"));
 }
 // A mirrored, gently concave inner shoulder joins the side edge to the drawer.
 // The glass and its shadow use exactly the same path.
 static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact, BOOL collapsed) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat r=MIN(FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28),MIN(w*.48,h*.17));
-    UIBezierPath *path=[UIBezierPath bezierPath];
+    UIBezierPath *path;
     if(collapsed) {
-        CGRect body=FMOrbBodyRect(bounds,NO,0);
-        CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
-        CGFloat crown=radius,capK=radius*.55228475;
-        [path moveToPoint:CGPointMake(w,0)];
-        [path addCurveToPoint:CGPointMake(crown,shoulder)
-                controlPoint1:CGPointMake(w,shoulder*FMOrbRootCurveFactor())
-                controlPoint2:CGPointMake(w-(w-crown)*.33,shoulder)];
-        [path addCurveToPoint:CGPointMake(0,shoulder+radius)
-                controlPoint1:CGPointMake(crown-capK,shoulder)
-                controlPoint2:CGPointMake(0,shoulder+radius-capK)];
-        [path addLineToPoint:CGPointMake(0,h-shoulder-radius)];
-        [path addCurveToPoint:CGPointMake(crown,h-shoulder)
-                controlPoint1:CGPointMake(0,h-shoulder-radius+capK)
-                controlPoint2:CGPointMake(crown-capK,h-shoulder)];
-        [path addCurveToPoint:CGPointMake(w,h)
-                controlPoint1:CGPointMake(w-(w-crown)*.33,h-shoulder)
-                controlPoint2:CGPointMake(w,h-shoulder*FMOrbRootCurveFactor())];
+        // The docked handle, in the style the settings choose: against the wall,
+        // centered along the bounds.
+        FMHandleMetrics handle=FMOrbHandleMetrics(FMOrbHandleIsCapsule());
+        CGSize size=FMHandleFrameSize(handle);
+        path=FMNotchFamilyPath(FMHandleNotchParams(handle,1,w-size.width,(h-size.height)*.5));
     } else {
+        CGFloat r=MIN(FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28),MIN(w*.48,h*.17));
+        path=[UIBezierPath bezierPath];
         CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
         CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
         // Keep extension and the inward-facing corner radius independent.
@@ -445,8 +508,8 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
         [path addCurveToPoint:CGPointMake(w,h)
                 controlPoint1:CGPointMake(w,h-r)
                 controlPoint2:CGPointMake(w,h-r*softness)];
+        [path closePath];
     }
-    [path closePath];
     if(dockLeft) {
         CGAffineTransform flip=CGAffineTransformMake(-1,0,0,1,w,0);
         [path applyTransform:flip];
@@ -488,62 +551,24 @@ static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL co
         [glass.layer insertSublayer:reflection atIndex:1];
     }
 }
-static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDist, CGFloat maxPull) {
-    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    if(pullDist<=.01) return FMSideNotchPath(bounds,dockLeft,YES,YES);
-    CGFloat t=Clamp(pullDist/MAX(maxPull,1),0,1);
-    CGFloat cy=h*.5,baseW=MAX(1,w-pullDist*.4);
-    CGFloat r=MIN(h*.20,(baseW*.5+pullDist*.025)*FMOrbStyleValue(@"orbDropletSize"));
-    CGFloat cx=r,k=r*.55228475;
-    // Keep the glass rooted at the edge; the moving crown draws the
-    // shoulders inward continuously instead of growing a long pear tail.
-    CGFloat rootTop=h*.5*t;
-    CGFloat tipControlX=w-(w-cx)*.4*t;
-    CGFloat neck=h*(.22-.07*t);
-    CGRect body=FMOrbBodyRect(CGRectMake(0,0,baseW,h),NO,0);
-        CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
-        CGFloat crown=w-baseW+radius,capK=radius*.55228475;
-    CGFloat blend=Clamp(pullDist/(14*FMOrbScale()),0,1);
-    blend=blend*blend*(3-2*blend);
-    CGPoint (^mix)(CGPoint,CGPoint)=^CGPoint(CGPoint tab,CGPoint drop) {
-        return CGPointMake(tab.x+(drop.x-tab.x)*blend,tab.y+(drop.y-tab.y)*blend);
-    };
-    UIBezierPath *path=[UIBezierPath bezierPath];
-    [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,rootTop))];
-    [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(cx,cy-r))
-            controlPoint1:mix(CGPointMake(w,shoulder*FMOrbRootCurveFactor()),CGPointMake(tipControlX,cy-neck*(1-t)))
-            controlPoint2:mix(CGPointMake(w-(w-crown)*.33,shoulder),CGPointMake(cx+r*.9,cy-r))];
-    [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,cy))
-            controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(cx-k,cy-r))
-            controlPoint2:mix(CGPointMake(0,shoulder+radius-capK),CGPointMake(0,cy-k))];
-    [path addLineToPoint:mix(CGPointMake(0,h-shoulder-radius),CGPointMake(0,cy))];
-    [path addCurveToPoint:mix(CGPointMake(crown,h-shoulder),CGPointMake(cx,cy+r))
-            controlPoint1:mix(CGPointMake(0,h-shoulder-radius+capK),CGPointMake(0,cy+k))
-            controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(cx-k,cy+r))];
-    [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-rootTop))
-            controlPoint1:mix(CGPointMake(w-(w-crown)*.33,h-shoulder),CGPointMake(cx+r*.9,cy+r))
-            controlPoint2:mix(CGPointMake(w,h-shoulder*FMOrbRootCurveFactor()),CGPointMake(tipControlX,cy+neck*(1-t)))];
-    [path closePath];
-    if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
-    return path;
-}
 // The raised capsule has its own rounded optical fill, without an inset
 // stroke. Its broader edge backing remains visible above and below it.
-static void FMLayoutOrbCapsule(UIView *glass,CGFloat pullProgress) {
+static void FMLayoutOrbCapsule(UIView *glass) {
     CGFloat w=glass.bounds.size.width,h=glass.bounds.size.height;
+    // The fill is the capsule outline: all of the capsule handle, and for the
+    // droplet just the body between its two flares.
+    FMHandleMetrics pill=FMOrbHandleMetrics(YES);
+    CGFloat body=FMHandleFrameSize(pill).height;
     for(CALayer *layer in glass.layer.sublayers) {
         if([layer.name isEqualToString:@"fm.orb.capsule"]) {
-            BOOL left=((CAGradientLayer *)layer).startPoint.x>.5;
-            layer.frame=FMOrbBodyRect(glass.bounds,left,pullProgress);
+            layer.frame=CGRectMake(0,(h-body)*.5,w,body);
             layer.cornerRadius=0;
             CAShapeLayer *mask=(CAShapeLayer *)layer.mask;
             if(!mask) {mask=[CAShapeLayer layer];layer.mask=mask;}
             mask.frame=layer.bounds;
-            mask.path=FMOrbBodyPath(layer.bounds).CGPath;
-            layer.opacity=1-Clamp(pullProgress*2.5,0,1);
+            mask.path=FMNotchFamilyPath(FMHandleNotchParams(pill,1,0,0)).CGPath;
         } else if([layer.name isEqualToString:@"fm.orb.surface"]) {
             layer.frame=glass.bounds;
-            layer.opacity=1-Clamp(pullProgress,0,1)*.35;
         }
     }
 }
@@ -570,16 +595,15 @@ static void FMAddOrbCapsule(UIView *glass,BOOL left) {
     capsule.startPoint=CGPointMake(left?1:0,0);capsule.endPoint=CGPointMake(left?0:1,1);
     capsule.cornerCurve=kCACornerCurveCircular;
     [glass.layer addSublayer:capsule];
-    FMLayoutOrbCapsule(glass,0);
+    FMLayoutOrbCapsule(glass);
 }
 // This backdrop extends beyond the handle but never expands its hit target.
 // Faded ends and a soft horizontal falloff prevent a second visible frame.
-static void FMLayoutOrbBackdrop(UIView *orb,BOOL left,CGFloat progress) {
+static void FMLayoutOrbBackdrop(UIView *orb,BOOL left) {
     UIView *backdrop=[orb viewWithTag:9204];
     CGFloat w=16*FMOrbScale(),h=orb.bounds.size.height;
     CGFloat reach=FMOrbStyleValue(@"orbGlowLength")*FMOrbScale();
     backdrop.frame=CGRectMake(left?0:orb.bounds.size.width-w*.85,-reach,w*.85,h+reach*2);
-    backdrop.alpha=1-Clamp(progress*1.6,0,1);
     for(CALayer *layer in backdrop.layer.sublayers) {
         if([layer.name isEqualToString:@"fm.edge.light"]) {
             layer.frame=backdrop.bounds;
@@ -606,174 +630,113 @@ static void FMAddOrbBackdrop(UIView *orb,BOOL left) {
                   (id)UIColor.blackColor.CGColor,(id)UIColor.clearColor.CGColor];
     fade.locations=@[@0,@.25,@.75,@1];backdrop.layer.mask=fade;
     [orb insertSubview:backdrop atIndex:0];
-    FMLayoutOrbBackdrop(orb,left,0);
+    FMLayoutOrbBackdrop(orb,left);
 }
-// The docked and free capsule share four cubic curves and one straight side.
-// Keeping segment order stable avoids twisted shoulders while moving the orb.
-static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
-    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
-    CGFloat r=MIN(w*.5,h*.5),k=r*.55228475;
-    CGRect body=FMOrbBodyRect(bounds,NO,0);
-        CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
-        CGFloat crown=radius,capK=radius*.55228475;
-    CGFloat t=Clamp(opened,0,1);
-    CGPoint (^mix)(CGPoint,CGPoint)=^CGPoint(CGPoint tab,CGPoint capsule) {
-        return CGPointMake(tab.x+(capsule.x-tab.x)*t,tab.y+(capsule.y-tab.y)*t);
-    };
-    UIBezierPath *path=[UIBezierPath bezierPath];
-    [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,r))];
-    [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(w*.5,0))
-            controlPoint1:mix(CGPointMake(w,shoulder*FMOrbRootCurveFactor()),CGPointMake(w,r-k))
-            controlPoint2:mix(CGPointMake(w-(w-crown)*.33,shoulder),CGPointMake(w*.5+k,0))];
-    [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,r))
-            controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(w*.5-k,0))
-            controlPoint2:mix(CGPointMake(0,shoulder+radius-capK),CGPointMake(0,r-k))];
-    [path addLineToPoint:mix(CGPointMake(0,h-shoulder-radius),CGPointMake(0,h-r))];
-    [path addCurveToPoint:mix(CGPointMake(crown,h-shoulder),CGPointMake(w*.5,h))
-            controlPoint1:mix(CGPointMake(0,h-shoulder-radius+capK),CGPointMake(0,h-r+k))
-            controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(w*.5-k,h))];
-    [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-r))
-            controlPoint1:mix(CGPointMake(w-(w-crown)*.33,h-shoulder),CGPointMake(w*.5+k,h))
-            controlPoint2:mix(CGPointMake(w,h-shoulder*FMOrbRootCurveFactor()),CGPointMake(w,h-r+k))];
-    [path closePath];
-    if(left) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
-    return path;
-}
-static void FMAnimateOrbPath(CALayer *layer,NSString *key,CGPathRef destination,BOOL animated) {
-    if(!layer) return;
-    if(animated && !UIAccessibilityIsReduceMotionEnabled()) {
-        CGPathRef current=nil;
-        if([key isEqualToString:@"shadowPath"])
-            current=((CALayer *)layer.presentationLayer).shadowPath ?: layer.shadowPath;
-        else
-            current=((CAShapeLayer *)layer.presentationLayer).path ?: ((CAShapeLayer *)layer).path;
-        if(current) {
-            CABasicAnimation *morph=[CABasicAnimation animationWithKeyPath:key];
-            morph.fromValue=(__bridge id)current;
-            morph.toValue=(__bridge id)destination;
-            morph.duration=.26;
-            morph.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-            [layer addAnimation:morph forKey:@"fm.orb.shoulders"];
-        }
-    } else [layer removeAnimationForKey:@"fm.orb.shoulders"];
-    if([key isEqualToString:@"shadowPath"]) layer.shadowPath=destination;
-    else ((CAShapeLayer *)layer).path=destination;
-}
-static void FMAnimateOrbShoulders(UIButton *button,BOOL left,CGFloat opened,BOOL animated) {
+// One outline for the bead's clip, rim and shadow, set without animation. The
+// caller owns the Bezier wrapper for the whole call, so the borrowed CGPath
+// cannot be freed before every layer has retained it.
+static void FMApplyOrbOutline(UIButton *button,UIBezierPath *outline) {
     UIView *glass=[button viewWithTag:9202];
     CAShapeLayer *mask=(CAShapeLayer *)glass.layer.mask;
     if(![mask isKindOfClass:CAShapeLayer.class]) return;
-    CAShapeLayer *rim=nil;
+    mask.frame=glass.bounds;
+    mask.path=outline.CGPath;
     for(CALayer *layer in glass.layer.sublayers)
         if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
-            rim=(CAShapeLayer *)layer;break;
+            layer.frame=glass.bounds;
+            ((CAShapeLayer *)layer).path=outline.CGPath;
+            break;
         }
-    // Own the Bezier wrapper until all layers retain the CGPath. A borrowed
-    // CGPathRef from a temporary UIBezierPath can be freed mid-animation.
-    UIBezierPath *outline=FMOrbDragPath(glass.bounds,left,opened);
-    CGPathRef destination=outline.CGPath;
-    FMAnimateOrbPath(mask,@"path",destination,animated);
-    FMAnimateOrbPath(rim,@"path",destination,animated);
-    FMAnimateOrbPath(button.layer,@"shadowPath",destination,animated);
+    button.layer.shadowPath=outline.CGPath;
 }
 // FMDrawerMotion:begin
-// The drawer grows out of the docked bead as one continuous outline. Bead and
-// drawer are two members of the same nine-element family (M C L C L C L C Z),
-// so a frame in between moves a handful of parameters instead of blending
-// Bezier controls, which would bulge the shoulders. Values describe a
-// right-hand dock; callers mirror the finished path for a left dock.
-typedef struct {
-    CGFloat left,top,wall,bottom; // inner edge, top, docking wall, bottom
-    CGFloat rx,ry;                // horizontal / vertical size of the root flare
-    CGFloat radius;               // inner corner radius
-    CGFloat a,b;                  // flare handle ratios (vertical / horizontal)
-    CGFloat kx,ky;                // inner corner handle lengths
-} FMNotchParams;
-static inline CGFloat FMLerp(CGFloat from,CGFloat to,CGFloat t) { return from+(to-from)*t; }
-static inline CGFloat FMSmooth(CGFloat x) { x=Clamp(x,0,1); return x*x*(3-2*x); }
-static UIBezierPath *FMNotchFamilyPath(FMNotchParams p) {
-    CGFloat x1=p.wall-p.rx,x2=p.left+p.radius;
-    CGFloat t0=p.top+p.ry,b0=p.bottom-p.ry;
-    UIBezierPath *path=[UIBezierPath bezierPath];
-    [path moveToPoint:CGPointMake(p.wall,p.top)];
-    [path addCurveToPoint:CGPointMake(x1,t0)
-            controlPoint1:CGPointMake(p.wall,p.top+p.ry*p.a)
-            controlPoint2:CGPointMake(x1+p.rx*p.b,t0)];
-    [path addLineToPoint:CGPointMake(x2,t0)];
-    [path addCurveToPoint:CGPointMake(p.left,t0+p.radius)
-            controlPoint1:CGPointMake(x2-p.kx,t0)
-            controlPoint2:CGPointMake(p.left,t0+p.radius-p.ky)];
-    [path addLineToPoint:CGPointMake(p.left,b0-p.radius)];
-    [path addCurveToPoint:CGPointMake(x2,b0)
-            controlPoint1:CGPointMake(p.left,b0-p.radius+p.ky)
-            controlPoint2:CGPointMake(x2-p.kx,b0)];
-    [path addLineToPoint:CGPointMake(x1,b0)];
-    [path addCurveToPoint:CGPointMake(p.wall,p.bottom)
-            controlPoint1:CGPointMake(x1+p.rx*p.b,b0)
-            controlPoint2:CGPointMake(p.wall,p.bottom-p.ry*p.a)];
-    [path closePath];
-    return path;
-}
-// The open drawer, exactly as FMSideNotchPath draws it.
-static FMNotchParams FMDrawerNotchParams(CGFloat w,CGFloat h,BOOL compact) {
-    CGFloat r=MIN(FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28),MIN(w*.48,h*.17));
-    CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
-    CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
-    FMNotchParams p={0,0,w,h,r,r,radius,softness,1,radius,radius*(1-(1-softness)*1.25)};
+// The drawer grows out of the docked handle as one continuous outline, a move
+// between two members of the notch family (see FMNotchParams).
+static FMNotchParams FMNotchLerp(FMNotchParams a,FMNotchParams b,CGFloat t) {
+    FMNotchParams p={FMLerp(a.left,b.left,t),FMLerp(a.top,b.top,t),FMLerp(a.wall,b.wall,t),FMLerp(a.bottom,b.bottom,t),
+        FMLerp(a.rx,b.rx,t),FMLerp(a.ryt,b.ryt,t),FMLerp(a.ryb,b.ryb,t),FMLerp(a.a,b.a,t),FMLerp(a.b,b.b,t),
+        FMLerp(a.rdx,b.rdx,t),FMLerp(a.rdy,b.rdy,t),FMLerp(a.kx,b.kx,t),FMLerp(a.ky,b.ky,t)};
     return p;
 }
-// The docked bead, as FMSideNotchPath(collapsed) draws it. size is the bead in
-// screen points; unit converts screen points into the drawer's own coordinates
-// (1 / panel scale); left and top place its outline inside the drawer.
-static FMNotchParams FMBeadNotchParams(CGSize size,CGFloat unit,CGFloat left,CGFloat top) {
-    CGRect body=FMOrbBodyRect(CGRectMake(0,0,size.width,size.height),NO,0);
-    CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
-    CGFloat capK=radius*.55228475;
-    FMNotchParams p={left,top,left+size.width*unit,top+size.height*unit,
-        (size.width-radius)*unit,shoulder*unit,radius*unit,FMOrbRootCurveFactor(),.67,capK*unit,capK*unit};
-    return p;
-}
-// Width follows the finger one to one. Height starts later (t^1.3) so the
-// first thing that appears is a round head; roundness is the "droplet size"
-// setting and only changes how early that head grows tall.
-static FMNotchParams FMNotchMorphParams(FMNotchParams bead,FMNotchParams drawer,CGFloat t,CGFloat roundness) {
+// Width follows the finger one to one. Height starts later (t^1.3) so the first
+// thing that appears is a round head. A capsule turns into the droplet within the
+// first fifth of the way, as in the wloc dock, which is where the softness
+// setting shows; from there both styles move alike. capsule and droplet are the
+// two handles around one centre (pass the droplet twice for the droplet style).
+static FMNotchParams FMNotchMorphParams(FMNotchParams capsule,FMNotchParams droplet,FMNotchParams drawer,CGFloat t) {
     t=Clamp(t,0,1);
-    CGFloat tw=t,th=pow(t,1.3/Clamp(roundness,.5,1.5));
+    FMNotchParams bead=FMNotchLerp(droplet,capsule,1-FMSmooth(t/.2));
+    CGFloat tw=t,th=pow(t,1.3);
     FMNotchParams p;
     p.left=FMLerp(bead.left,drawer.left,tw);
     p.top=FMLerp(bead.top,drawer.top,th);
     p.bottom=FMLerp(bead.bottom,drawer.bottom,th);
     p.wall=drawer.wall;
     p.rx=FMLerp(bead.rx,drawer.rx,tw);
-    p.ry=FMLerp(bead.ry,drawer.ry,th);
+    p.ryt=FMLerp(bead.ryt,drawer.ryt,th);
+    p.ryb=FMLerp(bead.ryb,drawer.ryb,th);
     p.a=FMLerp(bead.a,drawer.a,t);
     p.b=FMLerp(bead.b,drawer.b,t);
     // A corner can neither pass the start of the root flare nor leave the
-    // straight side shorter than zero; a bead rounder than the drawer corner
-    // settles down to it instead of snapping.
+    // straight side shorter than zero. Its radii grow from the handle's to the
+    // drawer's over the first 40% of the way.
     CGFloat reach=(p.wall-p.rx)-p.left;
-    CGFloat room=((p.bottom-p.ry)-(p.top+p.ry))*.5;
-    CGFloat cap=drawer.radius+MAX(0,bead.radius-drawer.radius)*(1-t);
-    p.radius=MAX(0,MIN(cap,MIN(reach,room)));
+    CGFloat room=((p.bottom-p.ryb)-(p.top+p.ryt))*.5;
+    CGFloat grow=FMSmooth(t/.4);
+    p.rdx=MAX(0,MIN(FMLerp(bead.rdx,drawer.rdx,grow),reach));
+    p.rdy=MAX(0,MIN(FMLerp(bead.rdy,drawer.rdy,grow),room));
     CGFloat blend=FMSmooth(t/.5);
-    p.kx=p.radius*FMLerp(bead.kx/MAX(bead.radius,1e-6),drawer.kx/MAX(drawer.radius,1e-6),blend);
-    p.ky=p.radius*FMLerp(bead.ky/MAX(bead.radius,1e-6),drawer.ky/MAX(drawer.radius,1e-6),blend);
+    p.kx=p.rdx*FMLerp(bead.kx/MAX(bead.rdx,1e-6),drawer.kx/MAX(drawer.rdx,1e-6),blend);
+    p.ky=p.rdy*FMLerp(bead.ky/MAX(bead.rdy,1e-6),drawer.ky/MAX(drawer.rdy,1e-6),blend);
     return p;
 }
 // The silhouette at progress t, in the drawer's own coordinates. drawer comes
 // from FMDrawerNotchParams for these same bounds (callers keep it for the whole
 // transition so a frame never reads preferences). Progress 1 is the regular
 // drawer outline so the last frame matches a normal build exactly.
-static UIBezierPath *FMDrawerMorphPath(CGRect bounds,FMNotchParams bead,FMNotchParams drawer,BOOL dockLeft,BOOL compact,CGFloat t,CGFloat roundness) {
+static UIBezierPath *FMDrawerMorphPath(CGRect bounds,FMNotchParams capsule,FMNotchParams droplet,FMNotchParams drawer,BOOL dockLeft,BOOL compact,CGFloat t) {
     if(t>=1) return FMSideNotchPath(bounds,dockLeft,compact,NO);
-    UIBezierPath *path=FMNotchFamilyPath(FMNotchMorphParams(bead,drawer,t,roundness));
+    UIBezierPath *path=FMNotchFamilyPath(FMNotchMorphParams(capsule,droplet,drawer,t));
     if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,CGRectGetWidth(bounds),0)];
     return path;
+}
+// Both handle styles laid out around one centre in the drawer's own coordinates, as a
+// capsule turns into the droplet on its way out. unit converts screen points into
+// those coordinates, pw and ph are the drawer's size, centre is where the bead sits
+// along it. The centre is held where the taller of the two frames (the droplet's)
+// still fits inside the drawer; shift is how far it had to move. NO when a handle
+// cannot fit in the drawer at all. For the droplet style bead and dropletBead are
+// the same.
+static BOOL FMPlaceHandles(FMHandleMetrics capsule,FMHandleMetrics droplet,BOOL capsuleStyle,CGFloat unit,CGFloat pw,CGFloat ph,
+                           CGFloat centre,FMNotchParams *bead,FMNotchParams *dropletBead,CGFloat *shift) {
+    CGFloat capsuleHeight=FMHandleFrameSize(capsule).height*unit,dropletHeight=FMHandleFrameSize(droplet).height*unit;
+    CGFloat tallest=MAX(capsuleHeight,dropletHeight);
+    if(droplet.reach*unit>=pw || tallest>ph) return NO;
+    CGFloat held=Clamp(centre,tallest*.5,ph-tallest*.5);
+    *dropletBead=FMHandleNotchParams(droplet,unit,pw-droplet.reach*unit,held-dropletHeight*.5);
+    *bead=capsuleStyle?FMHandleNotchParams(capsule,unit,pw-capsule.reach*unit,held-capsuleHeight*.5):*dropletBead;
+    *shift=centre-held;
+    return YES;
 }
 // Pull needed to commit opening: about a third of the travel, kept within a
 // range a thumb can judge. scale follows the bead size setting.
 static CGFloat FMDrawerCommitDistance(CGFloat travel,CGFloat scale) {
     return Clamp(travel*.35,28*scale,72*scale);
+}
+// What a drag that began on the bead is, from how far the finger has gone inward
+// (toward the screen) and along the edge since it began: neither until it has gone a few
+// points one way, so a vertical slide that merely drifts inward never starts building the
+// drawer, and a pull that wobbles sideways never moves the bead.
+enum { FMBeadPanUnclear,FMBeadPanPull,FMBeadPanMove };
+static int FMBeadPanIntent(CGFloat inward,CGFloat vertical) {
+    if(vertical>=8 && vertical>inward*1.2) return FMBeadPanMove;
+    if(inward>=6 && inward>vertical) return FMBeadPanPull;
+    return FMBeadPanUnclear;
+}
+// How far the bead must be pulled to count as opening when no drawer follows the
+// finger (Reduce Motion). scale follows the bead size setting.
+static CGFloat FMQuietPullDistance(CGFloat scale) {
+    return 40*scale;
 }
 // Release after pulling the bead: far enough, flicked inward without drifting
 // sideways, or barely moved at all (a tap that slipped into a pan).
@@ -849,6 +812,15 @@ static CGFloat FMScrubLensCenter(CGFloat y,CGFloat first,CGFloat last) {
 // Dragging this far past either side of the drawer turns letting go into a cancel.
 static BOOL FMScrubIsOutside(CGFloat x,CGFloat width) {
     return x<-44 || x>width+44;
+}
+// Sliding toward the top or bottom edge of a long list scrolls it that way, so every app
+// can be reached without letting go: nothing until the finger is within 44 pt of the edge,
+// then faster the nearer it gets, 560 pt/s at the edge itself and up to one and a half
+// times that beyond it. Negative scrolls toward the top.
+static CGFloat FMScrubScrollSpeed(CGFloat y,CGFloat top,CGFloat bottom) {
+    const CGFloat zone=44,fastest=560;
+    CGFloat above=Clamp((zone-(y-top))/zone,0,1.5),below=Clamp((zone-(bottom-y))/zone,0,1.5);
+    return fastest*(below-above);
 }
 // FMDrawerMotion:end
 static BOOL FMClearGlassEnabled(void) {
@@ -1211,6 +1183,13 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return result;
 }
 
+// The settings entry a style slider edits: bead options from tag 30, menu options from tag 40.
+static NSDictionary *FMStyleOptionForSlider(UISlider *slider) {
+    NSArray<NSDictionary *> *options=slider.tag>=40?FMMenuStyleOptions():FMOrbStyleOptions();
+    NSInteger index=slider.tag-(slider.tag>=40?40:30);
+    return index>=0 && index<(NSInteger)options.count?options[index]:nil;
+}
+
 @interface FMHitButton : UIButton
 @property(nonatomic,assign) BOOL docksLeft;
 @end
@@ -1459,20 +1438,18 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
 @implementation FMManager {
     CGPoint _panStartPoint;
     CGPoint _panOriginalCenter;
-    CGRect _panOriginalOrbFrame;
     BOOL _panOriginalLeft;
     CGFloat _panMaxInwardDist;
     CGFloat _panMaxVerticalDist;
     BOOL _panIsRepositioning;
-    BOOL _panIsDropletPull;
-    BOOL _panDropletTriggered;
+    BOOL _panIsInwardPull;
     BOOL _isPanning;
     // Bead <-> drawer morph. Progress 0 is the docked bead, 1 the open drawer;
     // a finger or a spring moves it, and every transition goes through it.
-    FMNotchParams _morphBead,_morphDrawer;
+    FMNotchParams _morphBead,_morphDroplet,_morphDrawer;
     CGPoint _morphRestCenter,_morphShift;
     CGFloat _morphProgress,_morphVelocity,_morphTarget,_morphTravel,_morphCommit;
-    CGFloat _morphBeadAlpha,_morphShadow,_morphRoundness,_morphElapsed,_panelDragStart;
+    CGFloat _morphBeadAlpha,_morphShadow,_morphElapsed,_panelDragStart;
     CGFloat _morphScale,_morphOmega,_morphZeta;
     CFTimeInterval _morphTick;
     CADisplayLink *_morphLink;
@@ -1485,7 +1462,10 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     NSArray<UIControl *> *_scrubControls;
     NSArray<NSValue *> *_scrubFrames;
     CGRect _scrubViewport;
-    CGFloat _scrubFirstMid,_scrubLastMid;
+    CGFloat _scrubFirstMid,_scrubLastMid,_scrubHalf;
+    CGPoint _scrubPoint;
+    CADisplayLink *_scrubLink;
+    CFTimeInterval _scrubScrollTick;
     NSInteger _scrubIndex;
     BOOL _scrubActive,_scrubCancelling;
     UISelectionFeedbackGenerator *_scrubTick;
@@ -1606,8 +1586,8 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
         [self draw];
     }
 }
-- (CGFloat)orbWidth { return (FMOrbStyleValue(@"orbBodyWidth")+FMOrbStyleValue(@"orbEdgeGap"))*FMOrbScale(); }
-- (CGFloat)orbHeight { return (FMOrbStyleValue(@"orbBodyHeight")+2*FMOrbStyleValue(@"orbExtension"))*FMOrbScale(); }
+- (CGFloat)orbWidth { return FMHandleFrameSize(FMOrbHandleMetrics(FMOrbHandleIsCapsule())).width; }
+- (CGFloat)orbHeight { return FMHandleFrameSize(FMOrbHandleMetrics(FMOrbHandleIsCapsule())).height; }
 - (CGRect)orbFrame {
     CGRect b=self.window.bounds;
     CGFloat w=self.orbWidth,h=self.orbHeight;
@@ -1900,7 +1880,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     [button addSubview:bead];
     UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,3*FMOrbScale(),
         MIN(18*FMOrbScale(),f.size.height*.30))];
-    line.center=CGPointMake(f.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),f.size.height*.5);
+    line.center=CGPointMake(f.size.width*.5,f.size.height*.5);
     line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
     line.layer.cornerRadius=line.bounds.size.width*.5;
     line.layer.cornerCurve=kCACornerCurveCircular;
@@ -1981,85 +1961,6 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
         [self.overlayView bringSubviewToFront:self.orb];
     }
 }
-- (void)applyDropletPath:(UIBezierPath *)path {
-    UIView *bead=[self.orb viewWithTag:9202];
-    if(!bead) return;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    bead.frame=self.orb.bounds;
-    CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
-    if([mask isKindOfClass:CAShapeLayer.class]) {
-        mask.frame=bead.bounds;
-        mask.path=path.CGPath;
-    }
-    for(CALayer *layer in bead.layer.sublayers) {
-        if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class]) {
-            layer.frame=bead.bounds;
-            ((CAShapeLayer *)layer).path=path.CGPath;
-            break;
-        }
-    }
-    CGFloat pull=MAX(0,self.orb.bounds.size.width-self.orbWidth)/.4;
-    self.orbUpdateLine.hidden=pull>.01;
-    FMLayoutOrbCapsule(bead,pull/(52*FMOrbScale()));
-    FMLayoutOrbBackdrop(self.orb,self.left,pull/(52*FMOrbScale()));
-    self.orb.layer.shadowPath=path.CGPath;
-    [CATransaction commit];
-}
-
-- (void)restoreDropletToOriginalAnimated:(BOOL)animated {
-    if(!self.orb) return;
-    CGRect targetFrame=_panOriginalOrbFrame;
-    if(CGRectIsEmpty(targetFrame) || targetFrame.size.width <= 0) targetFrame=[self orbFrame];
-    
-    UIView *bead=[self.orb viewWithTag:9202];
-    UIBezierPath *notchPath=FMSideNotchPath(CGRectMake(0,0,targetFrame.size.width,targetFrame.size.height),self.left,YES,YES);
-    CGPathRef destPath=notchPath.CGPath;
-    
-    if(!animated || UIAccessibilityIsReduceMotionEnabled()) {
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        self.orb.frame=targetFrame;
-        if(bead) bead.frame=self.orb.bounds;
-        [self applyDropletPath:notchPath];
-        self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),targetFrame.size.height*.5);
-        [CATransaction commit];
-        [self scheduleOrbFade];
-        return;
-    }
-    
-    // 给 mask, rim, shadow 做平滑形变动画
-    if(bead) {
-        CAShapeLayer *mask=(CAShapeLayer *)bead.layer.mask;
-        CAShapeLayer *rim=nil;
-        for(CALayer *l in bead.layer.sublayers) {
-            if([l.name isEqualToString:@"fm.orb.rim"] && [l isKindOfClass:CAShapeLayer.class]) {
-                rim=(CAShapeLayer *)l; break;
-            }
-        }
-        FMAnimateOrbPath(mask,@"path",destPath,YES);
-        FMAnimateOrbPath(rim,@"path",destPath,YES);
-    }
-    FMAnimateOrbPath(self.orb.layer,@"shadowPath",destPath,YES);
-    
-    UIButton *dragged=self.orb;
-    [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0.4
-        options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            dragged.frame=targetFrame;
-            if(bead) bead.frame=dragged.bounds;
-            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),targetFrame.size.height*.5);
-        } completion:^(BOOL finished){
-            if(!finished || self.orb!=dragged) return;
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            dragged.frame=targetFrame;
-            if(bead) bead.frame=dragged.bounds;
-            [self applyDropletPath:notchPath];
-            self.orbUpdateLine.center=CGPointMake(targetFrame.size.width*.5+(self.left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),targetFrame.size.height*.5);
-            [CATransaction commit];
-            [self scheduleOrbFade];
-        }];
-}
 
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
@@ -2068,17 +1969,17 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
         // lets that finish at once, so this drag starts from the docked bead.
         if(_morphActive) [self completeDrawerMorphNow];
         _isPanning=YES;
-        // With Reduce Motion the pull stays the old, quiet droplet.
+        // With Reduce Motion nothing follows the finger: a long enough pull
+        // opens the drawer once it is let go.
         _panUsesMorph=!UIAccessibilityIsReduceMotionEnabled();
         _panStartPoint=p;
         _panOriginalCenter=self.orb.center;
-        _panOriginalOrbFrame=self.orb.frame;
         _panOriginalLeft=self.left;
         _panMaxInwardDist=0;
         _panMaxVerticalDist=0;
         _panIsRepositioning=NO;
-        _panIsDropletPull=NO;
-        _panDropletTriggered=NO;
+        _panIsInwardPull=NO;
+        _morphCommitHaptic=NO;
         [self cancelOrbFade];
         self.orbFaded=NO;
         self.orb.alpha=1;
@@ -2093,22 +1994,19 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
         if(inwardDist > _panMaxInwardDist) _panMaxInwardDist = inwardDist;
         if(verticalDist > _panMaxVerticalDist) _panMaxVerticalDist = verticalDist;
         
-        // 模式判定（将向内拉出水滴与沿边缘上下滑动明确分离）：
-        if(!_panIsRepositioning && !_panIsDropletPull) {
-            if(verticalDist > 16.0 && verticalDist > inwardDist * 1.3) {
-                _panIsRepositioning = YES;
-                // The reposition branch below owns the compact moving capsule.
-            } else if(inwardDist > 0.5) {
-                _panIsDropletPull = YES;
-            }
+        // 模式判定（将向内拉出与沿边缘上下滑动明确分离）：
+        if(!_panIsRepositioning && !_panIsInwardPull) {
+            int intent=FMBeadPanIntent(inwardDist,verticalDist);
+            // The reposition branch below owns the compact moving capsule.
+            if(intent==FMBeadPanMove) _panIsRepositioning = YES;
+            else if(intent==FMBeadPanPull) _panIsInwardPull = YES;
         }
         
-        // 在向内拉出水滴过程中，若用户大幅垂直滑动，平滑切换为换位
-        if(_panIsDropletPull && !_panIsRepositioning) {
+        // 在向内拉出过程中，若用户大幅垂直滑动，平滑切换为换位
+        if(_panIsInwardPull && !_panIsRepositioning) {
             if(verticalDist > 38.0 && verticalDist > inwardDist * 1.4) {
                 _panIsRepositioning = YES;
-                _panIsDropletPull = NO;
-                _panDropletTriggered = NO;
+                _panIsInwardPull = NO;
             }
         }
         
@@ -2118,7 +2016,9 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
             [self.orb viewWithTag:9204].alpha=0;
             // === 换位模式：自由平移，毫秒级跟手 ===
             CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
-            CGFloat orbW=FMOrbStyleValue(@"orbBodyWidth")*FMOrbScale(),orbH=FMOrbStyleValue(@"orbBodyHeight")*FMOrbScale();
+            // Off the wall the handle is a free pill: the capsule outline, in either style.
+            FMHandleMetrics pill=FMOrbHandleMetrics(YES);
+            CGFloat orbW=FMHandleFrameSize(pill).width,orbH=FMHandleFrameSize(pill).height;
             UIEdgeInsets safe=self.window.safeAreaInsets;
             CGFloat minX=orbW*.5,maxX=MAX(minX,w-orbW*.5);
             CGFloat minY=MAX(60,safe.top+6)+orbH/2;
@@ -2128,22 +2028,16 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
             self.orb.bounds=CGRectMake(0,0,orbW,orbH);
             UIView *bead=[self.orb viewWithTag:9202];
             bead.frame=self.orb.bounds;
-            // Keep the raised fill aligned with the body-sized material capsule.
-            FMAnimateOrbShoulders(self.orb,self.left,1,NO);
-            for(CALayer *layer in bead.layer.sublayers) {
-                if([layer.name isEqualToString:@"fm.orb.capsule"]) {
-                    layer.frame=bead.bounds;layer.cornerRadius=0;layer.opacity=1;
-                    CAShapeLayer *mask=(CAShapeLayer *)layer.mask;
-                    mask.frame=layer.bounds;mask.path=FMOrbBodyPath(layer.bounds).CGPath;
-                } else if([layer.name isEqualToString:@"fm.orb.surface"]) layer.frame=bead.bounds;
-            }
+            FMApplyOrbOutline(self.orb,FMNotchFamilyPath(FMHandleNotchParams(pill,1,0,0)));
+            // Keep the raised fill aligned with the pill.
+            FMLayoutOrbCapsule(bead);
             self.orbUpdateLine.hidden=NO;
             self.orbUpdateLine.center=CGPointMake(orbW*.5,orbH*.5);
             [self.orb viewWithTag:9204].alpha=0;
             [CATransaction commit];
             self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
             
-        } else if(_panUsesMorph && (_morphActive || (_panIsDropletPull && [self beginDrawerDragFromBead]))) {
+        } else if(_panUsesMorph && (_morphActive || (_panIsInwardPull && [self beginDrawerDragFromBead]))) {
             // === 抽屉从微珠里长出来，内侧边与手指一比一 ===
             [self applyMorphProgress:FMRubberProgress(inwardDist/_morphTravel)];
             if(inwardDist>=_morphCommit) {
@@ -2151,52 +2045,19 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
                     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
                 _morphCommitHaptic=YES;
             } else if(inwardDist<_morphCommit*.8) _morphCommitHaptic=NO;
-        } else if(_panUsesMorph && !_panIsDropletPull) {
+        } else if(_panUsesMorph && !_panIsInwardPull) {
             // Not pulling inward yet: the bead stays exactly where it is.
         } else {
-            // The drawer could not be built for this pull: carry on as a droplet.
+            // No drawer follows the finger (Reduce Motion, or none could be built):
+            // the pull is judged when the finger lifts; passing the distance is
+            // marked once.
             _panUsesMorph=NO;
-            // === 水滴拉扯模式（饱满贝塞尔水滴张力） ===
-            CGFloat maxPull = 52.0 * FMOrbScale();
-            CGFloat pullDist = 0;
-            if(inwardDist > 0) {
-                if(inwardDist <= 28.0) {
-                    pullDist = inwardDist;
-                } else {
-                    pullDist = 28.0 + (inwardDist - 28.0) * (1.0 / (1.0 + (inwardDist - 28.0) / 48.0));
-                }
-            }
-            pullDist = Clamp(pullDist, 0, maxPull);
-            
-            CGFloat deltaY = (p.y - _panStartPoint.y) * 0.14;
-            CGFloat currentW = self.orbWidth + pullDist*.4;
-            
-            CGRect targetFrame;
-            if(_panOriginalLeft) {
-                targetFrame=CGRectMake(0, _panOriginalOrbFrame.origin.y + deltaY, currentW, self.orbHeight);
-            } else {
-                targetFrame=CGRectMake(self.window.bounds.size.width - currentW, _panOriginalOrbFrame.origin.y + deltaY, currentW, self.orbHeight);
-            }
-            
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            self.orb.frame=targetFrame;
-            
-            CGFloat headR = MIN(self.orbHeight*.20,(self.orbWidth*.5+pullDist*.025)*FMOrbStyleValue(@"orbDropletSize"));
-            CGFloat headCenterX = _panOriginalLeft ? (currentW - headR) : headR;
-            self.orbUpdateLine.center = CGPointMake(headCenterX, self.orbHeight * 0.5);
-            
-            UIBezierPath *dropPath = FMDropletPath(self.orb.bounds, _panOriginalLeft, pullDist, maxPull);
-            [self applyDropletPath:dropPath];
-            [CATransaction commit];
-            
-            // 达到拉出阈值时触发触感反馈
-            if(pullDist >= 36.0 * FMOrbScale() && !_panDropletTriggered) {
-                _panDropletTriggered = YES;
-                if(BoolPref(@"haptic", YES)) {
+            CGFloat commit=FMQuietPullDistance(FMOrbScale());
+            if(inwardDist>=commit) {
+                if(!_morphCommitHaptic && BoolPref(@"haptic",YES))
                     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-                }
-            }
+                _morphCommitHaptic=YES;
+            } else if(inwardDist<commit*.8) _morphCommitHaptic=NO;
         }
     } else if(g.state==UIGestureRecognizerStateEnded) {
         _isPanning=NO;
@@ -2244,17 +2105,9 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
             if(open) [self commitDrawerOpen];
             [self settleDrawerMorphOpen:open velocity:inwardV/_morphTravel];
         } else {
-            // === 水滴模式松手 ===
-            BOOL shouldOpen = _panDropletTriggered;
-            if(!shouldOpen && inwardV > 180.0 && finalVerticalDist < 60.0) {
-                shouldOpen = YES;
-            }
-            if(!shouldOpen && finalTotalDist < 6.0) {
-                shouldOpen = YES;
-            }
-            
-            if(shouldOpen) {
-                // 达到拉出阈值：微珠原位复位，触发呼出抽屉动画！
+            // === 没有抽屉跟手（减少动态效果，或抽屉造不出来）：按松手时的拉动距离判断 ===
+            CGFloat pulled=_panOriginalLeft?(p.x-_panStartPoint.x):(_panStartPoint.x-p.x);
+            if(FMDrawerShouldOpenAfterPull(pulled,FMQuietPullDistance(FMOrbScale()),inwardV,finalVerticalDist,finalTotalDist)) {
                 if(BoolPref(@"haptic", YES)) {
                     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
                 }
@@ -2262,15 +2115,15 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
                     [self toggle];
                 }
             } else {
-                // 未达阈值松手：高质感弹簧缩回贴边，彻底恢复尺寸与形状！
-                [self restoreDropletToOriginalAnimated:YES];
+                // 微珠没有动过，只恢复自动淡化
+                [self scheduleOrbFade];
             }
         }
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         _isPanning=NO;
         if(_panIsRepositioning) [self drawOrb];
         else if(_morphActive && _morphDragging) [self settleDrawerMorphOpen:NO velocity:0];
-        else [self restoreDropletToOriginalAnimated:NO];
+        else [self scheduleOrbFade];
     }
 }
 - (void)announceDrawerState {
@@ -2344,19 +2197,16 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     CGFloat unit=1/scale;
     CGRect rest=panel.frame,bead=orb.frame;
     CGFloat pw=CGRectGetWidth(glass.bounds),ph=CGRectGetHeight(glass.bounds);
-    CGFloat beadWidth=CGRectGetWidth(bead)*unit,beadHeight=CGRectGetHeight(bead)*unit;
-    if(beadWidth>=pw || beadHeight>ph) return NO;
     CGFloat dx=self.left?CGRectGetMinX(bead)-CGRectGetMinX(rest):CGRectGetMaxX(bead)-CGRectGetMaxX(rest);
-    CGFloat rawTop=(CGRectGetMinY(bead)-CGRectGetMinY(rest))*unit;
-    CGFloat top=Clamp(rawTop,0,ph-beadHeight);
-    _morphBead=FMBeadNotchParams(bead.size,unit,pw-beadWidth,top);
+    CGFloat shift=0;
+    if(!FMPlaceHandles(FMOrbHandleMetrics(YES),FMOrbHandleMetrics(NO),FMOrbHandleIsCapsule(),unit,pw,ph,
+                       (CGRectGetMidY(bead)-CGRectGetMinY(rest))*unit,&_morphBead,&_morphDroplet,&shift)) return NO;
     _morphScale=scale;
     _morphRestCenter=panel.center;
-    _morphShift=CGPointMake(dx,(rawTop-top)*scale);
+    _morphShift=CGPointMake(dx,shift*scale);
     _morphCompact=BoolPref(@"compactMode",NO);
     // Read the style once per transition; the preference store is a file.
     _morphDrawer=FMDrawerNotchParams(pw,ph,_morphCompact);
-    _morphRoundness=FMOrbStyleValue(@"orbDropletSize");
     _morphShadow=panel.layer.shadowOpacity;
     // The inner edge moves linearly between these two screen positions, so a
     // finger that travels this far has taken the drawer from bead to fully open.
@@ -2379,7 +2229,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     _morphProgress=raw;
     // Hold the Bezier wrapper for the whole frame: its CGPath is borrowed.
     __attribute__((objc_precise_lifetime)) UIBezierPath *outline=
-        FMDrawerMorphPath(glass.bounds,_morphBead,_morphDrawer,self.left,_morphCompact,t,_morphRoundness);
+        FMDrawerMorphPath(glass.bounds,_morphBead,_morphDroplet,_morphDrawer,self.left,_morphCompact,t);
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     clip.path=outline.CGPath;
@@ -2741,26 +2591,16 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     NSUInteger found=[self scrubRowIndexAtPoint:[g locationInView:self.appsScroll]];
     if(!glass || content==glass || found==NSNotFound || !self.isOpen || _morphActive) return;
     [glass layoutIfNeeded];
-    NSMutableArray<NSValue *> *frames=[NSMutableArray array];
-    for(UIView *row in rows) [frames addObject:[NSValue valueWithCGRect:[row convertRect:row.bounds toView:glass]]];
-    _scrubRows=rows;_scrubControls=controls;_scrubFrames=frames;
+    _scrubRows=rows;_scrubControls=controls;
     _scrubViewport=[self.appsScroll convertRect:self.appsScroll.bounds toView:glass];
     _scrubIndex=(NSInteger)found;
     _scrubCancelling=NO;_scrubActive=YES;
-    CGRect box=CGRectInset(frames[found].CGRectValue,-3,-3);
-    // The lens may only travel between the centers of the first and last row in view.
-    CGFloat first=CGFLOAT_MAX,last=-CGFLOAT_MAX;
-    for(NSValue *value in frames) {
-        CGRect frame=value.CGRectValue;
-        if(!CGRectIntersectsRect(frame,_scrubViewport)) continue;
-        first=MIN(first,CGRectGetMidY(frame));
-        last=MAX(last,CGRectGetMidY(frame));
-    }
-    CGFloat half=box.size.height*.5;
-    _scrubFirstMid=MAX(CGRectGetMinY(_scrubViewport)+half,first);
-    _scrubLastMid=MIN(CGRectGetMaxY(_scrubViewport)-half,last);
+    _scrubPoint=[g locationInView:glass];
+    CGRect box=CGRectInset([rows[found] convertRect:rows[found].bounds toView:glass],-3,-3);
+    _scrubHalf=box.size.height*.5;
+    [self scrubMeasure];
     UIView *lens=[self scrubLensWithFrame:box];
-    lens.center=CGPointMake(CGRectGetMidX(box),FMScrubLensCenter([g locationInView:glass].y,_scrubFirstMid,_scrubLastMid));
+    lens.center=CGPointMake(CGRectGetMidX(box),FMScrubLensCenter(_scrubPoint.y,_scrubFirstMid,_scrubLastMid));
     // Icon-only rows are clear, so the lens goes under them like the dock's;
     // the standard rows are cards, so there it goes over them.
     if(BoolPref(@"compactMode",NO)) [content insertSubview:lens belowSubview:self.appsScroll];
@@ -2782,18 +2622,46 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
         [_scrubTick prepare];
     }
 }
-- (void)moveScrub:(UILongPressGestureRecognizer *)g {
+// Where every row is now, and how far the lens may travel: between the centres of the
+// first and last row in view. A long list scrolls under a sliding finger, so this is
+// measured again each time.
+- (void)scrubMeasure {
     UIView *glass=[self.panel viewWithTag:9230];
-    if(!glass || !_scrubLens) return;
-    CGPoint point=[g locationInView:glass];
+    NSMutableArray<NSValue *> *frames=[NSMutableArray array];
+    CGFloat first=CGFLOAT_MAX,last=-CGFLOAT_MAX;
+    for(UIView *row in _scrubRows) {
+        CGRect frame=[row convertRect:row.bounds toView:glass];
+        [frames addObject:[NSValue valueWithCGRect:frame]];
+        if(!CGRectIntersectsRect(frame,_scrubViewport)) continue;
+        first=MIN(first,CGRectGetMidY(frame));
+        last=MAX(last,CGRectGetMidY(frame));
+    }
+    _scrubFrames=frames;
+    _scrubFirstMid=MAX(CGRectGetMinY(_scrubViewport)+_scrubHalf,first);
+    _scrubLastMid=MIN(CGRectGetMaxY(_scrubViewport)-_scrubHalf,last);
+}
+// The row under y (the lens centre), among the rows in view only: a row scrolled out of
+// sight has a frame over the header or footer, and must not be picked from there.
+- (NSInteger)scrubIndexAtLensY:(CGFloat)y {
     NSUInteger count=_scrubFrames.count;
     CGFloat tops[count+1],bottoms[count+1];
     for(NSUInteger index=0;index<count;index++) {
         CGRect frame=_scrubFrames[index].CGRectValue;
-        tops[index]=CGRectGetMinY(frame);
-        bottoms[index]=CGRectGetMaxY(frame);
+        BOOL visible=CGRectIntersectsRect(frame,_scrubViewport);
+        tops[index]=visible?CGRectGetMinY(frame):CGFLOAT_MAX;
+        bottoms[index]=visible?CGRectGetMaxY(frame):-CGFLOAT_MAX;
     }
-    NSInteger index=FMScrubIndexAtY(point.y,tops,bottoms,count,_scrubIndex);
+    return FMScrubIndexAtY(y,tops,bottoms,count,_scrubIndex);
+}
+// Puts the focus and the lens where the finger is, and on whichever row is now under the
+// lens when the list has moved beneath a finger that stayed put.
+- (void)refreshScrub {
+    UIView *glass=[self.panel viewWithTag:9230];
+    if(!glass || !_scrubLens) return;
+    [self scrubMeasure];
+    CGPoint point=_scrubPoint;
+    CGFloat lensY=FMScrubLensCenter(point.y,_scrubFirstMid,_scrubLastMid);
+    NSInteger index=[self scrubIndexAtLensY:lensY];
     BOOL outside=FMScrubIsOutside(point.x,CGRectGetWidth(glass.bounds));
     BOOL moved=index!=_scrubIndex,flipped=outside!=_scrubCancelling;
     _scrubIndex=index;
@@ -2805,7 +2673,8 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     } else if(flipped) [self updateScrubLabel];
     // The lens follows the finger on a short spring; leaving the drawer shrinks and dims it.
     UIView *lens=_scrubLens;
-    CGPoint center=CGPointMake(lens.center.x,FMScrubLensCenter(point.y,_scrubFirstMid,_scrubLastMid));
+    if(fabs(lens.center.y-lensY)<.01 && !flipped) return;
+    CGPoint center=CGPointMake(lens.center.x,lensY);
     CGAffineTransform shape=outside?CGAffineTransformMakeScale(.85,.85):CGAffineTransformIdentity;
     CGFloat alpha=outside?.45:1;
     void (^follow)(void)=^{
@@ -2820,12 +2689,54 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
             options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionAllowUserInteraction
             animations:follow completion:nil];
 }
+- (void)moveScrub:(UILongPressGestureRecognizer *)g {
+    UIView *glass=[self.panel viewWithTag:9230];
+    if(!glass || !_scrubLens) return;
+    _scrubPoint=[g locationInView:glass];
+    [self refreshScrub];
+    [self updateScrubAutoScroll];
+}
+// A finger near the top or bottom of the list keeps scrolling it, one frame at a time, for
+// as long as it stays there (or until the end of the list).
+- (void)updateScrubAutoScroll {
+    CGFloat speed=_scrubActive?FMScrubScrollSpeed(_scrubPoint.y,CGRectGetMinY(_scrubViewport),CGRectGetMaxY(_scrubViewport)):0;
+    if(speed==0) {
+        [_scrubLink invalidate];
+        _scrubLink=nil;
+        return;
+    }
+    if(_scrubLink) return;
+    _scrubScrollTick=0;
+    _scrubLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(scrubScrollFrame:)];
+    [_scrubLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+- (void)scrubScrollFrame:(CADisplayLink *)link {
+    UIScrollView *scroll=self.appsScroll;
+    CGFloat speed=_scrubActive?FMScrubScrollSpeed(_scrubPoint.y,CGRectGetMinY(_scrubViewport),CGRectGetMaxY(_scrubViewport)):0;
+    CFTimeInterval dt=_scrubScrollTick>0?MIN(link.timestamp-_scrubScrollTick,1/20.):1/60.;
+    _scrubScrollTick=link.timestamp;
+    if(!scroll || speed==0) { [self updateScrubAutoScroll]; return; }
+    CGFloat low=-scroll.adjustedContentInset.top;
+    CGFloat high=MAX(low,scroll.contentSize.height-scroll.bounds.size.height+scroll.adjustedContentInset.bottom);
+    CGFloat target=Clamp(scroll.contentOffset.y+speed*dt,low,high);
+    if(fabs(target-scroll.contentOffset.y)<.01) {
+        // At the end of the list: nothing more to scroll until the finger moves again.
+        [_scrubLink invalidate];
+        _scrubLink=nil;
+        return;
+    }
+    scroll.contentOffset=CGPointMake(scroll.contentOffset.x,target);
+    [self refreshScrub];
+}
+
 - (void)endScrubAnimated:(BOOL)animated {
     if(!_scrubActive && !_scrubLens && !_scrubLabel) return;
     UIView *lens=_scrubLens,*label=_scrubLabel;
     NSArray<UIView *> *rows=_scrubRows;
     _scrubActive=NO;_scrubCancelling=NO;
     _scrubLens=nil;_scrubLabel=nil;_scrubRows=nil;_scrubControls=nil;_scrubFrames=nil;_scrubTick=nil;
+    [_scrubLink invalidate];
+    _scrubLink=nil;
     void (^settle)(void)=^{
         for(UIView *row in rows) [row viewWithTag:9233].transform=CGAffineTransformIdentity;
     };
@@ -3630,7 +3541,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMAddOrbCapsule(glass,left);
     [body addSubview:glass];
     UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,3*FMOrbScale(),MIN(18*FMOrbScale(),h*.30))];
-    line.center=CGPointMake(w*.5+(left?1:-1)*FMOrbStyleValue(@"orbEdgeGap")*.5*FMOrbScale(),h*.5);
+    line.center=CGPointMake(w*.5,h*.5);
     line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
     line.layer.cornerRadius=line.bounds.size.width*.5;
     [glass addSubview:line];
@@ -3907,6 +3818,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     [self addRow:slider height:34 to:stack];
 }
+- (void)orbHandleStyleControl:(UIStackView *)stack {
+    UISegmentedControl *style=[[UISegmentedControl alloc] initWithItems:@[@"胶囊",@"水滴"]];
+    style.selectedSegmentIndex=FMOrbHandleIsCapsule()?0:1;
+    style.selectedSegmentTintColor=[FMAccent() colorWithAlphaComponent:.25];
+    style.accessibilityLabel=@"微珠样式";
+    [style addTarget:self action:@selector(orbHandleStyleChanged:) forControlEvents:UIControlEventValueChanged];
+    [self addRow:style height:38 to:stack];
+}
+- (void)orbHandleStyleChanged:(UISegmentedControl *)control {
+    SetPref(@"orbHandleStyle",@(control.selectedSegmentIndex));
+    // The corner slider and the note below depend on the style.
+    [self updateSettingsContent];
+}
 - (void)settingScaleControl:(UIStackView *)stack {
     UIStackView *heading=[UIStackView new];
     heading.axis=UILayoutConstraintAxisHorizontal;
@@ -3930,14 +3854,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
     [self addRow:slider height:34 to:stack];
 }
+- (void)note:(NSString *)text in:(UIStackView *)stack {
+    UILabel *description=[self label:text size:11 weight:UIFontWeightRegular];
+    description.textColor=FMThemeColor(FMColorSecondary);
+    [stack addArrangedSubview:description];
+}
 - (void)section:(NSString *)title sub:(NSString *)sub in:(UIStackView *)stack {
     UILabel *heading=[self label:title size:14 weight:UIFontWeightSemibold];
     [stack addArrangedSubview:heading];
-    if(sub.length) {
-        UILabel *description=[self label:sub size:11 weight:UIFontWeightRegular];
-        description.textColor=FMThemeColor(FMColorSecondary);
-        [stack addArrangedSubview:description];
-    }
+    if(sub.length) [self note:sub in:stack];
 }
 - (void)settingsPage:(UIStackView*)s {
     [self section:@"显示布局" sub:nil in:s];
@@ -4055,19 +3980,26 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self.settingsNavigation pushViewController:[[FMSettingsSectionController alloc] initWithSection:@"dimensions"] animated:YES];
 }
 - (void)dimensionsPage:(UIStackView *)s {
-    [self section:@"微珠胶囊" sub:@"尺寸随微珠缩放，保留当前已保存的参数。" in:s];
+    [self section:@"微珠" sub:@"选择收起时的样子；尺寸随微珠缩放。" in:s];
     [self orbScaleControl:s];
-    NSInteger tag=30;
-    for(NSDictionary *option in FMOrbStyleOptions()) {
+    [self orbHandleStyleControl:s];
+    NSArray<NSDictionary *> *orbOptions=FMOrbStyleOptions();
+    for(NSUInteger index=0;index<orbOptions.count;index++) {
+        NSDictionary *option=orbOptions[index];
+        // Only the capsule has a corner setting.
+        if([option[@"key"] isEqualToString:@"orbCapsuleCorner"] && !FMOrbHandleIsCapsule()) continue;
         [self settingSlider:s title:option[@"title"] key:option[@"key"]
             min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
-            def:[option[@"default"] floatValue] tag:tag++];
+            def:[option[@"default"] floatValue] tag:30+(NSInteger)index];
+        if([option[@"key"] isEqualToString:@"orbSoftness"]) [self note:FMOrbHandleIsCapsule()?
+            @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
+            @"柔和度越大，微珠和屏幕边缘连得越平缓。" in:s];
     }
     [self appendResetRow:s title:@"恢复微珠默认值" action:@selector(resetOrbDimensions)];
     [self spacer:s size:16];
     [self section:@"展开菜单" sub:@"形状尺寸随菜单缩放；两种模式分别调整图标大小，点击区域保持不变。" in:s];
     [self settingScaleControl:s];
-    tag=40;
+    NSInteger tag=40;
     for(NSDictionary *option in FMMenuStyleOptions()) {
         [self settingSlider:s title:option[@"title"] key:option[@"key"]
             min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
@@ -4078,7 +4010,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)resetOrbDimensions {
     for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
-    SetPref(@"orbScale",@1);
+    SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@1);
     [self updateSettingsContent];[self refreshOrbPreview];[self draw];
 }
 - (void)resetMenuDimensions {
@@ -4122,7 +4054,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     bead.frame=CGRectMake(host.bounds.size.width-self.orbWidth*orbScale,centerY-self.orbHeight*orbScale*.5,self.orbWidth*orbScale,self.orbHeight*orbScale);
     [host addSubview:bead];
     for(NSNumber *right in @[@NO,@YES]) {
-        UILabel *label=[self label:right.boolValue?@"微珠胶囊":@"展开菜单" size:11 weight:UIFontWeightMedium];
+        UILabel *label=[self label:right.boolValue?@"微珠":@"展开菜单" size:11 weight:UIFontWeightMedium];
         label.textColor=FMThemeColor(FMColorSecondary);
         label.textAlignment=right.boolValue?NSTextAlignmentRight:NSTextAlignmentLeft;
         label.frame=CGRectMake(right.boolValue?host.bounds.size.width-116:14,4,102,20);
@@ -4502,10 +4434,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
 }
 - (void)updateOrbStyleLabel:(UISlider *)slider {
-    NSArray *options=slider.tag>=40?FMMenuStyleOptions():FMOrbStyleOptions();
-    NSInteger index=slider.tag-(slider.tag>=40?40:30);
-    if(index<0 || index>=(NSInteger)options.count) return;
-    NSDictionary *option=options[index];
+    NSDictionary *option=FMStyleOptionForSlider(slider);
+    if(!option) return;
     NSString *unit=option[@"unit"];
     CGFloat value=slider.value*([unit isEqualToString:@"%"]?100:1);
     NSString *number=[unit isEqualToString:@"秒"]?[NSString stringWithFormat:@"%.2f",value]:
@@ -4521,6 +4451,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         slider.tag==12?[@"appAlpha." stringByAppendingString:GuestID()]:nil;
     if(slider.tag>=30 && slider.tag<45) {
         key=objc_getAssociatedObject(slider,@selector(sliderFinished:));
+        // The handle sliders move in the wloc dock's steps (1 pt, 2 pt, 1 %, 5 %).
+        CGFloat step=[FMStyleOptionForSlider(slider)[@"step"] doubleValue];
+        if(step>0) slider.value=round(slider.value/step)*step;
         [self updateOrbStyleLabel:slider];
     }
     if(!key) return;
@@ -4632,7 +4565,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)resetStyle {
     for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
     for(NSDictionary *option in FMMenuStyleOptions()) SetPref(option[@"key"],option[@"default"]);
-    SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));
+    SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));SetPref(@"orbHandleStyle",@0);
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"recentAppsFirst",@NO);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
