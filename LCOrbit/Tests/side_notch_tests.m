@@ -493,22 +493,77 @@ int main(void) { @autoreleasepool {
     }
     {
         CGFloat x=.2,v=1.5;
-        FMSpringStep(&x,&v,1,22,.3);
+        FMSpringStep(&x,&v,1,22,1,.3);
         Expect(fabs(x-.9923411279486054)<1e-12 && fabs(v-.14659325972616105)<1e-12,"spring step matches the closed form");
         CGFloat stepped=.2,steppedSpeed=1.5;
-        for(int i=0;i<18;i++) FMSpringStep(&stepped,&steppedSpeed,1,22,.3/18);
+        for(int i=0;i<18;i++) FMSpringStep(&stepped,&steppedSpeed,1,22,1,.3/18);
         Expect(fabs(stepped-x)<1e-12 && fabs(steppedSpeed-v)<1e-12,"spring result does not depend on the frame rate");
         CGFloat down=1,downSpeed=-3;
-        FMSpringStep(&down,&downSpeed,0,22,1/60.);
+        FMSpringStep(&down,&downSpeed,0,22,1,1/60.);
         Expect(fabs(down-.9125034831138147)<1e-12 && fabs(downSpeed+6.907304846861534)<1e-12,"spring step toward zero matches the closed form");
         CGFloat rest=0,restSpeed=0;BOOL below=YES;double reached=-1;
         for(int i=1;i<=1200;i++) {
-            FMSpringStep(&rest,&restSpeed,1,22,1/240.);
+            FMSpringStep(&rest,&restSpeed,1,22,1,1/240.);
             if(rest>1+1e-12) below=NO;
             if(reached<0 && rest>=.99) reached=i/240.;
         }
         Expect(below && fabs(rest-1)<1e-9,"a spring released from rest never passes its target");
         Expect(reached>=.2 && reached<=.4,"the settle reaches ninety-nine percent in a restrained 200-400 ms");
+    }
+    // The springy settle (opening: response .46 s, damping .68) and its rubber band.
+    {
+        const CGFloat omega=2*M_PI/.46;
+        CGFloat x=0,v=0;
+        FMSpringStep(&x,&v,1,omega,.68,.1);
+        Expect(fabs(x-0.47849774499393627)<1e-12 && fabs(v-6.1982454522070025)<1e-12,"underdamped spring from rest matches the closed form");
+        x=.4;v=3;
+        FMSpringStep(&x,&v,1,omega,.68,1/60.);
+        Expect(fabs(x-0.45663117345130944)<1e-12 && fabs(v-3.7288013745026234)<1e-12,"underdamped spring with initial speed matches the closed form");
+        x=1.04;v=0;
+        FMSpringStep(&x,&v,1,omega,.68,.2);
+        Expect(fabs(x-1.0026418800853087)<1e-12 && fabs(v+0.1055838249155618)<1e-12,"underdamped spring released past the target matches the closed form");
+        CGFloat stepped=.4,steppedSpeed=3;
+        FMSpringStep(&stepped,&steppedSpeed,1,omega,.68,.3);
+        CGFloat fine=.4,fineSpeed=3;
+        for(int i=0;i<18;i++) FMSpringStep(&fine,&fineSpeed,1,omega,.68,.3/18);
+        Expect(fabs(stepped-fine)<1e-12 && fabs(steppedSpeed-fineSpeed)<1e-12,"underdamped result does not depend on the frame rate");
+        // Overshoot is visible, near the textbook exp(-pi*zeta/sqrt(1-zeta^2)), and rings down.
+        x=0;v=0;
+        double peak=0,arrived=-1;
+        for(int i=1;i<=2400;i++) {
+            FMSpringStep(&x,&v,1,omega,.68,1/240.);
+            peak=fmax(peak,x-1);
+            if(arrived<0 && fabs(x-1)<.004 && fabs(v)<.15) arrived=i/240.;
+        }
+        double theory=exp(-M_PI*.68/sqrt(1-.68*.68));
+        Expect(fabs(peak-theory)<.001 && peak>.045 && peak<.065,"opening overshoots by about five percent");
+        Expect(arrived>=.4 && arrived<=.6,"the bounce has died down to a point within about half a second");
+        // Closing is firmer and reaches the bead quickly.
+        x=1;v=0;
+        double reached=-1;
+        for(int i=1;i<=2400 && reached<0;i++) {
+            FMSpringStep(&x,&v,0,2*M_PI/.40,.82,1/240.);
+            if(x<=.0015) reached=i/240.;
+        }
+        Expect(reached>=.2 && reached<=.4,"closing reaches the bead in a quarter to a third of a second");
+        // Near critical damping the two branches agree.
+        CGFloat a=.2,av=1.5,c=.2,cv=1.5;
+        FMSpringStep(&a,&av,1,22,.998,.1);
+        FMSpringStep(&c,&cv,1,22,1,.1);
+        Expect(fabs(a-c)<2e-3 && fabs(av-cv)<1e-2,"damping just under the critical branch is continuous with it");
+        // Rubber band: slope one at the start, monotone, never past the limit.
+        Expect(fabs(FMRubberBand(.3,.06)-.05)<1e-12 && FMRubberBand(-1,.06)==0,"rubber band closed form and no pull inside the limit");
+        Expect(fabs(FMRubberBand(1e-4,.06)/1e-4-1)<.01,"rubber band starts with the finger one to one");
+        BOOL monotone=YES,bounded=YES;CGFloat before=0;
+        for(int i=1;i<=400;i++) {
+            CGFloat band=FMRubberBand(i*.01,.06);
+            if(band<=before) monotone=NO;
+            if(band>=.06) bounded=NO;
+            before=band;
+        }
+        Expect(monotone && bounded,"rubber band always increases and never reaches its limit");
+        Expect(FMRubberProgress(-.2)==-.2 && FMRubberProgress(.5)==.5 && FMRubberProgress(1)==1,"progress inside zero to one is untouched");
+        Expect(fabs(FMRubberProgress(1.3)-1.05)<1e-12 && fabs(FMRubberProgress(2)-1.0566037735849056)<1e-12,"progress past one stretches against resistance");
     }
     const char *preview=getenv("FM_GEOMETRY_PREVIEW");
     if(preview) {
