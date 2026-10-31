@@ -676,6 +676,127 @@ static void FMAnimateOrbShoulders(UIButton *button,BOOL left,CGFloat opened,BOOL
     FMAnimateOrbPath(rim,@"path",destination,animated);
     FMAnimateOrbPath(button.layer,@"shadowPath",destination,animated);
 }
+// FMDrawerMotion:begin
+// The drawer grows out of the docked bead as one continuous outline. Bead and
+// drawer are two members of the same nine-element family (M C L C L C L C Z),
+// so a frame in between moves a handful of parameters instead of blending
+// Bezier controls, which would bulge the shoulders. Values describe a
+// right-hand dock; callers mirror the finished path for a left dock.
+typedef struct {
+    CGFloat left,top,wall,bottom; // inner edge, top, docking wall, bottom
+    CGFloat rx,ry;                // horizontal / vertical size of the root flare
+    CGFloat radius;               // inner corner radius
+    CGFloat a,b;                  // flare handle ratios (vertical / horizontal)
+    CGFloat kx,ky;                // inner corner handle lengths
+} FMNotchParams;
+static inline CGFloat FMLerp(CGFloat from,CGFloat to,CGFloat t) { return from+(to-from)*t; }
+static inline CGFloat FMSmooth(CGFloat x) { x=Clamp(x,0,1); return x*x*(3-2*x); }
+static UIBezierPath *FMNotchFamilyPath(FMNotchParams p) {
+    CGFloat x1=p.wall-p.rx,x2=p.left+p.radius;
+    CGFloat t0=p.top+p.ry,b0=p.bottom-p.ry;
+    UIBezierPath *path=[UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(p.wall,p.top)];
+    [path addCurveToPoint:CGPointMake(x1,t0)
+            controlPoint1:CGPointMake(p.wall,p.top+p.ry*p.a)
+            controlPoint2:CGPointMake(x1+p.rx*p.b,t0)];
+    [path addLineToPoint:CGPointMake(x2,t0)];
+    [path addCurveToPoint:CGPointMake(p.left,t0+p.radius)
+            controlPoint1:CGPointMake(x2-p.kx,t0)
+            controlPoint2:CGPointMake(p.left,t0+p.radius-p.ky)];
+    [path addLineToPoint:CGPointMake(p.left,b0-p.radius)];
+    [path addCurveToPoint:CGPointMake(x2,b0)
+            controlPoint1:CGPointMake(p.left,b0-p.radius+p.ky)
+            controlPoint2:CGPointMake(x2-p.kx,b0)];
+    [path addLineToPoint:CGPointMake(x1,b0)];
+    [path addCurveToPoint:CGPointMake(p.wall,p.bottom)
+            controlPoint1:CGPointMake(x1+p.rx*p.b,b0)
+            controlPoint2:CGPointMake(p.wall,p.bottom-p.ry*p.a)];
+    [path closePath];
+    return path;
+}
+// The open drawer, exactly as FMSideNotchPath draws it.
+static FMNotchParams FMDrawerNotchParams(CGFloat w,CGFloat h,BOOL compact) {
+    CGFloat r=MIN(FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28),MIN(w*.48,h*.17));
+    CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
+    CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
+    FMNotchParams p={0,0,w,h,r,r,radius,softness,1,radius,radius*(1-(1-softness)*1.25)};
+    return p;
+}
+// The docked bead, as FMSideNotchPath(collapsed) draws it. size is the bead in
+// screen points; unit converts screen points into the drawer's own coordinates
+// (1 / panel scale); left and top place its outline inside the drawer.
+static FMNotchParams FMBeadNotchParams(CGSize size,CGFloat unit,CGFloat left,CGFloat top) {
+    CGRect body=FMOrbBodyRect(CGRectMake(0,0,size.width,size.height),NO,0);
+    CGFloat shoulder=body.origin.y,radius=MIN(body.size.width,body.size.height)*.5;
+    CGFloat capK=radius*.55228475;
+    FMNotchParams p={left,top,left+size.width*unit,top+size.height*unit,
+        (size.width-radius)*unit,shoulder*unit,radius*unit,FMOrbRootCurveFactor(),.67,capK*unit,capK*unit};
+    return p;
+}
+// Width follows the finger one to one. Height starts later (t^1.3) so the
+// first thing that appears is a round head; roundness is the "droplet size"
+// setting and only changes how early that head grows tall.
+static FMNotchParams FMNotchMorphParams(FMNotchParams bead,FMNotchParams drawer,CGFloat t,CGFloat roundness) {
+    t=Clamp(t,0,1);
+    CGFloat tw=t,th=pow(t,1.3/Clamp(roundness,.5,1.5));
+    FMNotchParams p;
+    p.left=FMLerp(bead.left,drawer.left,tw);
+    p.top=FMLerp(bead.top,drawer.top,th);
+    p.bottom=FMLerp(bead.bottom,drawer.bottom,th);
+    p.wall=drawer.wall;
+    p.rx=FMLerp(bead.rx,drawer.rx,tw);
+    p.ry=FMLerp(bead.ry,drawer.ry,th);
+    p.a=FMLerp(bead.a,drawer.a,t);
+    p.b=FMLerp(bead.b,drawer.b,t);
+    // A corner can neither pass the start of the root flare nor leave the
+    // straight side shorter than zero; a bead rounder than the drawer corner
+    // settles down to it instead of snapping.
+    CGFloat reach=(p.wall-p.rx)-p.left;
+    CGFloat room=((p.bottom-p.ry)-(p.top+p.ry))*.5;
+    CGFloat cap=drawer.radius+MAX(0,bead.radius-drawer.radius)*(1-t);
+    p.radius=MAX(0,MIN(cap,MIN(reach,room)));
+    CGFloat blend=FMSmooth(t/.5);
+    p.kx=p.radius*FMLerp(bead.kx/MAX(bead.radius,1e-6),drawer.kx/MAX(drawer.radius,1e-6),blend);
+    p.ky=p.radius*FMLerp(bead.ky/MAX(bead.radius,1e-6),drawer.ky/MAX(drawer.radius,1e-6),blend);
+    return p;
+}
+// The silhouette at progress t, in the drawer's own coordinates. drawer comes
+// from FMDrawerNotchParams for these same bounds (callers keep it for the whole
+// transition so a frame never reads preferences). Progress 1 is the regular
+// drawer outline so the last frame matches a normal build exactly.
+static UIBezierPath *FMDrawerMorphPath(CGRect bounds,FMNotchParams bead,FMNotchParams drawer,BOOL dockLeft,BOOL compact,CGFloat t,CGFloat roundness) {
+    if(t>=1) return FMSideNotchPath(bounds,dockLeft,compact,NO);
+    UIBezierPath *path=FMNotchFamilyPath(FMNotchMorphParams(bead,drawer,t,roundness));
+    if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,CGRectGetWidth(bounds),0)];
+    return path;
+}
+// Pull needed to commit opening: about a third of the travel, kept within a
+// range a thumb can judge. scale follows the bead size setting.
+static CGFloat FMDrawerCommitDistance(CGFloat travel,CGFloat scale) {
+    return Clamp(travel*.35,28*scale,72*scale);
+}
+// Release after pulling the bead: far enough, flicked inward without drifting
+// sideways, or barely moved at all (a tap that slipped into a pan).
+static BOOL FMDrawerShouldOpenAfterPull(CGFloat pull,CGFloat commit,CGFloat inwardVelocity,CGFloat vertical,CGFloat total) {
+    return pull>=commit || (inwardVelocity>180 && vertical<60) || total<6;
+}
+// Release after dragging the open drawer toward its edge. A fast flick
+// decides alone; otherwise the progress it would reach in 0.12 s must fall
+// below 0.62. progress is 1 when fully open, travel in screen points.
+static BOOL FMDrawerShouldCloseAfterDrag(CGFloat progress,CGFloat outwardVelocity,CGFloat travel) {
+    if(outwardVelocity>450) return YES;
+    if(outwardVelocity<-450) return NO;
+    return progress-outwardVelocity*.12/MAX(travel,1)<.62;
+}
+// Critically damped spring advanced by exactly dt seconds. It is the closed
+// form, so the result does not depend on the frame rate, and it cannot swing
+// past the target unless released with speed toward it.
+static void FMSpringStep(CGFloat *x,CGFloat *v,CGFloat target,CGFloat omega,CGFloat dt) {
+    CGFloat u=*x-target,c=*v+omega*u,decay=exp(-omega*dt);
+    *x=target+(u+c*dt)*decay;
+    *v=(*v-omega*c*dt)*decay;
+}
+// FMDrawerMotion:end
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
     return NO;
@@ -1142,7 +1263,7 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
 static id FMOrientationObserver=nil;
 static id FMLayoutChangeObserver=nil;
 
-@interface FMManager : NSObject <UIScrollViewDelegate>
+@interface FMManager : NSObject <UIScrollViewDelegate,UIGestureRecognizerDelegate>
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) UIView *overlayView;
 @property(nonatomic,strong) LCOrbitContext *orbitContext;
@@ -1233,6 +1354,16 @@ static id FMLayoutChangeObserver=nil;
     BOOL _panIsDropletPull;
     BOOL _panDropletTriggered;
     BOOL _isPanning;
+    // Bead <-> drawer morph. Progress 0 is the docked bead, 1 the open drawer;
+    // a finger or a spring moves it, and every transition goes through it.
+    FMNotchParams _morphBead,_morphDrawer;
+    CGPoint _morphRestCenter,_morphShift;
+    CGFloat _morphProgress,_morphVelocity,_morphTarget,_morphTravel,_morphCommit;
+    CGFloat _morphBeadAlpha,_morphShadow,_morphRoundness,_morphElapsed,_panelDragStart;
+    CFTimeInterval _morphTick;
+    CADisplayLink *_morphLink;
+    BOOL _morphCompact,_morphActive,_morphDragging,_morphOpening,_morphFromBead;
+    BOOL _morphCommitHaptic,_drawDeferred,_panUsesMorph,_panelDragLive;
 }
 + (instancetype)shared {
     static FMManager *m;
@@ -1439,6 +1570,7 @@ static id FMLayoutChangeObserver=nil;
     // native drawer. Give only the host drawer a light readability backing.
     if(strong && FMHostUI()) {
         UIView *backing=[[UIView alloc] initWithFrame:material.contentView.bounds];
+        backing.tag=9231; // Material backing, not content: the drawer morph leaves it alone.
         backing.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         backing.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:
             clear?.42:.26];
@@ -1448,6 +1580,7 @@ static id FMLayoutChangeObserver=nil;
     if(!nativeGlass) {
         // Only older iOS receives the limited compatibility approximation.
         UIView *scrim=[[UIView alloc] initWithFrame:surface.bounds];
+        scrim.tag=9231;
         scrim.backgroundColor=[FMThemeColor(FMColorGlass) colorWithAlphaComponent:
             strong?(FMMenuDark()?.25:.34):.10];
         scrim.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
@@ -1503,6 +1636,9 @@ static id FMLayoutChangeObserver=nil;
     // Closing a running task refreshes this panel. Both the compact icon list
     // and the normal app rows must retain their shared scroll position.
     [self captureAppsScroll];
+    // Whatever was animating this panel ends with it.
+    [self endDrawerMorph];
+    _drawDeferred=NO;
     self.morphGeneration++;
     self.appsHeaderGlass=nil;
     self.appsHeaderTiles=nil;
@@ -1590,14 +1726,14 @@ static id FMLayoutChangeObserver=nil;
     self.orbFadeTimer=nil;
 }
 - (void)fadeOrb {
-    if(self.isOpen || !self.orb || self.orbFaded || self.orbUpdateAvailable) return;
+    if(_morphActive || self.isOpen || !self.orb || self.orbFaded || self.orbUpdateAvailable) return;
     self.orbFaded=YES;
     [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
         self.orb.alpha=0.22;
     } completion:nil];
 }
 - (void)wakeOrb {
-    if(!self.orb || self.isOpen) return;
+    if(!self.orb || self.isOpen || _morphActive) return;
     [self cancelOrbFade];
     if(self.orbFaded || self.orb.alpha < (self.orbNormalAlpha?:0.72) - 0.05) {
         self.orbFaded=NO;
@@ -1611,7 +1747,7 @@ static id FMLayoutChangeObserver=nil;
 }
 
 - (void)drawOrb {
-    if(_isPanning) return;
+    if(_isPanning || _morphActive) return;
     [self cancelOrbFade];
     for(UIView *sub in [self.overlayView.subviews copy]) {
         if([sub isKindOfClass:[FMHitButton class]] || sub.tag==9200 || sub==self.orb) {
@@ -1692,7 +1828,12 @@ static id FMLayoutChangeObserver=nil;
     [self openSettings];
 }
 - (void)draw {
-    if(_isPanning || !self.window) return;
+    if(!self.window) return;
+    // A scene detached mid-flight leaves a morph with no drawer to animate.
+    if(_morphActive && !self.panel) [self endDrawerMorph];
+    // A drag or settle owns the bead and the drawer; redraw when it is done.
+    if(_morphActive) { _drawDeferred=YES; return; }
+    if(_isPanning) return;
     if(self.settingsWindow) { [self updateSettingsContent]; return; }
     BOOL visible=[LCOrbitMultitask shouldShowFloatingMenu];
     [self.orbitContext.overlays setModule:@"FloatingMenu" visible:visible];
@@ -1797,7 +1938,12 @@ static id FMLayoutChangeObserver=nil;
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
     if(g.state==UIGestureRecognizerStateBegan) {
+        // Grabbing the bead again while a let-go pull is still springing back
+        // lets that finish at once, so this drag starts from the docked bead.
+        if(_morphActive) [self completeDrawerMorphNow];
         _isPanning=YES;
+        // With Reduce Motion the pull stays the old, quiet droplet.
+        _panUsesMorph=!UIAccessibilityIsReduceMotionEnabled();
         _panStartPoint=p;
         _panOriginalCenter=self.orb.center;
         _panOriginalOrbFrame=self.orb.frame;
@@ -1841,6 +1987,8 @@ static id FMLayoutChangeObserver=nil;
         }
         
         if(_panIsRepositioning) {
+            // A pull that turned into a slide drops the drawer it had started.
+            if(_morphActive) [self abortDrawerMorph];
             [self.orb viewWithTag:9204].alpha=0;
             // === 换位模式：自由平移，毫秒级跟手 ===
             CGFloat w=self.window.bounds.size.width,h=self.window.bounds.size.height;
@@ -1869,7 +2017,19 @@ static id FMLayoutChangeObserver=nil;
             [CATransaction commit];
             self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
             
+        } else if(_panUsesMorph && (_morphActive || (_panIsDropletPull && [self beginDrawerDragFromBead]))) {
+            // === 抽屉从微珠里长出来，内侧边与手指一比一 ===
+            [self applyMorphProgress:inwardDist/_morphTravel];
+            if(inwardDist>=_morphCommit) {
+                if(!_morphCommitHaptic && BoolPref(@"haptic",YES))
+                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+                _morphCommitHaptic=YES;
+            } else if(inwardDist<_morphCommit*.8) _morphCommitHaptic=NO;
+        } else if(_panUsesMorph && !_panIsDropletPull) {
+            // Not pulling inward yet: the bead stays exactly where it is.
         } else {
+            // The drawer could not be built for this pull: carry on as a droplet.
+            _panUsesMorph=NO;
             // === 水滴拉扯模式（饱满贝塞尔水滴张力） ===
             CGFloat maxPull = 52.0 * FMOrbScale();
             CGFloat pullDist = 0;
@@ -1951,6 +2111,12 @@ static id FMLayoutChangeObserver=nil;
                             completion:^(BOOL done){[capsule removeFromSuperview];}];
                     }];
             }
+        } else if(_morphActive && _morphDragging) {
+            // === 抽屉跟手松开：拉得够远、或甩得够快就展开，否则收回 ===
+            CGFloat pulled=_panOriginalLeft?(p.x-_panStartPoint.x):(_panStartPoint.x-p.x);
+            BOOL open=FMDrawerShouldOpenAfterPull(pulled,_morphCommit,inwardV,finalVerticalDist,finalTotalDist);
+            if(open) [self commitDrawerOpen];
+            [self settleDrawerMorphOpen:open velocity:inwardV/_morphTravel];
         } else {
             // === 水滴模式松手 ===
             BOOL shouldOpen = _panDropletTriggered;
@@ -1977,10 +2143,36 @@ static id FMLayoutChangeObserver=nil;
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         _isPanning=NO;
         if(_panIsRepositioning) [self drawOrb];
+        else if(_morphActive && _morphDragging) [self settleDrawerMorphOpen:NO velocity:0];
         else [self restoreDropletToOriginalAnimated:NO];
     }
 }
+- (void)announceDrawerState {
+    FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
+    [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
+                          payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
+    if(BoolPref(@"haptic",YES)) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    }
+}
+// A pull that was let go far enough: the state flips now, the spring finishes.
+// The fading bead must not be grabbable again while the drawer comes out (the
+// gesture that pulled it has already ended, so this cannot cancel it).
+- (void)commitDrawerOpen {
+    self.isOpen=YES;
+    self.orb.userInteractionEnabled=NO;
+    [self announceDrawerState];
+}
+- (void)commitDrawerClose {
+    [self persistAppsScroll];
+    self.isOpen=NO;
+    [self announceDrawerState];
+    self.orbFaded=NO;
+    [self scheduleOrbFade];
+}
 - (void)toggle {
+    // A drag or settle already owns the drawer; its release decides the state.
+    if(_morphActive) return;
     BOOL opening=!self.isOpen;
     if(opening) {
         [self cancelOrbFade];
@@ -1993,12 +2185,7 @@ static id FMLayoutChangeObserver=nil;
         self.apps=InstalledApps();
         [self rememberCurrentApp];
     }
-    FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
-    [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
-                          payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
-    if(BoolPref(@"haptic",YES)) {
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-    }
+    [self announceDrawerState];
     if(!opening) {
         self.orbFaded=NO;
         self.orb.alpha=self.orbNormalAlpha?:0.72;
@@ -2006,45 +2193,231 @@ static id FMLayoutChangeObserver=nil;
     }
     if(opening) {
         [self draw];
-        if(self.panel && self.orb && !UIAccessibilityIsReduceMotionEnabled()) {
-            UIView *drawer=self.panel;
-            UIButton *bead=self.orb;
-            CGPoint destination=drawer.center;
-            NSUInteger generation=++self.morphGeneration;
-            CGFloat travel=CGRectGetWidth(drawer.frame)+
-                (self.left?self.window.safeAreaInsets.left:self.window.safeAreaInsets.right)+1;
-            drawer.center=CGPointMake(destination.x+(self.left?-travel:travel),destination.y);
-            drawer.userInteractionEnabled=NO;
-            bead.alpha=0;
-            self.dismissLayer.alpha=0;
-            [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.86
-                initialSpringVelocity:.3 options:UIViewAnimationOptionBeginFromCurrentState
-                animations:^{
-                    drawer.center=destination;
-                    self.dismissLayer.alpha=1;
-                } completion:^(BOOL done) {
-                    if(self.panel==drawer && generation==self.morphGeneration) {
-                        drawer.userInteractionEnabled=YES;
-                    }
-                }];
-        }
-    } else if(self.panel && self.orb && !UIAccessibilityIsReduceMotionEnabled()) {
-        UIView *drawer=self.panel;
-        CGFloat travel=CGRectGetWidth(drawer.bounds)*drawer.transform.a+1;
-        CGPoint destination=CGPointMake(self.left?-travel*.5:self.window.bounds.size.width+travel*.5,
-                                       drawer.center.y);
-        NSUInteger generation=++self.morphGeneration;
-        drawer.userInteractionEnabled=NO;
-        self.dismissLayer.userInteractionEnabled=NO;
-        [UIView animateWithDuration:.24 delay:0 options:
-            UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionCurveEaseInOut
-            animations:^{
-                drawer.center=destination;
-                self.dismissLayer.alpha=0;
-            } completion:^(BOOL done) {
-                if(generation==self.morphGeneration && self.panel==drawer) [self draw];
-            }];
+        if(self.panel && self.orb) [self morphDrawerOpen:YES];
+    } else if(self.panel && self.orb) {
+        [self morphDrawerOpen:NO];
     } else [self draw];
+}
+
+// ---------------------------------------------------------------------------
+// Bead <-> drawer morph. The drawer is one glass shell whose outline grows out
+// of the docked bead. A finger sets the progress directly while dragging; a
+// critically damped spring finishes it after release or a tap. With Reduce
+// Motion the drawer simply appears and disappears.
+
+// Reads the resting geometry of the freshly built drawer and the docked bead.
+// The drawer is slid toward the screen edge by the gap between the two walls
+// (landscape safe area) and along its height so the bead lies inside it.
+- (BOOL)prepareDrawerMorph {
+    UIView *panel=self.panel,*glass=[panel viewWithTag:9230],*orb=self.orb;
+    CAShapeLayer *clip=(CAShapeLayer *)glass.layer.mask;
+    if(!panel || !orb || !self.window || ![clip isKindOfClass:CAShapeLayer.class]) return NO;
+    CGFloat scale=panel.transform.a;
+    if(!isfinite(scale) || scale<=0) return NO;
+    CGFloat unit=1/scale;
+    CGRect rest=panel.frame,bead=orb.frame;
+    CGFloat pw=CGRectGetWidth(glass.bounds),ph=CGRectGetHeight(glass.bounds);
+    CGFloat beadWidth=CGRectGetWidth(bead)*unit,beadHeight=CGRectGetHeight(bead)*unit;
+    if(beadWidth>=pw || beadHeight>ph) return NO;
+    CGFloat dx=self.left?CGRectGetMinX(bead)-CGRectGetMinX(rest):CGRectGetMaxX(bead)-CGRectGetMaxX(rest);
+    CGFloat rawTop=(CGRectGetMinY(bead)-CGRectGetMinY(rest))*unit;
+    CGFloat top=Clamp(rawTop,0,ph-beadHeight);
+    _morphBead=FMBeadNotchParams(bead.size,unit,pw-beadWidth,top);
+    _morphRestCenter=panel.center;
+    _morphShift=CGPointMake(dx,(rawTop-top)*scale);
+    _morphCompact=BoolPref(@"compactMode",NO);
+    // Read the style once per transition; the preference store is a file.
+    _morphDrawer=FMDrawerNotchParams(pw,ph,_morphCompact);
+    _morphRoundness=FMOrbStyleValue(@"orbDropletSize");
+    _morphShadow=panel.layer.shadowOpacity;
+    // The inner edge moves linearly between these two screen positions, so a
+    // finger that travels this far has taken the drawer from bead to fully open.
+    _morphTravel=MAX(1,self.left?CGRectGetMaxX(rest)-CGRectGetMaxX(bead):CGRectGetMinX(bead)-CGRectGetMinX(rest));
+    // A large bead on a narrow drawer must still be able to reach the commit line.
+    _morphCommit=MIN(FMDrawerCommitDistance(_morphTravel,FMOrbScale()),_morphTravel*.8);
+    _morphCommitHaptic=NO;
+    _morphBeadAlpha=self.orbUpdateAvailable?1:(self.orbNormalAlpha?:.72);
+    return YES;
+}
+// One frame of the morph. Everything that changes with progress is set here,
+// so a drag, a settle and the first and last frames cannot disagree.
+- (void)applyMorphProgress:(CGFloat)progress {
+    UIView *panel=self.panel,*glass=[panel viewWithTag:9230];
+    CAShapeLayer *clip=(CAShapeLayer *)glass.layer.mask;
+    if(!panel || ![clip isKindOfClass:CAShapeLayer.class]) return;
+    CGFloat t=Clamp(progress,0,1);
+    _morphProgress=t;
+    // Hold the Bezier wrapper for the whole frame: its CGPath is borrowed.
+    __attribute__((objc_precise_lifetime)) UIBezierPath *outline=
+        FMDrawerMorphPath(glass.bounds,_morphBead,_morphDrawer,self.left,_morphCompact,t,_morphRoundness);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    clip.path=outline.CGPath;
+    for(CALayer *layer in glass.layer.sublayers)
+        if([layer.name isEqualToString:@"fm.panel.rim"] && [layer isKindOfClass:CAShapeLayer.class])
+            ((CAShapeLayer *)layer).path=outline.CGPath;
+    panel.layer.shadowPath=outline.CGPath;
+    panel.layer.shadowOpacity=_morphShadow*FMSmooth(t/.5);
+    [CATransaction commit];
+    panel.center=CGPointMake(_morphRestCenter.x+_morphShift.x*(1-t),_morphRestCenter.y+_morphShift.y*(1-t));
+    // The bead fades out above the glass that replaces it; the panel itself
+    // stays opaque, since alpha below one on an ancestor of a visual effect
+    // view can flatten the material. Content comes in once the shell is wide
+    // enough to hold it.
+    CGFloat content=FMSmooth((t-.3)/.45);
+    for(UIView *child in FMGlassContent(glass).subviews)
+        if(child.tag!=9217 && child.tag!=9231) child.alpha=content;
+    [panel viewWithTag:9204].alpha=FMSmooth((t-.1)/.5);
+    self.dismissLayer.alpha=FMSmooth(t);
+    self.orb.alpha=_morphBeadAlpha*(1-FMSmooth(t/.3));
+}
+// Builds the drawer behind the bead the moment the pull starts. NO means the
+// drawer cannot be shown (no room, a settings window): the droplet carries on.
+- (BOOL)beginDrawerDragFromBead {
+    if(self.isOpen || self.settingsWindow || !self.orb) return NO;
+    [self cancelOrbFade];
+    self.page=@"apps";
+    [self loadAppsScroll];
+    self.apps=InstalledApps();
+    [self rememberCurrentApp];
+    [self buildPanel];
+    if(![self prepareDrawerMorph]) {
+        [self removePanel];
+        return NO;
+    }
+    _morphActive=YES;_morphDragging=YES;_morphOpening=YES;_morphFromBead=YES;
+    _morphBeadAlpha=1;
+    [self.orb.layer removeAnimationForKey:@"opacity"];
+    self.panel.userInteractionEnabled=NO;
+    self.dismissLayer.userInteractionEnabled=NO;
+    [self.overlayView bringSubviewToFront:self.orb];
+    [self applyMorphProgress:0];
+    return YES;
+}
+// Plays the open or close transition of a drawer that is already built.
+- (void)morphDrawerOpen:(BOOL)open {
+    if(UIAccessibilityIsReduceMotionEnabled() || ![self prepareDrawerMorph]) {
+        if(!open) [self draw];
+        return;
+    }
+    _morphFromBead=NO;
+    [self.overlayView bringSubviewToFront:self.orb];
+    [self applyMorphProgress:open?0:1];
+    [self settleDrawerMorphOpen:open velocity:0];
+}
+// Hands the progress to the spring. velocity is in progress per second.
+- (void)settleDrawerMorphOpen:(BOOL)open velocity:(CGFloat)velocity {
+    _morphActive=YES;
+    _morphDragging=NO;
+    _morphOpening=open;
+    _morphTarget=open?1:0;
+    _morphVelocity=Clamp(velocity,-24,24);
+    _morphTick=0;
+    _morphElapsed=0;
+    _panelDragLive=NO;
+    self.panel.userInteractionEnabled=NO;
+    self.dismissLayer.userInteractionEnabled=NO;
+    if(!_morphLink) {
+        _morphLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(morphFrame:)];
+        [_morphLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    }
+}
+- (void)morphFrame:(CADisplayLink *)link {
+    if(!self.panel) { [self endDrawerMorph]; return; }
+    CFTimeInterval dt=_morphTick>0?MIN(link.timestamp-_morphTick,1/20.):1/60.;
+    _morphTick=link.timestamp;
+    _morphElapsed+=dt;
+    CGFloat x=_morphProgress,v=_morphVelocity;
+    // omega 22 rad/s: ninety-nine percent of the way in about 0.3 s.
+    FMSpringStep(&x,&v,_morphTarget,22,dt);
+    _morphVelocity=v;
+    BOOL arrived=fabs(x-_morphTarget)<.0015 || _morphElapsed>1.2;
+    [self applyMorphProgress:arrived?_morphTarget:x];
+    if(arrived) [self finishDrawerMorph];
+}
+- (void)endDrawerMorph {
+    [_morphLink invalidate];
+    _morphLink=nil;
+    _morphActive=NO;_morphDragging=NO;_panelDragLive=NO;
+}
+// The spring has arrived. Open: hand the drawer back to the user. Closed: a
+// pull that was let go early never moved the bead, so only the drawer goes;
+// a close from the open drawer rebuilds the docked bead.
+- (void)finishDrawerMorph {
+    BOOL open=_morphOpening,fromBead=_morphFromBead;
+    [self endDrawerMorph];
+    if(open) {
+        self.panel.userInteractionEnabled=YES;
+        self.dismissLayer.userInteractionEnabled=YES;
+        self.orb.userInteractionEnabled=NO;
+        self.orb.accessibilityElementsHidden=YES;
+        if(_drawDeferred) { _drawDeferred=NO; [self draw]; }
+    } else if(fromBead && !self.isOpen) {
+        BOOL redraw=_drawDeferred;
+        [self removePanel];
+        if(redraw) { [self draw]; return; }
+        self.orbFaded=NO;
+        self.orb.alpha=1;
+        [self scheduleOrbFade];
+    } else {
+        _drawDeferred=NO;
+        [self draw];
+    }
+}
+// Skips the rest of a settle: used when a new gesture arrives mid-flight.
+- (void)completeDrawerMorphNow {
+    if(!_morphActive) return;
+    if(_morphDragging) { [self abortDrawerMorph]; return; }
+    // A redraw asked for meanwhile would replace the bead being grabbed.
+    _drawDeferred=NO;
+    [self applyMorphProgress:_morphTarget];
+    [self finishDrawerMorph];
+}
+// Drops a drawer that was growing out of the bead without any ceremony.
+- (void)abortDrawerMorph {
+    if(!_morphActive) return;
+    [self removePanel];
+    self.orbFaded=NO;
+    self.orb.alpha=1;
+}
+// Dragging the open drawer toward its docking edge shrinks it back into the
+// bead under the finger, and a flick or a long enough drag closes it.
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    if(![gestureRecognizer isKindOfClass:UIPanGestureRecognizer.class]) return YES;
+    if(!self.isOpen || _morphActive || UIAccessibilityIsReduceMotionEnabled()) return NO;
+    CGPoint move=[(UIPanGestureRecognizer *)gestureRecognizer translationInView:self.overlayView];
+    // Only a deliberate horizontal drag toward the edge belongs to the drawer;
+    // everything else stays with the list and its buttons.
+    return fabs(move.x)>fabs(move.y)*1.2 && (self.left?move.x<0:move.x>0);
+}
+- (void)panelPan:(UIPanGestureRecognizer *)g {
+    CGPoint p=[g locationInView:self.overlayView];
+    if(g.state==UIGestureRecognizerStateBegan) {
+        _panelDragStart=p.x;
+        _panelDragLive=!_morphActive && self.isOpen && [self prepareDrawerMorph];
+        if(!_panelDragLive) return;
+        [self cancelOrbFade];
+        _morphActive=YES;_morphDragging=YES;_morphOpening=NO;_morphFromBead=NO;
+        _morphProgress=1;
+        [self.orb.layer removeAnimationForKey:@"opacity"];
+        self.dismissLayer.userInteractionEnabled=NO;
+        [self.overlayView bringSubviewToFront:self.orb];
+        [self applyMorphProgress:1];
+        return;
+    }
+    if(!_panelDragLive) return;
+    CGFloat outward=self.left?_panelDragStart-p.x:p.x-_panelDragStart;
+    if(g.state==UIGestureRecognizerStateChanged) {
+        [self applyMorphProgress:1-outward/_morphTravel];
+    } else if(g.state==UIGestureRecognizerStateEnded) {
+        CGPoint v=[g velocityInView:self.overlayView];
+        CGFloat outwardV=self.left?-v.x:v.x;
+        BOOL close=FMDrawerShouldCloseAfterDrag(_morphProgress,outwardV,_morphTravel);
+        if(close) [self commitDrawerClose];
+        [self settleDrawerMorphOpen:!close velocity:-outwardV/_morphTravel];
+    } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
+        [self settleDrawerMorphOpen:YES velocity:0];
+    }
 }
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight {
     UILabel *l=[UILabel new]; l.text=text; l.font=[UIFont systemFontOfSize:size weight:weight];
@@ -2295,6 +2668,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         settingsHold.minimumPressDuration=.65;
         [shadow addGestureRecognizer:settingsHold];
         shadow.accessibilityHint=@"长按打开微珠菜单设置";
+        // Dragging the drawer toward its docking edge closes it with the finger.
+        UIPanGestureRecognizer *edgePan=[[UIPanGestureRecognizer alloc] initWithTarget:self
+                                                                                action:@selector(panelPan:)];
+        edgePan.delegate=self;
+        [shadow addGestureRecognizer:edgePan];
     }
     BOOL night=FMMenuDark();
     UIColor *shadowTint=UIColor.blackColor;
@@ -2305,9 +2683,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // Both layouts share the same inward-curved side-notch silhouette.
     CGFloat radius=small?(compact?MIN(25,pw*.33):29):32;
     UIView *glass=[self glass:shadow.bounds radius:radius strong:YES];
+    glass.tag=9230; // The drawer morph reshapes this view's clip, rim and shadow.
     if(small) {
         FMAddOrbBackdrop(shadow,self.left);
         FMApplySideNotch(glass,shadow.layer,self.left,compact,NO);
+        for(CALayer *layer in glass.layer.sublayers)
+            if([layer isKindOfClass:CAShapeLayer.class]) layer.name=@"fm.panel.rim";
     }
     [shadow addSubview:glass];
     // The native material supplies depth; the shared notch adds only its rim.
