@@ -586,6 +586,21 @@ int main(void) { @autoreleasepool {
         Expect(fabs(damping/(2*sqrt(stiffness))-.62)<1e-12,"damping coefficient gives the requested damping fraction");
         Expect(fabs(FMSpringStiffness(0)-FMSpringStiffness(1e-3))<1e-3 && isfinite(FMSpringStiffness(0)),"a zero response stays finite");
     }
+    // Long-press scrub (after the wloc dock): which row, where the lens sits, when it is a cancel.
+    {
+        const CGFloat tops[3]={10,80,150},bottoms[3]={70,140,210};
+        Expect(FMScrubIndexAtY(10,tops,bottoms,3,2)==0 && FMScrubIndexAtY(69.999,tops,bottoms,3,2)==0,"the finger is over the first row, top edge included");
+        Expect(FMScrubIndexAtY(80,tops,bottoms,3,0)==1 && FMScrubIndexAtY(209.999,tops,bottoms,3,0)==2,"the other rows are found too");
+        Expect(FMScrubIndexAtY(70,tops,bottoms,3,2)==2 && FMScrubIndexAtY(75,tops,bottoms,3,0)==0,"between rows the current row stays");
+        Expect(FMScrubIndexAtY(-50,tops,bottoms,3,1)==1 && FMScrubIndexAtY(500,tops,bottoms,3,2)==2,"off the list the current row stays");
+        Expect(FMScrubIndexAtY(40,tops,bottoms,0,-1)==-1,"an empty list keeps whatever it had");
+        Expect(FMScrubLensCenter(5,40,200)==40 && FMScrubLensCenter(100,40,200)==100 && FMScrubLensCenter(500,40,200)==200,
+               "the lens follows the finger between the first and last row centers");
+        Expect(FMScrubLensCenter(10,40,30)==40,"a single row pins the lens to it");
+        Expect(!FMScrubIsOutside(0,240) && !FMScrubIsOutside(240,240) && !FMScrubIsOutside(-44,240) && !FMScrubIsOutside(284,240),
+               "the margin around the drawer still counts as inside");
+        Expect(FMScrubIsOutside(-44.01,240) && FMScrubIsOutside(284.01,240),"past the margin, letting go cancels");
+    }
     const char *preview=getenv("FM_GEOMETRY_PREVIEW");
     if(preview) {
         CGContextRef ctx=CGBitmapContextCreate(NULL,960,400,8,0,CGColorSpaceCreateDeviceRGB(),(CGBitmapInfo)kCGImageAlphaPremultipliedLast);

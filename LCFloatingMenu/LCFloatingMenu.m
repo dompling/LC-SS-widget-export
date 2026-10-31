@@ -835,6 +835,21 @@ static CGFloat FMSpringStiffness(CGFloat response) {
 static CGFloat FMSpringDamping(CGFloat response,CGFloat fraction) {
     return 2*fraction*sqrt(FMSpringStiffness(response));
 }
+// Long-press scrub, after the wloc dock. The row under the finger, given every
+// row's top and bottom in order; between rows the current one stays.
+static NSInteger FMScrubIndexAtY(CGFloat y,const CGFloat *tops,const CGFloat *bottoms,NSUInteger count,NSInteger current) {
+    for(NSUInteger index=0;index<count;index++)
+        if(y>=tops[index] && y<bottoms[index]) return (NSInteger)index;
+    return current;
+}
+// The lens follows the finger but stays between the first and last row centers.
+static CGFloat FMScrubLensCenter(CGFloat y,CGFloat first,CGFloat last) {
+    return Clamp(y,first,MAX(first,last));
+}
+// Dragging this far past either side of the drawer turns letting go into a cancel.
+static BOOL FMScrubIsOutside(CGFloat x,CGFloat width) {
+    return x<-44 || x>width+44;
+}
 // FMDrawerMotion:end
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
@@ -1464,6 +1479,16 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     BOOL _morphCompact,_morphActive,_morphDragging,_morphOpening,_morphFromBead;
     BOOL _morphCommitHaptic,_drawDeferred,_panUsesMorph,_panelDragLive;
     BOOL _popRevealed,_popStarted;
+    // Long-press scrub: a glass lens over the app list.
+    UIView *_scrubLens,*_scrubLabel;
+    NSArray<UIView *> *_scrubRows;
+    NSArray<UIControl *> *_scrubControls;
+    NSArray<NSValue *> *_scrubFrames;
+    CGRect _scrubViewport;
+    CGFloat _scrubFirstMid,_scrubLastMid;
+    NSInteger _scrubIndex;
+    BOOL _scrubActive,_scrubCancelling;
+    UISelectionFeedbackGenerator *_scrubTick;
 }
 + (instancetype)shared {
     static FMManager *m;
@@ -1738,6 +1763,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     [self captureAppsScroll];
     // Whatever was animating this panel ends with it.
     [self endDrawerMorph];
+    [self endScrubAnimated:NO];
     _drawDeferred=NO;
     self.morphGeneration++;
     self.appsHeaderGlass=nil;
@@ -2273,6 +2299,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
 - (void)toggle {
     // A drag or settle already owns the drawer; its release decides the state.
     if(_morphActive) return;
+    [self endScrubAnimated:NO];
     BOOL opening=!self.isOpen;
     if(opening) {
         [self cancelOrbFade];
@@ -2553,6 +2580,15 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
 // Dragging the open drawer toward its docking edge shrinks it back into the
 // bead under the finger, and a flick or a long enough drag closes it.
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    if([gestureRecognizer isKindOfClass:UILongPressGestureRecognizer.class]) {
+        // A long press over an app row belongs to the scrub lens (but not on a
+        // close badge); anywhere else it still opens settings.
+        CGPoint point=[gestureRecognizer locationInView:self.appsScroll];
+        BOOL overRow=[self scrubRowIndexAtPoint:point]!=NSNotFound;
+        if(gestureRecognizer.view!=self.appsScroll) return !overRow;
+        UIView *hit=[self.appsScroll hitTest:point withEvent:nil];
+        return self.isOpen && !_morphActive && overRow && ![hit isKindOfClass:UIButton.class];
+    }
     if(![gestureRecognizer isKindOfClass:UIPanGestureRecognizer.class]) return YES;
     if(!self.isOpen || _morphActive || UIAccessibilityIsReduceMotionEnabled()) return NO;
     CGPoint move=[(UIPanGestureRecognizer *)gestureRecognizer translationInView:self.overlayView];
@@ -2589,6 +2625,239 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         [self settleDrawerMorphOpen:YES velocity:0];
     }
+}
+// ---------------------------------------------------------------------------
+// Long-press scrub, after the wloc dock: hold an app for 0.28 s and a glass lens
+// appears under it; slide up and down and the lens follows, the app under it
+// grows and ticks, and letting go switches to it. Dragging far past either side
+// of the drawer turns letting go into a cancel.
+
+- (UIControl *)switchControlIn:(UIView *)view {
+    if([view isKindOfClass:UIControl.class] &&
+       [[(UIControl *)view actionsForTarget:self forControlEvent:UIControlEventTouchUpInside]
+            containsObject:NSStringFromSelector(@selector(switchFromRow:))]) return (UIControl *)view;
+    for(UIView *child in view.subviews) {
+        UIControl *found=[self switchControlIn:child];
+        if(found) return found;
+    }
+    return nil;
+}
+// The app rows of the open list, top to bottom, and the control that switches to each.
+- (NSArray<UIView *> *)scrubRowsWithControls:(NSArray<UIControl *> **)controls {
+    NSMutableArray<UIView *> *rows=[NSMutableArray array];
+    NSMutableArray<UIControl *> *found=[NSMutableArray array];
+    for(UIView *view in self.appsScroll.subviews) {
+        if(![view isKindOfClass:UIStackView.class]) continue;
+        for(UIView *row in ((UIStackView *)view).arrangedSubviews) {
+            UIControl *control=[self switchControlIn:row];
+            if(!control) continue;
+            [rows addObject:row];
+            [found addObject:control];
+        }
+        break;
+    }
+    if(controls) *controls=found;
+    return rows;
+}
+// point is in the scroll view's own coordinates.
+- (NSUInteger)scrubRowIndexAtPoint:(CGPoint)point {
+    NSArray<UIView *> *rows=[self scrubRowsWithControls:nil];
+    for(NSUInteger index=0;index<rows.count;index++)
+        if(CGRectContainsPoint([rows[index] convertRect:rows[index].bounds toView:self.appsScroll],point)) return index;
+    return NSNotFound;
+}
+// The lens: a soft light pill with a bright edge fading downward, like the dock's.
+- (UIView *)scrubLensWithFrame:(CGRect)frame {
+    CGFloat radius=frame.size.height*.34;
+    UIView *lens=[[UIView alloc] initWithFrame:frame];
+    lens.userInteractionEnabled=NO;
+    lens.backgroundColor=[UIColor.whiteColor colorWithAlphaComponent:FMMenuDark()?.16:.26];
+    lens.layer.cornerRadius=radius;
+    lens.layer.cornerCurve=kCACornerCurveContinuous;
+    lens.layer.shadowColor=UIColor.blackColor.CGColor;
+    lens.layer.shadowOpacity=.18;
+    lens.layer.shadowRadius=8;
+    lens.layer.shadowOffset=CGSizeMake(0,2);
+    CAGradientLayer *edge=[CAGradientLayer layer];
+    edge.frame=lens.bounds;
+    edge.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.9].CGColor,
+                  (id)[UIColor.whiteColor colorWithAlphaComponent:.2].CGColor];
+    CAShapeLayer *ring=[CAShapeLayer layer];
+    ring.frame=lens.bounds;
+    ring.path=[UIBezierPath bezierPathWithRoundedRect:CGRectInset(lens.bounds,.45,.45) cornerRadius:radius].CGPath;
+    ring.fillColor=UIColor.clearColor.CGColor;
+    ring.strokeColor=UIColor.blackColor.CGColor;
+    ring.lineWidth=.9;
+    edge.mask=ring;
+    [lens.layer addSublayer:edge];
+    return lens;
+}
+// The app's name floats beside the lens, on the side away from the wall. The
+// standard list already shows names, so only the icon-only list needs it.
+- (void)updateScrubLabel {
+    [_scrubLabel removeFromSuperview];
+    _scrubLabel=nil;
+    if(!BoolPref(@"compactMode",NO) || !_scrubLens || _scrubCancelling ||
+       _scrubIndex<0 || _scrubIndex>=(NSInteger)_scrubControls.count) return;
+    NSDictionary *app=objc_getAssociatedObject(_scrubControls[_scrubIndex],@selector(switchFromRow:));
+    UILabel *text=[self label:FMAppCaption(app) size:13 weight:UIFontWeightSemibold];
+    text.numberOfLines=1;
+    CGFloat width=MIN(190,[text sizeThatFits:CGSizeMake(190,30)].width)+24;
+    UIView *holder=[[UIView alloc] initWithFrame:CGRectMake(0,0,width,30)];
+    holder.userInteractionEnabled=NO;
+    holder.layer.shadowColor=UIColor.blackColor.CGColor;
+    holder.layer.shadowOpacity=.15;
+    holder.layer.shadowRadius=6;
+    holder.layer.shadowOffset=CGSizeMake(0,2);
+    UIView *capsule=[self glass:holder.bounds radius:15 strong:NO];
+    [holder addSubview:capsule];
+    text.frame=CGRectMake(12,0,width-24,30);
+    [FMGlassContent(capsule) addSubview:text];
+    CGRect panel=self.panel.frame;
+    CGFloat x=self.left?CGRectGetMaxX(panel)+8:CGRectGetMinX(panel)-8-width;
+    CGPoint center=[_scrubLens.superview convertPoint:_scrubLens.center toView:self.overlayView];
+    holder.frame=CGRectMake(x,center.y-15,width,30);
+    [self.overlayView addSubview:holder];
+    _scrubLabel=holder;
+}
+// The app under the lens grows; the one it left settles back.
+- (void)scrubFocus:(NSInteger)index {
+    BOOL calm=UIAccessibilityIsReduceMotionEnabled();
+    for(NSUInteger row=0;row<_scrubRows.count;row++) {
+        UIView *icon=[_scrubRows[row] viewWithTag:9233];
+        CGAffineTransform want=(NSInteger)row==index?CGAffineTransformMakeScale(1.16,1.16):CGAffineTransformIdentity;
+        if(!icon || CGAffineTransformEqualToTransform(icon.transform,want)) continue;
+        if(calm) icon.transform=want;
+        else [UIView animateWithDuration:.4 delay:0 usingSpringWithDamping:.7 initialSpringVelocity:0
+                options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionAllowUserInteraction
+                animations:^{ icon.transform=want; } completion:nil];
+    }
+    [self updateScrubLabel];
+}
+- (void)beginScrub:(UILongPressGestureRecognizer *)g {
+    UIView *glass=[self.panel viewWithTag:9230],*content=FMGlassContent(glass);
+    NSArray<UIControl *> *controls=nil;
+    NSArray<UIView *> *rows=[self scrubRowsWithControls:&controls];
+    NSUInteger found=[self scrubRowIndexAtPoint:[g locationInView:self.appsScroll]];
+    if(!glass || content==glass || found==NSNotFound || !self.isOpen || _morphActive) return;
+    [glass layoutIfNeeded];
+    NSMutableArray<NSValue *> *frames=[NSMutableArray array];
+    for(UIView *row in rows) [frames addObject:[NSValue valueWithCGRect:[row convertRect:row.bounds toView:glass]]];
+    _scrubRows=rows;_scrubControls=controls;_scrubFrames=frames;
+    _scrubViewport=[self.appsScroll convertRect:self.appsScroll.bounds toView:glass];
+    _scrubIndex=(NSInteger)found;
+    _scrubCancelling=NO;_scrubActive=YES;
+    CGRect box=CGRectInset(frames[found].CGRectValue,-3,-3);
+    // The lens may only travel between the centers of the first and last row in view.
+    CGFloat first=CGFLOAT_MAX,last=-CGFLOAT_MAX;
+    for(NSValue *value in frames) {
+        CGRect frame=value.CGRectValue;
+        if(!CGRectIntersectsRect(frame,_scrubViewport)) continue;
+        first=MIN(first,CGRectGetMidY(frame));
+        last=MAX(last,CGRectGetMidY(frame));
+    }
+    CGFloat half=box.size.height*.5;
+    _scrubFirstMid=MAX(CGRectGetMinY(_scrubViewport)+half,first);
+    _scrubLastMid=MIN(CGRectGetMaxY(_scrubViewport)-half,last);
+    UIView *lens=[self scrubLensWithFrame:box];
+    lens.center=CGPointMake(CGRectGetMidX(box),FMScrubLensCenter([g locationInView:glass].y,_scrubFirstMid,_scrubLastMid));
+    // Icon-only rows are clear, so the lens goes under them like the dock's;
+    // the standard rows are cards, so there it goes over them.
+    if(BoolPref(@"compactMode",NO)) [content insertSubview:lens belowSubview:self.appsScroll];
+    else [content insertSubview:lens aboveSubview:self.appsScroll];
+    _scrubLens=lens;
+    lens.alpha=0;
+    if(UIAccessibilityIsReduceMotionEnabled()) {
+        [UIView animateWithDuration:.15 animations:^{ lens.alpha=1; }];
+    } else {
+        lens.transform=CGAffineTransformMakeScale(.7,.7);
+        [UIView animateWithDuration:.5 delay:0 usingSpringWithDamping:.72 initialSpringVelocity:0
+            options:UIViewAnimationOptionAllowUserInteraction
+            animations:^{ lens.alpha=1;lens.transform=CGAffineTransformIdentity; } completion:nil];
+    }
+    [self scrubFocus:_scrubIndex];
+    if(BoolPref(@"haptic",YES)) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurredWithIntensity:.9];
+        _scrubTick=[UISelectionFeedbackGenerator new];
+        [_scrubTick prepare];
+    }
+}
+- (void)moveScrub:(UILongPressGestureRecognizer *)g {
+    UIView *glass=[self.panel viewWithTag:9230];
+    if(!glass || !_scrubLens) return;
+    CGPoint point=[g locationInView:glass];
+    NSUInteger count=_scrubFrames.count;
+    CGFloat tops[count+1],bottoms[count+1];
+    for(NSUInteger index=0;index<count;index++) {
+        CGRect frame=_scrubFrames[index].CGRectValue;
+        tops[index]=CGRectGetMinY(frame);
+        bottoms[index]=CGRectGetMaxY(frame);
+    }
+    NSInteger index=FMScrubIndexAtY(point.y,tops,bottoms,count,_scrubIndex);
+    BOOL outside=FMScrubIsOutside(point.x,CGRectGetWidth(glass.bounds));
+    BOOL moved=index!=_scrubIndex,flipped=outside!=_scrubCancelling;
+    _scrubIndex=index;
+    _scrubCancelling=outside;
+    if(moved) {
+        [_scrubTick selectionChanged];
+        [_scrubTick prepare];
+        [self scrubFocus:index];
+    } else if(flipped) [self updateScrubLabel];
+    // The lens follows the finger on a short spring; leaving the drawer shrinks and dims it.
+    UIView *lens=_scrubLens;
+    CGPoint center=CGPointMake(lens.center.x,FMScrubLensCenter(point.y,_scrubFirstMid,_scrubLastMid));
+    CGAffineTransform shape=outside?CGAffineTransformMakeScale(.85,.85):CGAffineTransformIdentity;
+    CGFloat alpha=outside?.45:1;
+    void (^follow)(void)=^{
+        lens.center=center;lens.transform=shape;lens.alpha=alpha;
+        if(self->_scrubLabel) {
+            CGPoint inOverlay=[lens.superview convertPoint:center toView:self.overlayView];
+            self->_scrubLabel.center=CGPointMake(self->_scrubLabel.center.x,inOverlay.y);
+        }
+    };
+    if(UIAccessibilityIsReduceMotionEnabled()) follow();
+    else [UIView animateWithDuration:.25 delay:0 usingSpringWithDamping:.8 initialSpringVelocity:0
+            options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionAllowUserInteraction
+            animations:follow completion:nil];
+}
+- (void)endScrubAnimated:(BOOL)animated {
+    if(!_scrubActive && !_scrubLens && !_scrubLabel) return;
+    UIView *lens=_scrubLens,*label=_scrubLabel;
+    NSArray<UIView *> *rows=_scrubRows;
+    _scrubActive=NO;_scrubCancelling=NO;
+    _scrubLens=nil;_scrubLabel=nil;_scrubRows=nil;_scrubControls=nil;_scrubFrames=nil;_scrubTick=nil;
+    void (^settle)(void)=^{
+        for(UIView *row in rows) [row viewWithTag:9233].transform=CGAffineTransformIdentity;
+    };
+    if(animated && !UIAccessibilityIsReduceMotionEnabled()) {
+        [UIView animateWithDuration:.4 delay:0 usingSpringWithDamping:.7 initialSpringVelocity:0
+            options:UIViewAnimationOptionBeginFromCurrentState animations:settle completion:nil];
+        [UIView animateWithDuration:.16 delay:0
+            options:UIViewAnimationOptionCurveEaseOut|UIViewAnimationOptionBeginFromCurrentState
+            animations:^{ lens.alpha=0;label.alpha=0; }
+            completion:^(BOOL finished) { [lens removeFromSuperview];[label removeFromSuperview]; }];
+    } else {
+        settle();
+        [lens removeFromSuperview];
+        [label removeFromSuperview];
+    }
+}
+// Letting go on an app switches to it, exactly as tapping it would; letting go
+// after dragging off the side, or on the app already running, does nothing.
+- (void)finishScrub:(BOOL)commit {
+    if(!_scrubActive) return;
+    UIControl *target=nil;
+    if(commit && !_scrubCancelling && _scrubIndex>=0 && _scrubIndex<(NSInteger)_scrubControls.count)
+        target=_scrubControls[_scrubIndex];
+    [self endScrubAnimated:YES];
+    if(target.enabled) [target sendActionsForControlEvents:UIControlEventTouchUpInside];
+}
+- (void)scrubPress:(UILongPressGestureRecognizer *)g {
+    if(g.state==UIGestureRecognizerStateBegan) [self beginScrub:g];
+    else if(!_scrubActive) return;
+    else if(g.state==UIGestureRecognizerStateChanged) [self moveScrub:g];
+    else if(g.state==UIGestureRecognizerStateEnded) [self finishScrub:YES];
+    else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) [self finishScrub:NO];
 }
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight {
     UILabel *l=[UILabel new]; l.text=text; l.font=[UIFont systemFontOfSize:size weight:weight];
@@ -2642,6 +2911,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
     UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    box.tag=9233; // The long-press scrub enlarges the icon under its lens.
     box.layer.cornerRadius=size*.22;box.clipsToBounds=YES;
     box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
     UIImage *real=FMGuestIcon(app);
@@ -2837,6 +3107,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [[UILongPressGestureRecognizer alloc] initWithTarget:self
                                                           action:@selector(holdPanel:)];
         settingsHold.minimumPressDuration=.65;
+        settingsHold.delegate=self; // yields to the scrub lens over the app rows
         [shadow addGestureRecognizer:settingsHold];
         shadow.accessibilityHint=@"长按打开微珠菜单设置";
         // Dragging the drawer toward its docking edge closes it with the finger.
@@ -2890,6 +3161,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(small) {
         self.appsScroll=scroll;
         scroll.delegate=self;
+        // Hold an app for a moment and a glass lens slides over the list (after
+        // the wloc dock): slide to pick, let go to switch. Moving before the
+        // delay is a scroll or a tap, as before.
+        UILongPressGestureRecognizer *scrubPress=[[UILongPressGestureRecognizer alloc]
+            initWithTarget:self action:@selector(scrubPress:)];
+        scrubPress.minimumPressDuration=.28;
+        scrubPress.allowableMovement=10;
+        scrubPress.delegate=self;
+        [scroll addGestureRecognizer:scrubPress];
         self.appsScrollRestorePending=YES;
         [self appPage:stack];
         CGFloat offset=self.appsScrollOffset;
@@ -3236,6 +3516,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     for(UIView *view in scroll.subviews)
         if([view isKindOfClass:UIStackView.class]) {stack=(UIStackView *)view;break;}
     if(!stack) { [self draw];return; }
+    [self endScrubAnimated:NO]; // its rows are about to be replaced
     [self captureAppsScroll];
     CGFloat saved=self.appsScrollOffset;
     self.appsScrollRestorePending=YES;
