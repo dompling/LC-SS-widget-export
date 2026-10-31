@@ -565,6 +565,27 @@ int main(void) { @autoreleasepool {
         Expect(FMRubberProgress(-.2)==-.2 && FMRubberProgress(.5)==.5 && FMRubberProgress(1)==1,"progress inside zero to one is untouched");
         Expect(fabs(FMRubberProgress(1.3)-1.05)<1e-12 && fabs(FMRubberProgress(2)-1.0566037735849056)<1e-12,"progress past one stretches against resistance");
     }
+    // Contents pop in one after another, like the wloc dock icons (response .42 s, damping .62).
+    {
+        Expect(fabs(FMPopDelay(0,1)-.04)<1e-12 && fabs(FMPopDelay(0,0)-.04)<1e-12,"the first element pops just after the shell is wide enough");
+        Expect(fabs(FMPopDelay(5,6)-(.04+5*.07))<1e-12,"a short list pops one element every seventy milliseconds");
+        BOOL ordered=YES,bounded=YES;
+        for(NSUInteger count=1;count<=40;count++) {
+            CGFloat previous=-1;
+            for(NSUInteger index=0;index<count;index++) {
+                CGFloat delay=FMPopDelay(index,count);
+                if(delay<=previous) ordered=NO;
+                previous=delay;
+            }
+            if(previous>.04+.5+1e-12) bounded=NO;
+        }
+        Expect(ordered,"each element pops later than the one below it");
+        Expect(bounded,"a long list finishes its stagger within half a second");
+        CGFloat stiffness=FMSpringStiffness(.42),damping=FMSpringDamping(.42,.62);
+        Expect(fabs(sqrt(stiffness)*.42-2*M_PI)<1e-9,"stiffness gives a natural period equal to the response");
+        Expect(fabs(damping/(2*sqrt(stiffness))-.62)<1e-12,"damping coefficient gives the requested damping fraction");
+        Expect(fabs(FMSpringStiffness(0)-FMSpringStiffness(1e-3))<1e-3 && isfinite(FMSpringStiffness(0)),"a zero response stays finite");
+    }
     const char *preview=getenv("FM_GEOMETRY_PREVIEW");
     if(preview) {
         CGContextRef ctx=CGBitmapContextCreate(NULL,960,400,8,0,CGColorSpaceCreateDeviceRGB(),(CGBitmapInfo)kCGImageAlphaPremultipliedLast);

@@ -818,6 +818,23 @@ static CGFloat FMRubberBand(CGFloat over,CGFloat limit) {
 static CGFloat FMRubberProgress(CGFloat progress) {
     return progress<=1?progress:1+FMRubberBand(progress-1,.06);
 }
+// Pop-in of the drawer contents, after the wloc dock: the index-th of count
+// elements (0 is the lowest one) starts this many seconds after the shell is
+// wide enough. Neighbours are .07 s apart, squeezed so a long list still
+// finishes its stagger within half a second.
+static CGFloat FMPopDelay(NSUInteger index,NSUInteger count) {
+    CGFloat step=MIN(.07,.5/MAX(1.,(CGFloat)count-1));
+    return .04+(CGFloat)index*step;
+}
+// A SwiftUI-style spring (response in seconds, damping fraction) as the
+// mass-one stiffness and damping coefficient CASpringAnimation takes.
+static CGFloat FMSpringStiffness(CGFloat response) {
+    CGFloat omega=2*M_PI/MAX(response,1e-3);
+    return omega*omega;
+}
+static CGFloat FMSpringDamping(CGFloat response,CGFloat fraction) {
+    return 2*fraction*sqrt(FMSpringStiffness(response));
+}
 // FMDrawerMotion:end
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
@@ -1285,6 +1302,65 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
 static id FMOrientationObserver=nil;
 static id FMLayoutChangeObserver=nil;
 
+// One element of the drawer popping in like the wloc dock icons: it starts
+// small, transparent and pushed toward the wall, then springs into place
+// (response .42 s, damping .62, about 8% overshoot). The model layer already
+// holds the final state; the backwards fill keeps the first frame in place
+// while the delay runs.
+static void FMPopInLayer(CALayer *layer,CGFloat hidden,CFTimeInterval delay) {
+    CGFloat stiffness=FMSpringStiffness(.42),damping=FMSpringDamping(.42,.62);
+    NSArray<NSArray *> *specs=@[@[@"opacity",@0,@1],@[@"transform.scale",@.6,@1],
+                                @[@"transform.translation.x",@(hidden),@0]];
+    NSMutableArray<CAAnimation *> *parts=[NSMutableArray array];
+    CFTimeInterval length=0;
+    for(NSArray *spec in specs) {
+        CASpringAnimation *spring=[CASpringAnimation animationWithKeyPath:spec[0]];
+        spring.mass=1;spring.stiffness=stiffness;spring.damping=damping;spring.initialVelocity=0;
+        spring.fromValue=spec[1];spring.toValue=spec[2];
+        spring.duration=spring.settlingDuration;
+        length=MAX(length,spring.duration);
+        [parts addObject:spring];
+    }
+    CAAnimationGroup *group=[CAAnimationGroup animation];
+    group.animations=parts;
+    group.duration=length;
+    group.beginTime=[layer convertTime:CACurrentMediaTime() fromLayer:nil]+delay;
+    group.fillMode=kCAFillModeBackwards;
+    [layer addAnimation:group forKey:@"fm.pop.in"];
+}
+// A divider only fades in, after everything else has popped.
+static void FMPopInDivider(CALayer *layer,CFTimeInterval delay) {
+    CABasicAnimation *fade=[CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue=@0;fade.toValue=@1;
+    fade.duration=.4;
+    fade.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    fade.beginTime=[layer convertTime:CACurrentMediaTime() fromLayer:nil]+delay;
+    fade.fillMode=kCAFillModeBackwards;
+    [layer addAnimation:fade forKey:@"fm.pop.in"];
+}
+// Pulling back: quick and without a bounce, so nothing hangs outside a shell
+// that has already shrunk away. The layer stays hidden until the drawer goes.
+static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
+    CGFloat shown=layer.presentationLayer?layer.presentationLayer.opacity:layer.opacity;
+    [layer removeAnimationForKey:@"fm.pop.in"];
+    NSArray<NSArray *> *specs=fadeOnly?@[@[@"opacity",@(shown),@0]]:
+        @[@[@"opacity",@(shown),@0],@[@"transform.scale",@1,@.6],@[@"transform.translation.x",@0,@(hidden)]];
+    NSMutableArray<CAAnimation *> *parts=[NSMutableArray array];
+    for(NSArray *spec in specs) {
+        CABasicAnimation *move=[CABasicAnimation animationWithKeyPath:spec[0]];
+        move.fromValue=spec[1];move.toValue=spec[2];
+        move.duration=.14;
+        move.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
+        [parts addObject:move];
+    }
+    CAAnimationGroup *group=[CAAnimationGroup animation];
+    group.animations=parts;
+    group.duration=.14;
+    group.fillMode=kCAFillModeForwards;
+    group.removedOnCompletion=NO;
+    [layer addAnimation:group forKey:@"fm.pop.out"];
+}
+
 @interface FMManager : NSObject <UIScrollViewDelegate,UIGestureRecognizerDelegate>
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) UIView *overlayView;
@@ -1387,6 +1463,7 @@ static id FMLayoutChangeObserver=nil;
     CADisplayLink *_morphLink;
     BOOL _morphCompact,_morphActive,_morphDragging,_morphOpening,_morphFromBead;
     BOOL _morphCommitHaptic,_drawDeferred,_panUsesMorph,_panelDragLive;
+    BOOL _popRevealed,_popStarted;
 }
 + (instancetype)shared {
     static FMManager *m;
@@ -2292,14 +2369,68 @@ static id FMLayoutChangeObserver=nil;
     panel.center=CGPointMake(_morphRestCenter.x+_morphShift.x*(1-t)+slide,_morphRestCenter.y+_morphShift.y*(1-t));
     // The bead fades out above the glass that replaces it; the panel itself
     // stays opaque, since alpha below one on an ancestor of a visual effect
-    // view can flatten the material. Content comes in once the shell is wide
-    // enough to hold it.
-    CGFloat content=FMSmooth((t-.3)/.45);
+    // view can flatten the material. The contents stay hidden until the shell
+    // is half open, then pop in one after another; they go out together once
+    // it falls back below the lower line.
+    BOOL reveal=_popRevealed?t>=.42:t>=.5,flipped=reveal!=_popRevealed;
+    _popRevealed=reveal;
+    if(reveal) _popStarted=YES;
     for(UIView *child in FMGlassContent(glass).subviews)
-        if(child.tag!=9217 && child.tag!=9231) child.alpha=content;
+        if(child.tag!=9217 && child.tag!=9231) child.alpha=_popStarted?1:0;
+    if(flipped) [self popContent:reveal];
     [panel viewWithTag:9204].alpha=FMSmooth((t-.1)/.5);
     self.dismissLayer.alpha=FMSmooth(t);
     self.orb.alpha=_morphBeadAlpha*(1-FMSmooth(t/.3));
+}
+// The drawer contents come in one after another, like the wloc dock icons:
+// the lowest first (within a row, the one nearest the wall first), then upward,
+// the dividers last. Only rows in view take part. Going out is all at once.
+- (void)popContent:(BOOL)reveal {
+    UIView *glass=[self.panel viewWithTag:9230],*content=FMGlassContent(glass);
+    if(!glass || content==glass) return;
+    [glass layoutIfNeeded];
+    CGFloat wall=self.left?0:CGRectGetWidth(glass.bounds);
+    NSMutableArray<NSDictionary *> *items=[NSMutableArray array];
+    NSMutableArray<UIView *> *dividers=[NSMutableArray array];
+    void (^add)(UIView *)=^(UIView *view) {
+        CGRect frame=[view convertRect:view.bounds toView:glass];
+        [items addObject:@{@"view":view,@"row":@(lround(CGRectGetMidY(frame)/8)),
+                           @"gap":@(fabs(CGRectGetMidX(frame)-wall))}];
+    };
+    for(UIView *view in self.appsHeaderTiles) {
+        if([view isKindOfClass:UIControl.class]) add(view); else [dividers addObject:view];
+    }
+    for(UIView *view in [content viewWithTag:9232].subviews) {
+        if([view isKindOfClass:UIControl.class]) add(view); else [dividers addObject:view];
+    }
+    UIScrollView *scroll=self.appsScroll;
+    CGRect window=scroll?[scroll convertRect:scroll.bounds toView:glass]:CGRectZero;
+    for(UIView *view in scroll.subviews) {
+        if(![view isKindOfClass:UIStackView.class]) continue;
+        for(UIView *row in ((UIStackView *)view).arrangedSubviews)
+            if(CGRectIntersectsRect([row convertRect:row.bounds toView:glass],window)) add(row);
+        break;
+    }
+    [items sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
+        NSComparisonResult lowerFirst=[b[@"row"] compare:a[@"row"]];
+        return lowerFirst!=NSOrderedSame?lowerFirst:[a[@"gap"] compare:b[@"gap"]];
+    }];
+    CGFloat toWall=self.left?-1:1;
+    NSUInteger count=items.count;
+    for(NSUInteger index=0;index<count;index++) {
+        UIView *view=items[index][@"view"];
+        CGFloat hidden=toWall*(MIN(CGRectGetHeight(view.bounds),56)+16);
+        if(reveal) {
+            [view.layer removeAnimationForKey:@"fm.pop.out"];
+            FMPopInLayer(view.layer,hidden,FMPopDelay(index,count));
+        } else FMPopOutLayer(view.layer,hidden,NO);
+    }
+    for(UIView *divider in dividers) {
+        if(reveal) {
+            [divider.layer removeAnimationForKey:@"fm.pop.out"];
+            FMPopInDivider(divider.layer,FMPopDelay(count,count+1));
+        } else FMPopOutLayer(divider.layer,0,YES);
+    }
 }
 // Builds the drawer behind the bead the moment the pull starts. NO means the
 // drawer cannot be shown (no room, a settings window): the droplet carries on.
@@ -2317,6 +2448,7 @@ static id FMLayoutChangeObserver=nil;
     }
     _morphActive=YES;_morphDragging=YES;_morphOpening=YES;_morphFromBead=YES;
     _morphBeadAlpha=1;
+    _popRevealed=NO;_popStarted=NO;
     [self.orb.layer removeAnimationForKey:@"opacity"];
     self.panel.userInteractionEnabled=NO;
     self.dismissLayer.userInteractionEnabled=NO;
@@ -2331,6 +2463,8 @@ static id FMLayoutChangeObserver=nil;
         return;
     }
     _morphFromBead=NO;
+    // Opening starts with the contents hidden; closing starts with them out.
+    _popRevealed=!open;_popStarted=!open;
     [self.overlayView bringSubviewToFront:self.orb];
     [self applyMorphProgress:open?0:1];
     [self settleDrawerMorphOpen:open velocity:0];
@@ -2435,6 +2569,7 @@ static id FMLayoutChangeObserver=nil;
         [self cancelOrbFade];
         _morphActive=YES;_morphDragging=YES;_morphOpening=NO;_morphFromBead=NO;
         _morphProgress=1;
+        _popRevealed=YES;_popStarted=YES;
         [self.orb.layer removeAnimationForKey:@"opacity"];
         self.dismissLayer.userInteractionEnabled=NO;
         [self.overlayView bringSubviewToFront:self.orb];
@@ -3027,6 +3162,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIView *footer=[[UIView alloc] initWithFrame:CGRectMake(compact?3:12,
                        glass.bounds.size.height-height-6-(compact?22:28),w-(compact?6:24),height)];
     footer.backgroundColor=UIColor.clearColor;
+    footer.tag=9232; // The drawer pop-in animates its buttons one by one.
     [FMGlassContent(glass) addSubview:footer];
     if(compact) {
         // Keep one continuous drawer shell rather than nesting another
