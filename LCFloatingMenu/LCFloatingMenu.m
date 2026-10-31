@@ -441,8 +441,8 @@ static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL co
     rim.frame=glass.bounds;
     rim.path=outline.CGPath;
     rim.fillColor=UIColor.clearColor.CGColor;
-    rim.strokeColor=[UIColor.whiteColor colorWithAlphaComponent:
-        collapsed?(FMMenuDark()?.28:.40):(FMMenuDark()?.32:.58)].CGColor;
+    rim.strokeColor=[(collapsed && !FMMenuDark()?UIColor.blackColor:UIColor.whiteColor) colorWithAlphaComponent:
+        collapsed?(FMMenuDark()?.28:.18):(FMMenuDark()?.32:.58)].CGColor;
     rim.lineWidth=collapsed?.45:.75;
     [glass.layer addSublayer:rim];
     if(!collapsed) {
@@ -530,9 +530,12 @@ static void FMAddOrbCapsule(UIView *glass,BOOL left) {
     [glass.layer addSublayer:surface];
     CAGradientLayer *capsule=[CAGradientLayer layer];
     capsule.name=@"fm.orb.capsule";
-    capsule.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.40].CGColor,
+    capsule.colors=FMMenuDark()?@[(id)[UIColor.whiteColor colorWithAlphaComponent:.40].CGColor,
                      (id)[UIColor.whiteColor colorWithAlphaComponent:.18].CGColor,
-                     (id)[UIColor.whiteColor colorWithAlphaComponent:.32].CGColor];
+                     (id)[UIColor.whiteColor colorWithAlphaComponent:.32].CGColor]:
+                   @[(id)[UIColor.blackColor colorWithAlphaComponent:.16].CGColor,
+                     (id)[UIColor.blackColor colorWithAlphaComponent:.07].CGColor,
+                     (id)[UIColor.blackColor colorWithAlphaComponent:.12].CGColor];
     capsule.locations=@[@0,@.52,@1];
     capsule.startPoint=CGPointMake(left?1:0,0);capsule.endPoint=CGPointMake(left?0:1,1);
     capsule.cornerCurve=kCACornerCurveCircular;

@@ -713,6 +713,14 @@ static void RunTests(void) {
     id savedAccent=[prefs objectForKey:@"LCFloatingMenu.accentLight"];
     [prefs setObject:@1 forKey:@"LCFloatingMenu.appearanceMode"];
     FMManager *theme=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    CAGradientLayer *dayCapsule=nil;
+    for(UIView *view in Views(theme.orb)) for(CALayer *layer in view.layer.sublayers)
+        if([layer.name isEqualToString:@"fm.orb.capsule"]) dayCapsule=(CAGradientLayer *)layer;
+    UIColor *dayEdge=dayCapsule.colors.count?[UIColor colorWithCGColor:(__bridge CGColorRef)dayCapsule.colors.firstObject]:nil;
+    CGFloat dayWhite=1,dayAlpha=0;[dayEdge getWhite:&dayWhite alpha:&dayAlpha];
+    Check(@"day-capsule-has-neutral-contrast",dayCapsule && dayWhite<.1 && dayAlpha>=.12,nil);
+    theme.overlayView.backgroundColor=[UIColor colorWithWhite:.95 alpha:1];
+    Snapshot(theme,@"collapsed-bead-light");
     UIViewController *themePage=[UIViewController new];UIStackView *themeStack=[UIStackView new];
     [themePage.view addSubview:themeStack];[theme populateSettingsCategory:@"appearance" stack:themeStack];
     theme.settingsNavigation=[[UINavigationController alloc] initWithRootViewController:themePage];
