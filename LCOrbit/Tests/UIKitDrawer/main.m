@@ -15,6 +15,7 @@
 // Only host/task/presentation boundaries are fixtures; layout and menu actions
 // below execute the real LCFloatingMenu and Core linked into this simulator app.
 @interface FMManager : NSObject
++ (instancetype)shared;
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) UIView *overlayView;
 @property(nonatomic,strong) LCOrbitContext *orbitContext;
@@ -533,6 +534,42 @@ static void Snapshot(FMManager *m,NSString *name) {
         [m.overlayView.layer renderInContext:context.CGContext];
     }];[UIImagePNGRepresentation(image) writeToFile:[EvidencePath stringByAppendingPathComponent:[name stringByAppendingString:@".png"]] atomically:YES];
 }
+static void RunShapePageTests(void) {
+    FMManager *manager=[FMManager shared];
+    UIWindow *oldWindow=manager.settingsWindow;
+    UINavigationController *oldNavigation=manager.settingsNavigation;
+    UIView *oldOrbHost=manager.orbPreviewHost,*oldDimensions=manager.dimensionsPreview;
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    id oldSide=[prefs objectForKey:@"LCFloatingMenu.onLeft"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.onLeft"];
+    for(NSValue *size in @[[NSValue valueWithCGSize:CGSizeMake(320,320)],
+                          [NSValue valueWithCGSize:CGSizeMake(375,667)],
+                          [NSValue valueWithCGSize:CGSizeMake(844,390)]]) {
+        CGSize bounds=size.CGSizeValue;
+        GeometryWindow *window=[[GeometryWindow alloc] initWithFrame:(CGRect){CGPointZero,bounds}];
+        window.fixtureSize=bounds;window.fixtureInsets=UIEdgeInsetsMake(0,0,21,0);
+        UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:[UIViewController new]];
+        window.rootViewController=nav;manager.settingsNavigation=nav;manager.settingsWindow=window;
+        UIView *edge=[[UIView alloc] initWithFrame:window.bounds];[window addSubview:edge];manager.orbPreviewHost=edge;
+        window.hidden=NO;
+        FMSettingsSectionController *page=[[FMSettingsSectionController alloc] initWithSection:@"dimensions"];
+        [nav pushViewController:page animated:NO];
+        [window layoutIfNeeded];[page.view layoutIfNeeded];[page.view layoutIfNeeded];
+        UIView *preview=[page.view viewWithTag:9220];
+        UIScrollView *scroll=[page valueForKey:@"contentScroll"];
+        CGRect fixed=preview.frame;
+        Check([NSString stringWithFormat:@"native-shape-page-pinned-%@",size],preview.superview==page.view && manager.dimensionsPreview==preview && edge.hidden && CGRectGetMinY(scroll.frame)>=CGRectGetMaxY(preview.frame)-.5 && scroll.bounds.size.height>40,@{@"preview":NSStringFromCGRect(preview.frame),@"scroll":NSStringFromCGRect(scroll.frame)});
+        [scroll setContentOffset:CGPointMake(0,MAX(0,scroll.contentSize.height-scroll.bounds.size.height)) animated:NO];
+        [page.view layoutIfNeeded];
+        Check([NSString stringWithFormat:@"native-shape-preview-stays-on-scroll-%@",size],CGRectEqualToRect(fixed,preview.frame) && [preview viewWithTag:9211]!=nil && [preview viewWithTag:9221]!=nil,nil);
+        [nav popViewControllerAnimated:NO];[window layoutIfNeeded];
+        Check([NSString stringWithFormat:@"native-shape-page-restores-edge-preview-%@",size],manager.dimensionsPreview==nil && !edge.hidden && [prefs boolForKey:@"LCFloatingMenu.onLeft"],nil);
+        window.hidden=YES;window.rootViewController=nil;
+    }
+    [prefs setObject:oldSide forKey:@"LCFloatingMenu.onLeft"];
+    manager.settingsWindow=oldWindow;manager.settingsNavigation=oldNavigation;
+    manager.orbPreviewHost=oldOrbHost;manager.dimensionsPreview=oldDimensions;
+}
 static void RunTests(void) {
     UIEdgeInsets ordinary=UIEdgeInsetsMake(0,0,21,0);
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
@@ -744,6 +781,16 @@ static void RunTests(void) {
     [style sliderFinished:extension];
     Check(@"orb-style-slider-applies-and-persists",fabs(style.orb.bounds.size.height-114)<.01 &&
         [prefs doubleForKey:@"LCFloatingMenu.orbExtension"]==31,NSStringFromCGRect(style.orb.bounds));
+    UIView *fixedPreview=[[UIView alloc] initWithFrame:CGRectMake(0,0,667,220)];
+    [style.overlayView addSubview:fixedPreview];style.dimensionsPreview=fixedPreview;
+    id savedSide=[prefs objectForKey:@"LCFloatingMenu.onLeft"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.onLeft"];
+    NSUInteger previewWrites=PositionWrites;[style refreshOrbPreview];
+    UIView *previewOrb=[fixedPreview viewWithTag:9211],*previewMenu=[fixedPreview viewWithTag:9221];
+    Check(@"shape-preview-left-menu-right-orb",fabs(CGRectGetMaxX(previewOrb.frame)-667)<.01 && fabs(previewMenu.frame.origin.x)<.01,nil);
+    Check(@"shape-preview-keeps-saved-docking-position",[prefs boolForKey:@"LCFloatingMenu.onLeft"] && previewWrites==PositionWrites,nil);
+    Check(@"shape-preview-hides-duplicate-edge-capsule",style.orbPreviewHost.hidden,nil);
+    [prefs setObject:savedSide forKey:@"LCFloatingMenu.onLeft"];
     UIStackView *reopened=[UIStackView new];[style populateSettingsCategory:@"dimensions" stack:reopened];
     BOOL restored=NO;for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag==30) restored=fabs(((UISlider *)view).value-31)<.01;
     Check(@"orb-style-restores-on-reopen",restored,nil);
@@ -770,6 +817,31 @@ static void RunTests(void) {
     UIStackView *appearanceOnly=[UIStackView new];[style populateSettingsCategory:@"appearance" stack:appearanceOnly];
     BOOL relocated=YES;for(UIView *view in Views(appearanceOnly)) if([view isKindOfClass:UISlider.class] && (view.tag==11 || view.tag==14 || view.tag>=30)) relocated=NO;
     Check(@"dimensions-removed-from-appearance",relocated,nil);
+    UIControl *entry=nil;for(UIView *view in Views(appearanceOnly)) if([view isKindOfClass:UIControl.class] && [[(UIControl *)view actionsForTarget:style forControlEvent:UIControlEventTouchUpInside] containsObject:@"openDimensions"]) entry=(UIControl *)view;
+    BOOL entryHeight=NO;for(NSLayoutConstraint *constraint in entry.constraints) if(constraint.firstAttribute==NSLayoutAttributeHeight && constraint.constant==65) entryHeight=YES;
+    Check(@"dimensions-entry-uses-settings-card",entryHeight && entry.layer.cornerRadius==16 && [entry viewWithTag:9235]!=nil,nil);
+    NSUInteger resetCards=0;
+    for(UIView *view in Views(reopened)) if([view isKindOfClass:UIControl.class]) {
+        NSArray *actions=[(UIControl *)view actionsForTarget:style forControlEvent:UIControlEventTouchUpInside];
+        if([actions containsObject:@"resetOrbDimensions"] || [actions containsObject:@"resetMenuDimensions"]) {
+            UIView *card=view.superview;BOOL height=NO;
+            for(NSLayoutConstraint *constraint in card.constraints) if(constraint.firstAttribute==NSLayoutAttributeHeight && constraint.constant==65) height=YES;
+            if(height && card.layer.cornerRadius==16) resetCards++;
+        }
+    }
+    Check(@"dimensions-reset-cards-match-root-style",resetCards==2,@(resetCards));
+    BOOL concavityNamed=NO;for(UIView *view in Views(reopened)) if([view isKindOfClass:UISlider.class] && view.tag==36) concavityNamed=[view.accessibilityLabel isEqual:@"凹角弧度"];
+    Check(@"orb-connection-renamed-concavity",concavityNamed,nil);
+    for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *width in @[@320,@667]) {
+        [prefs setObject:compact forKey:@"LCFloatingMenu.compactMode"];
+        fixedPreview.frame=CGRectMake(0,0,width.doubleValue,100);
+        [style refreshOrbPreview];
+        UIView *menu=[fixedPreview viewWithTag:9221],*orb=[fixedPreview viewWithTag:9211];
+        Check([NSString stringWithFormat:@"shape-preview-fits-short-window-%@-%@",compact,width],CGRectContainsRect(fixedPreview.bounds,menu.frame) && CGRectContainsRect(fixedPreview.bounds,orb.frame) && CGRectGetMaxX(menu.frame)<CGRectGetMinX(orb.frame),nil);
+    }
+    style.dimensionsPreview=nil;[fixedPreview removeFromSuperview];[style refreshOrbPreview];
+    Check(@"leaving-dimensions-restores-edge-preview",!style.orbPreviewHost.hidden && [style.orbPreviewHost viewWithTag:9211]!=nil,nil);
+
     [prefs removeObjectForKey:@"LCFloatingMenu.orbExtension"];
     id savedMode=[prefs objectForKey:@"LCFloatingMenu.appearanceMode"];
     id savedAccent=[prefs objectForKey:@"LCFloatingMenu.accentLight"];
@@ -1049,6 +1121,7 @@ static void RunTests(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3.8*NSEC_PER_SEC),dispatch_get_main_queue(),^{
         UIView *bead=[legacy.orb viewWithTag:9202];
         Check(@"legacy-auto-fade-ignored",bead && CGAffineTransformIsIdentity(bead.transform) && bead.alpha>=.99,@{@"alpha":@(bead.alpha),@"transform":NSStringFromCGAffineTransform(bead.transform)});
+        RunShapePageTests();
         NSUInteger failures=0;for(NSDictionary *r in Results) if(![r[@"passed"] boolValue]) failures++;
         NSDictionary *report=@{@"kind":@"production-uikit-synthetic-host-fixtures",@"runtime":UIDevice.currentDevice.systemVersion,@"count":@(Results.count),@"failures":@(failures),@"results":Results,@"limitation":@"Real UIKit simulator; synthetic host window dimensions and task state. Does not validate LC SwiftUI host integration, hardware sensor occlusion or actual guest process closure."};
         [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[EvidencePath stringByAppendingPathComponent:@"result.json"] atomically:YES];

@@ -74,6 +74,11 @@ int main(void) { @autoreleasepool {
             Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(x,y),NO)==CGPathContainsPoint(left.CGPath,NULL,CGPointMake(w-x,y),NO),"menu shapes mirror at all settings");
     }
     [stylePreferences removeAllObjects];
+    Expect(fabs(FMOrbRootCurveFactor()-.40)<.000001,"legacy default root curve preserved");
+    stylePreferences[@"orbCurveSoftness"]=@0;CGFloat shallow=FMOrbRootCurveFactor();
+    stylePreferences[@"orbCurveSoftness"]=@.85;
+    Expect(fabs(shallow-.20)<.000001 && fabs(FMOrbRootCurveFactor()-.90)<.000001,"orb concavity covers menu-style vertical root range");
+    [stylePreferences removeObjectForKey:@"orbCurveSoftness"];
     // The exposed outline must follow the visible body's circular caps,
     // regardless of the edge gap or any independent size setting.
     BOOL capsAligned=YES;
@@ -81,8 +86,9 @@ int main(void) { @autoreleasepool {
     for(NSNumber *bodyWidth in @[@8,@12,@20])
     for(NSNumber *bodyHeight in @[@36,@52,@80])
     for(NSNumber *gap in @[@0,@2,@8])
-    for(NSNumber *extension in @[@8,@25,@48]) {
-        geometryScale=scale.doubleValue;
+    for(NSNumber *extension in @[@8,@25,@48])
+    for(NSNumber *curve in @[@0,@.33,@.85]) {
+        geometryScale=scale.doubleValue;stylePreferences[@"orbCurveSoftness"]=curve;
         stylePreferences[@"orbEdgeGap"]=gap;stylePreferences[@"orbExtension"]=extension;
         CGFloat bw=bodyWidth.doubleValue*geometryScale,bh=bodyHeight.doubleValue*geometryScale;
         CGFloat top=extension.doubleValue*geometryScale,w=bw+gap.doubleValue*geometryScale,h=bh+2*top;

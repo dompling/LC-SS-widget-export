@@ -338,7 +338,7 @@ static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
         @{@"key":@"orbBodyWidth",@"title":@"胶囊宽度",@"min":@(8),@"max":@(20),@"default":@(12),@"unit":@"点"},
         @{@"key":@"orbBodyHeight",@"title":@"胶囊高度",@"min":@(36),@"max":@(80),@"default":@(52),@"unit":@"点"},
         @{@"key":@"orbEdgeGap",@"title":@"贴边间距",@"min":@(0),@"max":@(8),@"default":@(2),@"unit":@"点"},
-        @{@"key":@"orbCurveSoftness",@"title":@"连接弧线柔和度",@"min":@(0),@"max":@(0.85),@"default":@(0.33),@"unit":@"%"},
+        @{@"key":@"orbCurveSoftness",@"title":@"凹角弧度",@"min":@(0),@"max":@(0.85),@"default":@(0.33),@"unit":@"%"},
         @{@"key":@"orbDropletSize",@"title":@"水滴大小",@"min":@(0.65),@"max":@(1.25),@"default":@(1),@"unit":@"%"},
         @{@"key":@"orbSnapDuration",@"title":@"吸边动画时长",@"min":@(0.2),@"max":@(0.65),@"default":@(0.34),@"unit":@"秒"},
         @{@"key":@"orbSnapDamping",@"title":@"吸边回弹阻尼",@"min":@(0.65),@"max":@(1),@"default":@(0.78),@"unit":@"%"},
@@ -393,6 +393,12 @@ static UIBezierPath *FMOrbBodyPath(CGRect bounds) {
     [path closePath];
     return path;
 }
+// Map the legacy setting onto the drawer's vertical-root curvature model.
+// The historical .33 setting retains the original .40 control position.
+static CGFloat FMOrbRootCurveFactor(void) {
+    CGFloat value=FMOrbStyleValue(@"orbCurveSoftness");
+    return value<=.33?.20+value/.33*.20:.40+(value-.33)/.52*.50;
+}
 // A mirrored, gently concave inner shoulder joins the side edge to the drawer.
 // The glass and its shadow use exactly the same path.
 static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact, BOOL collapsed) {
@@ -405,7 +411,7 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
         CGFloat crown=radius,capK=radius*.55228475;
         [path moveToPoint:CGPointMake(w,0)];
         [path addCurveToPoint:CGPointMake(crown,shoulder)
-                controlPoint1:CGPointMake(w,shoulder*.40)
+                controlPoint1:CGPointMake(w,shoulder*FMOrbRootCurveFactor())
                 controlPoint2:CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder)];
         [path addCurveToPoint:CGPointMake(0,shoulder+radius)
                 controlPoint1:CGPointMake(crown-capK,shoulder)
@@ -416,7 +422,7 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
                 controlPoint2:CGPointMake(crown-capK,h-shoulder)];
         [path addCurveToPoint:CGPointMake(w,h)
                 controlPoint1:CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder)
-                controlPoint2:CGPointMake(w,h-shoulder*.40)];
+                controlPoint2:CGPointMake(w,h-shoulder*FMOrbRootCurveFactor())];
     } else {
         CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
         CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
@@ -504,7 +510,7 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
     UIBezierPath *path=[UIBezierPath bezierPath];
     [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,rootTop))];
     [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(cx,cy-r))
-            controlPoint1:mix(CGPointMake(w,shoulder*.40),CGPointMake(tipControlX,cy-neck*(1-t)))
+            controlPoint1:mix(CGPointMake(w,shoulder*FMOrbRootCurveFactor()),CGPointMake(tipControlX,cy-neck*(1-t)))
             controlPoint2:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(cx+r*.9,cy-r))];
     [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,cy))
             controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(cx-k,cy-r))
@@ -515,7 +521,7 @@ static UIBezierPath *FMDropletPath(CGRect bounds, BOOL dockLeft, CGFloat pullDis
             controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(cx-k,cy+r))];
     [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-rootTop))
             controlPoint1:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(cx+r*.9,cy+r))
-            controlPoint2:mix(CGPointMake(w,h-shoulder*.40),CGPointMake(tipControlX,cy+neck*(1-t)))];
+            controlPoint2:mix(CGPointMake(w,h-shoulder*FMOrbRootCurveFactor()),CGPointMake(tipControlX,cy+neck*(1-t)))];
     [path closePath];
     if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
     return path;
@@ -616,7 +622,7 @@ static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
     UIBezierPath *path=[UIBezierPath bezierPath];
     [path moveToPoint:mix(CGPointMake(w,0),CGPointMake(w,r))];
     [path addCurveToPoint:mix(CGPointMake(crown,shoulder),CGPointMake(w*.5,0))
-            controlPoint1:mix(CGPointMake(w,shoulder*.40),CGPointMake(w,r-k))
+            controlPoint1:mix(CGPointMake(w,shoulder*FMOrbRootCurveFactor()),CGPointMake(w,r-k))
             controlPoint2:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),shoulder),CGPointMake(w*.5+k,0))];
     [path addCurveToPoint:mix(CGPointMake(0,shoulder+radius),CGPointMake(0,r))
             controlPoint1:mix(CGPointMake(crown-capK,shoulder),CGPointMake(w*.5-k,0))
@@ -627,7 +633,7 @@ static UIBezierPath *FMOrbDragPath(CGRect bounds,BOOL left,CGFloat opened) {
             controlPoint2:mix(CGPointMake(crown-capK,h-shoulder),CGPointMake(w*.5-k,h))];
     [path addCurveToPoint:mix(CGPointMake(w,h),CGPointMake(w,h-r))
             controlPoint1:mix(CGPointMake(w-(w-crown)*FMOrbStyleValue(@"orbCurveSoftness"),h-shoulder),CGPointMake(w*.5+k,h))
-            controlPoint2:mix(CGPointMake(w,h-shoulder*.40),CGPointMake(w,h-r+k))];
+            controlPoint2:mix(CGPointMake(w,h-shoulder*FMOrbRootCurveFactor()),CGPointMake(w,h-r+k))];
     [path closePath];
     if(left) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
     return path;
@@ -1044,6 +1050,70 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 @end
 
+static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSString *symbol,UIColor *badgeColor,id target,SEL action) {
+    UIControl *row=[UIControl new];
+    row.layer.cornerRadius=16;
+    row.backgroundColor=FMThemeColor(FMColorSurface);
+
+    UIView *badge=[UIView new];
+    badge.translatesAutoresizingMaskIntoConstraints=NO;
+    badge.layer.cornerRadius=8;
+    badge.layer.masksToBounds=YES;
+    badge.backgroundColor=badgeColor?:[UIColor colorWithRed:0 green:122/255.0 blue:255/255.0 alpha:1.0];
+    [row addSubview:badge];
+
+    UIImageView *icon=[[UIImageView alloc] initWithImage:
+        [[UIImage systemImageNamed:symbol] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+    icon.translatesAutoresizingMaskIntoConstraints=NO;
+    icon.tintColor=UIColor.whiteColor;
+    icon.contentMode=UIViewContentModeScaleAspectFit;
+    [badge addSubview:icon];
+
+    UILabel *title=[UILabel new];
+    title.translatesAutoresizingMaskIntoConstraints=NO;
+    title.text=name;
+    title.textColor=FMThemeColor(FMColorText);
+    title.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    [row addSubview:title];
+    UILabel *detail=[UILabel new];
+    detail.translatesAutoresizingMaskIntoConstraints=NO;
+    detail.text=subtitle;
+    detail.textColor=FMThemeColor(FMColorSecondary);
+    detail.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
+    detail.numberOfLines=1;
+    [row addSubview:detail];
+    UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+    arrow.tintColor=FMThemeColor(FMColorSecondary);
+    arrow.translatesAutoresizingMaskIntoConstraints=NO;
+    [row addSubview:arrow];
+    [NSLayoutConstraint activateConstraints:@[
+        [badge.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [badge.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [badge.widthAnchor constraintEqualToConstant:32],
+        [badge.heightAnchor constraintEqualToConstant:32],
+        [icon.centerXAnchor constraintEqualToAnchor:badge.centerXAnchor],
+        [icon.centerYAnchor constraintEqualToAnchor:badge.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:19],
+        [icon.heightAnchor constraintEqualToConstant:19],
+        [title.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:13],
+        [title.topAnchor constraintEqualToAnchor:row.topAnchor constant:12],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
+        [detail.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+        [detail.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2],
+        [detail.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
+        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-17],
+        [arrow.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [arrow.heightAnchor constraintEqualToConstant:15],
+        [arrow.widthAnchor constraintEqualToConstant:10]
+    ]];
+    if(action) [row addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+    else {arrow.hidden=YES;row.userInteractionEnabled=NO;}
+    detail.tag=9235;
+    row.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",name,subtitle];
+    row.accessibilityTraits=action?UIAccessibilityTraitButton:UIAccessibilityTraitStaticText;
+    return row;
+}
+
 @interface FMSettingsRootController : UIViewController
 @property(nonatomic,strong) UIScrollView *contentScroll;
 @property(nonatomic,weak) UILabel *updateStatusLabel;
@@ -1056,6 +1126,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 - (void)rebuild;
 @end
 @interface FMSettingsSectionController : UIViewController
+@property(nonatomic,strong) UIView *shapePreview;
+@property(nonatomic,strong) NSLayoutConstraint *previewHeight;
+@property(nonatomic,assign) CGSize lastPreviewSize;
 @property(nonatomic,copy) NSString *sectionKey;
 @property(nonatomic,assign) NSUInteger githubGeneration;
 @property(nonatomic,assign) BOOL checkingGitHub;
@@ -1095,7 +1168,7 @@ static id FMLayoutChangeObserver=nil;
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UIView *orbPreviewHost;
-@property(nonatomic,strong) UIView *dimensionsPreview;
+@property(nonatomic,weak) UIView *dimensionsPreview;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
 @property(nonatomic,weak) UIWindow *previousKeyWindow;
 @property(nonatomic,assign) UIUserInterfaceStyle lastSystemStyle;
@@ -2712,17 +2785,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMLog(@"settings-close",FMHostUI()?@"lc-host-foreground":@"guest-foreground");
     [self draw];
 }
-- (void)refreshOrbPreview {
-    [self refreshDimensionsPreview];
-    UIView *host=self.orbPreviewHost;
-    if(!host) return;
-    if(self.settingsWindow) host.frame=self.settingsWindow.bounds;
-    for(UIView *view in [host.subviews copy]) [view removeFromSuperview];
-    CGFloat w=self.orbWidth,h=self.orbHeight;
-    CGFloat position=Clamp(FloatPref(@"orbY",self.orbY>0?self.orbY:.5),.1,.9);
-    CGFloat y=Clamp(host.bounds.size.height*position-h*.5,0,MAX(0,host.bounds.size.height-h));
-    BOOL left=BoolPref(@"onLeft",self.left);
-    UIView *body=[[UIView alloc] initWithFrame:CGRectMake(left?0:host.bounds.size.width-w,y,w,h)];
+- (UIView *)orbPreviewWithFrame:(CGRect)frame left:(BOOL)left {
+    CGFloat w=frame.size.width,h=frame.size.height;
+    UIView *body=[[UIView alloc] initWithFrame:frame];
     body.tag=9211;body.userInteractionEnabled=NO;
     FMAddOrbBackdrop(body,left);
     UIView *glass=[self glass:body.bounds radius:w*.5 strong:NO];
@@ -2738,7 +2803,20 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
     body.alpha=Clamp(alpha,.25,1);
-    [host addSubview:body];
+    return body;
+}
+- (void)refreshOrbPreview {
+    [self refreshDimensionsPreview];
+    UIView *host=self.orbPreviewHost;if(!host) return;
+    host.hidden=self.dimensionsPreview!=nil;
+    if(host.hidden) return;
+    if(self.settingsWindow) host.frame=self.settingsWindow.bounds;
+    for(UIView *view in [host.subviews copy]) [view removeFromSuperview];
+    CGFloat w=self.orbWidth,h=self.orbHeight;
+    CGFloat position=Clamp(FloatPref(@"orbY",self.orbY>0?self.orbY:.5),.1,.9);
+    CGFloat y=Clamp(host.bounds.size.height*position-h*.5,0,MAX(0,host.bounds.size.height-h));
+    BOOL left=BoolPref(@"onLeft",self.left);
+    [host addSubview:[self orbPreviewWithFrame:CGRectMake(left?0:host.bounds.size.width-w,y,w,h) left:left]];
 }
 - (void)updateSettingsContent {
     [self refreshOrbPreview];
@@ -2768,7 +2846,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
         [self settingSwitch:s title:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO tag:16];
-        [self addRow:[self rowForTitle:@"尺寸与形状" icon:@"slider.horizontal.3" height:54 action:@selector(openDimensions)] height:54 to:s];
+        [self addRow:FMSettingsNavigationRow(@"尺寸与形状",@"微珠、展开菜单与图标尺寸",@"slider.horizontal.3",UIColor.systemOrangeColor,self,@selector(openDimensions)) height:65 to:s];
         [self spacer:s size:16];
         [self diyPage:s];
     } else if([category isEqualToString:@"dimensions"]) {
@@ -3029,7 +3107,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)settingsPage:(UIStackView*)s {
     [self section:@"显示布局" sub:nil in:s];
     [self settingSwitch:s title:@"精简模式 · 只显示 App 图标" key:@"compactMode" defaultValue:NO tag:16];
-    [self addRow:[self rowForTitle:@"尺寸与形状" icon:@"slider.horizontal.3" height:54 action:@selector(openDimensions)] height:54 to:s];
+    [self addRow:FMSettingsNavigationRow(@"尺寸与形状",@"微珠、展开菜单与图标尺寸",@"slider.horizontal.3",UIColor.systemOrangeColor,self,@selector(openDimensions)) height:65 to:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
     [self settingSwitch:s title:@"最近打开的 App 置顶"
@@ -3142,11 +3220,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self.settingsNavigation pushViewController:[[FMSettingsSectionController alloc] initWithSection:@"dimensions"] animated:YES];
 }
 - (void)dimensionsPage:(UIStackView *)s {
-    [self section:@"展开菜单预览" sub:@"预览跟随当前图标或列表模式；滑动参数立即生效。屏幕边缘同时显示微珠。" in:s];
-    UIView *preview=[UIView new];preview.tag=9220;
-    preview.backgroundColor=FMThemeColor(FMColorBackground);
-    self.dimensionsPreview=preview;
-    [self addRow:preview height:240 to:s];
     [self section:@"微珠胶囊" sub:@"尺寸随微珠缩放，保留当前已保存的参数。" in:s];
     [self orbScaleControl:s];
     NSInteger tag=30;
@@ -3155,9 +3228,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
             def:[option[@"default"] floatValue] tag:tag++];
     }
-    [self addRow:[self rowForTitle:@"恢复微珠尺寸默认值" icon:@"arrow.counterclockwise" height:48 action:@selector(resetOrbDimensions)] height:48 to:s];
+    [self appendResetRow:s title:@"恢复微珠默认值" action:@selector(resetOrbDimensions)];
     [self spacer:s size:16];
-    [self section:@"展开菜单" sub:@"形状形状尺寸随菜单缩放；两种模式分别调整图标大小，点击区域保持不变。" in:s];
+    [self section:@"展开菜单" sub:@"形状尺寸随菜单缩放；两种模式分别调整图标大小，点击区域保持不变。" in:s];
     [self settingScaleControl:s];
     tag=40;
     for(NSDictionary *option in FMMenuStyleOptions()) {
@@ -3165,7 +3238,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
             def:[option[@"default"] floatValue] tag:tag++];
     }
-    [self addRow:[self rowForTitle:@"恢复菜单尺寸默认值" icon:@"arrow.counterclockwise" height:48 action:@selector(resetMenuDimensions)] height:48 to:s];
+    [self appendResetRow:s title:@"恢复菜单默认值" action:@selector(resetMenuDimensions)];
     [self refreshDimensionsPreview];
 }
 - (void)resetOrbDimensions {
@@ -3179,15 +3252,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self updateSettingsContent];[self refreshOrbPreview];[self draw];
 }
 - (void)refreshDimensionsPreview {
-    UIView *host=self.dimensionsPreview;if(!host) return;
+    UIView *host=self.dimensionsPreview;if(!host || host.bounds.size.width<1 || host.bounds.size.height<1) return;
     for(UIView *view in [host.subviews copy]) [view removeFromSuperview];
-    BOOL compact=BoolPref(@"compactMode",NO),left=BoolPref(@"onLeft",self.left);
+    host.backgroundColor=FMThemeColor(FMColorBackground);
+    host.clipsToBounds=YES;host.userInteractionEnabled=NO;
+    BOOL compact=BoolPref(@"compactMode",NO);
     CGFloat width=compact?76:240,height=280;
-    CGFloat scale=.65*Clamp(FloatPref(@"panelScale",1),.5,1.2);
+    CGFloat available=MAX(1,host.bounds.size.height-32);
+    CGFloat scale=MIN(.65*Clamp(FloatPref(@"panelScale",1),.5,1.2),MIN(available/height,host.bounds.size.width*.70/width));
+    CGFloat centerY=24+available*.5;
     UIView *body=[[UIView alloc] initWithFrame:CGRectMake(0,0,width,height)];
-    FMAddOrbBackdrop(body,left);
+    body.tag=9221;FMAddOrbBackdrop(body,YES);
     UIView *glass=[self glass:body.bounds radius:26 strong:YES];
-    FMApplySideNotch(glass,body.layer,left,compact,NO);[body addSubview:glass];
+    FMApplySideNotch(glass,body.layer,YES,compact,NO);[body addSubview:glass];
     CGFloat start=FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28)+10;
     CGFloat size=FMMenuStyleValue(compact?@"menuCompactIconSize":@"menuListIconSize");
     NSArray *apps=[self orderedAppsForMenu];
@@ -3202,10 +3279,22 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         }
     }
     body.transform=CGAffineTransformMakeScale(scale,scale);
-    body.frame=CGRectMake(12,10,width*scale,height*scale);
+    body.frame=CGRectMake(0,centerY-height*scale*.5,width*scale,height*scale);
     body.userInteractionEnabled=NO;[host addSubview:body];
-
+    CGFloat orbScale=MIN(1,available/MAX(1,self.orbHeight));
+    UIView *bead=[self orbPreviewWithFrame:CGRectMake(0,0,self.orbWidth,self.orbHeight) left:NO];
+    bead.transform=CGAffineTransformMakeScale(orbScale,orbScale);
+    bead.frame=CGRectMake(host.bounds.size.width-self.orbWidth*orbScale,centerY-self.orbHeight*orbScale*.5,self.orbWidth*orbScale,self.orbHeight*orbScale);
+    [host addSubview:bead];
+    for(NSNumber *right in @[@NO,@YES]) {
+        UILabel *label=[self label:right.boolValue?@"微珠胶囊":@"展开菜单" size:11 weight:UIFontWeightMedium];
+        label.textColor=FMThemeColor(FMColorSecondary);
+        label.textAlignment=right.boolValue?NSTextAlignmentRight:NSTextAlignmentLeft;
+        label.frame=CGRectMake(right.boolValue?host.bounds.size.width-116:14,4,102,20);
+        [host addSubview:label];
+    }
 }
+
 - (void)pinApp:(UIControl *)button {
     NSDictionary *app=objc_getAssociatedObject(button,@selector(pinApp:));
     NSString *path=FMAppKey(app);
@@ -3657,6 +3746,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [presenter presentViewController:alert animated:YES completion:nil];
 }
 - (void)appendResetStyleRow:(UIStackView *)stack {
+    [self appendResetRow:stack title:@"恢复默认设置" action:@selector(resetStyle)];
+}
+- (void)appendResetRow:(UIStackView *)stack title:(NSString *)title action:(SEL)action {
     UIView *row=[UIView new];
     row.backgroundColor=FMThemeColor(FMColorSurface);
     row.layer.cornerRadius=16;
@@ -3678,7 +3770,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     symbol.contentMode=UIViewContentModeScaleAspectFit;
     [badge addSubview:symbol];
     
-    UILabel *label=[self label:@"恢复默认设置" size:16 weight:UIFontWeightMedium];
+    UILabel *label=[self label:title size:16 weight:UIFontWeightMedium];
     label.translatesAutoresizingMaskIntoConstraints=NO;
     [button addSubview:label];
     
@@ -3698,8 +3790,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [label.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:13],
         [label.centerYAnchor constraintEqualToAnchor:button.centerYAnchor]
     ]];
-    button.accessibilityLabel=@"恢复默认设置";
-    [button addTarget:self action:@selector(resetStyle) forControlEvents:UIControlEventTouchUpInside];
+    button.accessibilityLabel=title;
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     [self addRow:row height:65 to:stack];
 }
 - (void)resetStyle {
@@ -3977,66 +4069,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (UIControl *)navigationRow:(NSString *)name subtitle:(NSString *)subtitle
                      symbol:(NSString *)symbol badgeColor:(UIColor *)badgeColor action:(SEL)action {
-    UIControl *row=[UIControl new];
-    row.layer.cornerRadius=16;
-    row.backgroundColor=FMThemeColor(FMColorSurface);
-    
-    UIView *badge=[UIView new];
-    badge.translatesAutoresizingMaskIntoConstraints=NO;
-    badge.layer.cornerRadius=8;
-    badge.layer.masksToBounds=YES;
-    badge.backgroundColor=badgeColor?:[UIColor colorWithRed:0 green:122/255.0 blue:255/255.0 alpha:1.0];
-    [row addSubview:badge];
-    
-    UIImageView *icon=[[UIImageView alloc] initWithImage:
-        [[UIImage systemImageNamed:symbol] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
-    icon.translatesAutoresizingMaskIntoConstraints=NO;
-    icon.tintColor=UIColor.whiteColor;
-    icon.contentMode=UIViewContentModeScaleAspectFit;
-    [badge addSubview:icon];
-    
-    UILabel *title=[UILabel new];
-    title.translatesAutoresizingMaskIntoConstraints=NO;
-    title.text=name;
-    title.textColor=FMThemeColor(FMColorText);
-    title.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    [row addSubview:title];
-    UILabel *detail=[UILabel new];
-    detail.translatesAutoresizingMaskIntoConstraints=NO;
-    detail.text=subtitle;
-    detail.textColor=FMThemeColor(FMColorSecondary);
-    detail.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
-    detail.numberOfLines=1;
-    [row addSubview:detail];
-    UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
-    arrow.tintColor=FMThemeColor(FMColorSecondary);
-    arrow.translatesAutoresizingMaskIntoConstraints=NO;
-    [row addSubview:arrow];
-    [NSLayoutConstraint activateConstraints:@[
-        [badge.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
-        [badge.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [badge.widthAnchor constraintEqualToConstant:32],
-        [badge.heightAnchor constraintEqualToConstant:32],
-        [icon.centerXAnchor constraintEqualToAnchor:badge.centerXAnchor],
-        [icon.centerYAnchor constraintEqualToAnchor:badge.centerYAnchor],
-        [icon.widthAnchor constraintEqualToConstant:19],
-        [icon.heightAnchor constraintEqualToConstant:19],
-        [title.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:13],
-        [title.topAnchor constraintEqualToAnchor:row.topAnchor constant:12],
-        [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
-        [detail.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
-        [detail.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2],
-        [detail.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
-        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-17],
-        [arrow.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [arrow.heightAnchor constraintEqualToConstant:15],
-        [arrow.widthAnchor constraintEqualToConstant:10]
-    ]];
-    if(action) [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
-    else {arrow.hidden=YES;row.userInteractionEnabled=NO;}
-    if(action==@selector(checkForUpdates)) self.updateStatusLabel=detail;
-    row.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",name,subtitle];
-    row.accessibilityTraits=action?UIAccessibilityTraitButton:UIAccessibilityTraitStaticText;
+    UIControl *row=FMSettingsNavigationRow(name,subtitle,symbol,badgeColor,self,action);
+    if(action==@selector(checkForUpdates)) self.updateStatusLabel=(UILabel *)[row viewWithTag:9235];
     return row;
 }
 - (void)openRepository {
@@ -4333,14 +4367,48 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     scroll.alwaysBounceVertical=YES;
     scroll.showsVerticalScrollIndicator=YES;
     [self.view addSubview:scroll];
+    UIView *preview=nil;
+    if([self.sectionKey isEqualToString:@"dimensions"]) {
+        preview=[UIView new];preview.tag=9220;
+        preview.translatesAutoresizingMaskIntoConstraints=NO;
+        preview.userInteractionEnabled=NO;
+        self.shapePreview=preview;[self.view addSubview:preview];
+        self.previewHeight=[preview.heightAnchor constraintEqualToConstant:200];
+        [NSLayoutConstraint activateConstraints:@[
+            [preview.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+            [preview.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+            [preview.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+            self.previewHeight
+        ]];
+    }
     [NSLayoutConstraint activateConstraints:@[
         [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:preview?preview.bottomAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
     ]];
     self.contentScroll=scroll;
     [self rebuild];
+}
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if(self.shapePreview) {
+        [FMManager shared].dimensionsPreview=self.shapePreview;
+        [FMManager shared].orbPreviewHost.hidden=YES;
+        [[FMManager shared] refreshOrbPreview];
+    }
+}
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    if(!self.shapePreview) return;
+    CGFloat available=self.view.safeAreaLayoutGuide.layoutFrame.size.height;
+    CGFloat height=MIN(220,MAX(72,available*.30));
+    if(fabs(self.previewHeight.constant-height)>.5) {self.previewHeight.constant=height;return;}
+    if(!CGSizeEqualToSize(self.lastPreviewSize,self.shapePreview.bounds.size)) {
+        self.lastPreviewSize=self.shapePreview.bounds.size;
+        [FMManager shared].dimensionsPreview=self.shapePreview;
+        [[FMManager shared] refreshOrbPreview];
+    }
 }
 - (BOOL)isGitHubPageVisible {
     return FMHostUI() && [self.sectionKey isEqualToString:@"github"] && self.isViewLoaded &&
@@ -4357,6 +4425,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if([self.sectionKey isEqualToString:@"github"] &&
        (self.isMovingFromParentViewController || self.navigationController.isBeingDismissed ||
         self.navigationController.topViewController!=self)) [self invalidateGitHubVerification];
+    if(self.shapePreview && [FMManager shared].dimensionsPreview==self.shapePreview) {
+        [FMManager shared].dimensionsPreview=nil;
+        [FMManager shared].orbPreviewHost.hidden=NO;
+        [[FMManager shared] refreshOrbPreview];
+    }
 }
 - (void)showGitHubMessage:(NSString *)message {
     if(![self isGitHubPageVisible] || self.presentedViewController) return;
@@ -4520,6 +4593,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-32],
         [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-36]
     ]];
+    if(self.shapePreview) [FMManager shared].dimensionsPreview=self.shapePreview;
     if([self.sectionKey isEqualToString:@"github"]) [self populateGitHub:stack];
     else [[FMManager shared] populateSettingsCategory:self.sectionKey stack:stack];
     dispatch_async(dispatch_get_main_queue(), ^{
