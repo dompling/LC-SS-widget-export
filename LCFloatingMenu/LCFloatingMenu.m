@@ -567,9 +567,11 @@ static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL co
     rim.frame=glass.bounds;
     rim.path=outline.CGPath;
     rim.fillColor=UIColor.clearColor.CGColor;
+    // The docked handle is a small shape with nothing but its own outline to stand on,
+    // and on a pale screen a fainter one than this disappears into the wallpaper.
     rim.strokeColor=[(collapsed && !FMMenuDark()?UIColor.blackColor:UIColor.whiteColor) colorWithAlphaComponent:
-        collapsed?(FMMenuDark()?.28:.18):(FMMenuDark()?.32:.58)].CGColor;
-    rim.lineWidth=collapsed?.45:.75;
+        collapsed?(FMMenuDark()?.42:.32):(FMMenuDark()?.32:.58)].CGColor;
+    rim.lineWidth=collapsed?.7:.75;
     [glass.layer addSublayer:rim];
     if(!collapsed) {
         // A broad, low-opacity reflection gives the custom silhouette depth
@@ -3265,13 +3267,18 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,88,63)];
             row.backgroundColor=UIColor.clearColor;
             // The 63pt row stays clickable, but its painted backing is inset
-            // around the app icon so compact/single-task tiles feel lighter.
-            if(FMHostUI()) {
+            // around the app icon so compact/single-task tiles feel lighter. The plate
+            // used to be drawn in the LC host only; it is what gives an icon its seat on
+            // the glass, so it is a setting now and a Guest gets one too.
+            if(BoolPref(@"iconFrame",YES)) {
                 UIView *backing=[UIView new];
                 backing.translatesAutoresizingMaskIntoConstraints=NO;
                 backing.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
                     FMClearGlassEnabled()?.64:.74];
                 backing.layer.cornerRadius=14;
+                backing.layer.borderWidth=.5;
+                backing.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
+                    FMMenuDark()?.26:.40].CGColor;
                 backing.userInteractionEnabled=NO;
                 [row addSubview:backing];
                 [NSLayoutConstraint activateConstraints:@[
@@ -3997,7 +4004,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
-    SetPref(@"popAnimation",@0);
+    SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
 }
 
@@ -5543,10 +5550,12 @@ static UIView *FMDockCard(UIStackView *rows) {
         CGFloat top=_listTop,size=FMMenuStyleValue(@"menuCompactIconSize"),width=pw-6;
         for(NSUInteger index=0;index<3;index++) {
             UIView *row=[[UIView alloc] initWithFrame:CGRectMake(3,top+index*66,width,63)];
-            if(FMHostUI()) {
+            if(BoolPref(@"iconFrame",YES)) {
                 UIView *backing=[[UIView alloc] initWithFrame:CGRectMake((width-54)*.5,(63-54)*.5,54,54)];
                 backing.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74];
                 backing.layer.cornerRadius=14;
+                backing.layer.borderWidth=.5;
+                backing.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:dark?.26:.40].CGColor;
                 [row addSubview:backing];
             }
             UIView *icon=[self iconForSlot:index size:size apps:apps];
@@ -6111,6 +6120,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)addTrayRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupTray;
     [self add:[self switchRow:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"图标玻璃底座" key:@"iconFrame" defaultValue:YES] to:rows group:group when:FMDockWhenCompact];
     [self addSlider:FMDockOption(@"panelScale",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"menuExtension",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"menuCornerRadius",nil) to:rows group:group when:FMDockWhenAlways];
