@@ -171,6 +171,12 @@ static NSString *FMAppCaption(NSDictionary *app) {
     if(!state.length && [app[@"shared"] boolValue]) state=@"共享";
     return state.length?[NSString stringWithFormat:@"%@ · %@",title,state]:title;
 }
+// What a row shows. The current app already wears a green light, so its title does not
+// have to say so as well; anything else (shared, unavailable) still belongs on the row.
+static NSString *FMAppRowTitle(NSDictionary *app) {
+    if([LCOrbitGuestService isCurrentGuest:app]) return app[@"title"] ?: @"";
+    return FMAppCaption(app);
+}
 static NSString *Pref(NSString *key) { return [LCOrbitStorage key:key forModule:@"LCFloatingMenu"]; }
 static BOOL BoolPref(NSString *key,BOOL def) {
     id v=[HostDefaults() objectForKey:Pref(key)];
@@ -2603,7 +2609,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(!BoolPref(@"compactMode",NO) || !_scrubLens || _scrubCancelling ||
        _scrubIndex<0 || _scrubIndex>=(NSInteger)_scrubControls.count) return;
     NSDictionary *app=objc_getAssociatedObject(_scrubControls[_scrubIndex],@selector(switchFromRow:));
-    UILabel *text=[self label:FMAppCaption(app) size:13 weight:UIFontWeightSemibold];
+    UILabel *text=[self label:FMAppRowTitle(app) size:13 weight:UIFontWeightSemibold];
     text.numberOfLines=1;
     CGFloat width=MIN(190,[text sizeThatFits:CGSizeMake(190,30)].width)+24;
     UIView *holder=[[UIView alloc] initWithFrame:CGRectMake(0,0,width,30)];
@@ -2940,7 +2946,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIView *icon=[self iconViewForApp:app size:iconSize];
     icon.frame=CGRectMake(12,(height-iconSize)*.5,iconSize,iconSize);icon.userInteractionEnabled=NO;
     [row addSubview:icon];
-    UILabel *title=[self label:FMAppCaption(app) size:13 weight:UIFontWeightSemibold];
+    UILabel *title=[self label:FMAppRowTitle(app) size:13 weight:UIFontWeightSemibold];
     title.translatesAutoresizingMaskIntoConstraints=NO;
     title.numberOfLines=1;
     title.lineBreakMode=NSLineBreakByTruncatingTail;
@@ -2952,7 +2958,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
     arrow.tintColor=FMThemeColor(FMColorText);
     arrow.contentMode=UIViewContentModeScaleAspectFit;
-    arrow.hidden=running;
+    arrow.hidden=running || current;
     [row addSubview:arrow];
     [NSLayoutConstraint activateConstraints:@[
         [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:8],
@@ -3025,6 +3031,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     // A real side drawer: apps and actions share one continuous vertical
     // capsule. Heights depend on the number of visible guests and footer keys.
     NSUInteger appCount=[self visibleApps].count;
+    // Nothing pinned (or everything pinned): no strip, and no band reserved for one.
+    BOOL showsFavorites=small && !compact && [self pinnedApps].count>0;
     // Compact drawer has exactly one footer control: LC home.
     NSUInteger compactActions=1+([LCOrbitMultitask isPiPActive]?1:0);
     CGFloat actualScale=small?MIN(Clamp(FloatPref(@"panelScale",1.0),.50,1.20),
@@ -3037,7 +3045,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     for(NSUInteger attempt=0;attempt<12;attempt++) {
         self.panelContentScale=actualScale;
         BOOL tight=available/actualScale<360;
-        self.panelShowsHeader=small && !compact && !tight;
+        self.panelShowsHeader=showsFavorites && !tight;
         footerHeight=compact?(tight?MAX(50,44/actualScale)*compactActions+4:10+compactActions*63+3):
                               (small?44:(tight?MAX(60,44/actualScale)+8:74));
         top=compact?shoulder+8:(self.panelShowsHeader?64+shoulder:shoulder+6);
@@ -3347,20 +3355,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     NSMutableArray<UIView *> *tiles=[NSMutableArray array];
     CGFloat w=glass.bounds.size.width, inner=w-24;
     // Favorites show icons only; app names remain available to VoiceOver.
-    NSArray *apps=[self visibleApps];
-    NSMutableArray *pinned=[NSMutableArray array];
-    for(NSString *path in [self favorites]) for(NSDictionary *item in apps)
-        if(([path isEqualToString:FMAppKey(item)] || [path isEqualToString:item[@"path"]]) && pinned.count<4) { [pinned addObject:item]; break; }
-    if(!pinned.count) for(NSDictionary *item in apps) {
-        if(pinned.count==4) break;
-        [pinned addObject:item];
-    }
+    NSArray<NSDictionary *> *pinned=[self pinnedApps];
+    BOOL compact=BoolPref(@"compactMode",NO);
     CGFloat gap=4,cell=(inner-gap*3)/4;
+    // Fewer than four sit in the middle instead of leaving the whole gap at one end.
+    CGFloat left=12+(inner-(cell*pinned.count+gap*(pinned.count?pinned.count-1:0)))*.5;
     for(NSUInteger i=0;i<pinned.count;i++) {
         NSDictionary *app=pinned[i];
-        BOOL compact=BoolPref(@"compactMode",NO);
         UIControl *tile=[[UIControl alloc] initWithFrame:
-            CGRectMake(12+i*(cell+gap),(compact?5:8)+(compact?22:28),cell,compact?48:40)];
+            CGRectMake(left+i*(cell+gap),(compact?5:8)+(compact?22:28),cell,compact?48:40)];
         tile.backgroundColor=UIColor.clearColor;
         CGFloat iconSize=compact?40:32;
         UIView *icon=[self iconViewForApp:app size:iconSize];
@@ -3385,6 +3388,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [tiles addObject:separator];
     }
     self.appsHeaderTiles=tiles;
+}
+// The apps pinned as favorites, in the order they were pinned, at most four. Empty when
+// every app is pinned: the strip is a shortcut into a longer list, and repeating the whole
+// list above the rows would only say the same thing twice.
+- (NSArray<NSDictionary *> *)pinnedApps {
+    NSArray<NSDictionary *> *apps=[self visibleApps];
+    NSMutableArray<NSDictionary *> *pinned=[NSMutableArray array];
+    for(NSString *key in [self favorites]) for(NSDictionary *item in apps)
+        if(([key isEqualToString:FMAppKey(item)] || [key isEqualToString:item[@"path"]]) && pinned.count<4) {
+            [pinned addObject:item];
+            break;
+        }
+    return pinned.count<apps.count?pinned:@[];
 }
 - (void)buildAppFooter:(UIView *)glass {
     BOOL compact=BoolPref(@"compactMode",NO);
@@ -5281,24 +5297,24 @@ static CGFloat FMDockCardRadius(void) {
     if(@available(iOS 26.0,*)) return 26;
     return 14;
 }
-// One row of a group: the content inset like a list row, a hairline above it and
-// at least minHeight tall. The paddings and the minimum give way (silently) when a
-// stack view collapses the row to nothing.
+// One row of a group: the content inset like a list row, a hairline above it and at
+// least minHeight tall. A row is only ever in the stack while it is on show (closing a
+// group takes it out), so its own height can be stated outright.
 static UIView *FMDockRow(UIView *content,CGFloat padding,BOOL separator,CGFloat minHeight) {
     UIView *row=[UIView new];
     content.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:content];
-    NSLayoutConstraint *top=[content.topAnchor constraintGreaterThanOrEqualToAnchor:row.topAnchor constant:padding];
-    NSLayoutConstraint *bottom=[content.bottomAnchor constraintLessThanOrEqualToAnchor:row.bottomAnchor constant:-padding];
-    NSLayoutConstraint *least=[row.heightAnchor constraintGreaterThanOrEqualToConstant:minHeight];
+    // The content decides the height; the minimum wins for a short one.
     NSLayoutConstraint *natural=[row.heightAnchor constraintEqualToAnchor:content.heightAnchor constant:2*padding];
-    top.priority=bottom.priority=least.priority=999;
     natural.priority=250;
     [NSLayoutConstraint activateConstraints:@[
         [content.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:20],
         [content.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-20],
         [content.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        top,bottom,least,natural
+        [content.topAnchor constraintGreaterThanOrEqualToAnchor:row.topAnchor constant:padding],
+        [content.bottomAnchor constraintLessThanOrEqualToAnchor:row.bottomAnchor constant:-padding],
+        [row.heightAnchor constraintGreaterThanOrEqualToConstant:minHeight],
+        natural
     ]];
     if(separator) {
         UIView *line=[UIView new];
@@ -5352,8 +5368,9 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSArray<NSDictionary *> *_popItems;
     NSArray<UIView *> *_popDividers;
     FMNotchParams _beadParams,_dropletParams,_drawerParams;
+    NSArray<NSDictionary *> *_favorites;
     BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded,_rebuildScheduled;
-    CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth;
+    CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop;
     CGFloat _idleAlpha,_fadedAlpha;
     CGFloat _progress,_velocity,_omega,_zeta;
     CFTimeInterval _tick,_elapsed,_builtAt;
@@ -5415,7 +5432,9 @@ static UIView *FMDockCard(UIStackView *rows) {
     CGFloat rowHeight=_compact?63:MAX(56,48/MAX(.50,_actual));
     CGFloat footer=_compact?76:44;
     _pw=_compact?76:240;
-    _ph=_compact?20+3*65+footer+12+2*shoulder:(64+shoulder)+(footer+6+shoulder)+3*(rowHeight+4);
+    _favorites=_compact?@[]:[manager pinnedApps];
+    _listTop=_compact?shoulder+8:(_favorites.count?64+shoulder:shoulder+6);
+    _ph=_compact?20+3*65+footer+12+2*shoulder:_listTop+(footer+6+shoulder)+3*(rowHeight+4);
     _closedHeight=MAX([manager orbHeight]+100,190);
     // A short window cannot spare that much: the card gives way before the options do.
     if(_maxHeight>0) _closedHeight=MIN(_closedHeight,MAX(_maxHeight,[manager orbHeight]+24));
@@ -5512,17 +5531,6 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)buildContents {
     FMManager *manager=[FMManager shared];
     NSArray<NSDictionary *> *apps=[manager orderedAppsForMenu];
-    // The strip on top shows the favorites, or else the first apps, as the drawer's header does.
-    NSMutableArray<NSDictionary *> *strip=[NSMutableArray array];
-    for(NSString *key in [manager favorites]) for(NSDictionary *item in apps)
-        if(([key isEqualToString:FMAppKey(item)] || [key isEqualToString:item[@"path"]]) && strip.count<4) {
-            [strip addObject:item];
-            break;
-        }
-    if(!strip.count) for(NSDictionary *item in apps) {
-        if(strip.count==4) break;
-        [strip addObject:item];
-    }
     _content=[[UIView alloc] initWithFrame:_glass.bounds];
     [FMGlassContent(_glass) addSubview:_content];
     NSMutableArray<UIView *> *items=[NSMutableArray array],*dividers=[NSMutableArray array];
@@ -5531,7 +5539,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     UIColor *rule=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
     BOOL dark=FMMenuDark();
     if(_compact) {
-        CGFloat top=shoulder+8,size=FMMenuStyleValue(@"menuCompactIconSize"),width=pw-6;
+        CGFloat top=_listTop,size=FMMenuStyleValue(@"menuCompactIconSize"),width=pw-6;
         for(NSUInteger index=0;index<3;index++) {
             UIView *row=[[UIView alloc] initWithFrame:CGRectMake(3,top+index*66,width,63)];
             if(FMHostUI()) {
@@ -5560,19 +5568,23 @@ static UIView *FMDockCard(UIStackView *rows) {
         [items addObject:home];
     } else {
         CGFloat inner=pw-24,gap=4,cell=(inner-gap*3)/4;
-        for(NSUInteger index=0;index<4;index++) {
-            UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(12+index*(cell+gap),36,cell,40)];
-            UIView *icon=[self iconForSlot:index size:32 apps:strip];
+        NSUInteger pins=_favorites.count;
+        CGFloat strip=12+(inner-(cell*pins+gap*(pins?pins-1:0)))*.5;
+        for(NSUInteger index=0;index<pins;index++) {
+            UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(strip+index*(cell+gap),36,cell,40)];
+            UIView *icon=[self iconForSlot:index size:32 apps:_favorites];
             icon.frame=CGRectMake((cell-32)*.5,4,32,32);
             [tile addSubview:icon];
             [_content addSubview:tile];
             [items addObject:tile];
         }
-        UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(12,84,inner,hairline)];
-        divider.backgroundColor=rule;
-        [_content addSubview:divider];
-        [dividers addObject:divider];
-        CGFloat top=64+shoulder,rowHeight=MAX(56,48/MAX(.50,_actual)),size=FMMenuStyleValue(@"menuListIconSize");
+        if(pins) {
+            UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(12,84,inner,hairline)];
+            divider.backgroundColor=rule;
+            [_content addSubview:divider];
+            [dividers addObject:divider];
+        }
+        CGFloat top=_listTop,rowHeight=MAX(56,48/MAX(.50,_actual)),size=FMMenuStyleValue(@"menuListIconSize");
         for(NSUInteger index=0;index<3;index++) {
             UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+index*(rowHeight+4),inner,rowHeight)];
             row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
@@ -5799,6 +5811,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 @property(nonatomic,strong) UIStackView *stack;
 @property(nonatomic,strong) NSLayoutConstraint *previewHeight;
 @property(nonatomic,strong) NSMutableArray<NSDictionary *> *bodyRows;
+@property(nonatomic,strong) NSMutableArray<UIStackView *> *groupStacks;
 @property(nonatomic,strong) NSMutableArray<UIImageView *> *chevrons;
 @property(nonatomic,strong) NSMutableArray<UIControl *> *headers;
 @property(nonatomic,strong) UILabel *handleNote;
@@ -5812,6 +5825,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     self.navigationItem.largeTitleDisplayMode=UINavigationItemLargeTitleDisplayModeNever;
     self.view.backgroundColor=FMThemeColor(FMColorBackground);
     self.bodyRows=[NSMutableArray array];
+    self.groupStacks=[NSMutableArray array];
     self.chevrons=[NSMutableArray array];
     self.headers=[NSMutableArray array];
     // The handle group is open to begin with, with the preview docked.
@@ -5885,6 +5899,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     CGFloat offset=scroll.contentOffset.y;
     [self.stack removeFromSuperview];
     [self.bodyRows removeAllObjects];
+    [self.groupStacks removeAllObjects];
     [self.chevrons removeAllObjects];
     [self.headers removeAllObjects];
     UIStackView *stack=[UIStackView new];
@@ -6007,9 +6022,10 @@ static UIView *FMDockCard(UIStackView *rows) {
     column.spacing=8;
     return FMDockRow(column,10,YES,52);
 }
+// Rows are recorded in the order they are written and go into their group's stack only
+// while that group is open (see applyVisibilityAnimated:).
 - (void)add:(UIView *)row to:(UIStackView *)rows group:(FMDockGroup)group when:(FMDockWhen)when {
-    [rows addArrangedSubview:row];
-    [self.bodyRows addObject:@{@"view":row,@"group":@(group),@"when":@(when)}];
+    [self.bodyRows addObject:@{@"view":row,@"stack":rows,@"group":@(group),@"when":@(when)}];
 }
 - (void)addNote:(NSString *)text to:(UIStackView *)rows group:(FMDockGroup)group {
     [self add:FMDockRow(FMDockLabel(text,13,FMThemeColor(FMColorSecondary)),10,YES,0) to:rows group:group when:FMDockWhenAlways];
@@ -6023,6 +6039,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     UIStackView *rows=[UIStackView new];
     rows.axis=UILayoutConstraintAxisVertical;
     [rows addArrangedSubview:[self headerForGroup:group]];
+    [self.groupStacks addObject:rows];
     switch(group) {
         case FMDockGroupPosition: [self addPositionRows:rows]; break;
         case FMDockGroupHandle: [self addHandleRows:rows]; break;
@@ -6118,15 +6135,21 @@ static UIView *FMDockCard(UIStackView *rows) {
         default: return YES;
     }
 }
-// Shows the rows of the open group that apply, hides the rest, and turns the chevrons.
+// Puts the rows of the open group that apply into their card, takes every other row out,
+// and turns the chevrons. Rows are added and removed rather than hidden: hiding the same
+// arranged subview twice leaves a stack view holding it at no height for good.
 - (void)applyVisibilityAnimated:(BOOL)animated {
     void (^apply)(void)=^{
         FMBeginPreferenceSnapshot();
+        for(UIStackView *rows in self.groupStacks)
+            while(rows.arrangedSubviews.count>1) [rows.arrangedSubviews.lastObject removeFromSuperview];
         for(NSDictionary *entry in self.bodyRows) {
+            if([entry[@"group"] integerValue]!=self.openGroup) continue;
+            if(![self whenHolds:(FMDockWhen)[entry[@"when"] integerValue]]) continue;
+            UIStackView *rows=entry[@"stack"];
             UIView *row=entry[@"view"];
-            BOOL visible=[entry[@"group"] integerValue]==self.openGroup && [self whenHolds:(FMDockWhen)[entry[@"when"] integerValue]];
-            row.hidden=!visible;
-            row.alpha=visible?1:0;
+            row.alpha=1;
+            [rows addArrangedSubview:row];
         }
         FMEndPreferenceSnapshot();
         for(NSUInteger index=0;index<self.chevrons.count;index++) {
