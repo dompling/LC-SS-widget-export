@@ -788,13 +788,35 @@ static BOOL FMDrawerShouldCloseAfterDrag(CGFloat progress,CGFloat outwardVelocit
     if(outwardVelocity<-450) return NO;
     return progress-outwardVelocity*.12/MAX(travel,1)<.62;
 }
-// Critically damped spring advanced by exactly dt seconds. It is the closed
-// form, so the result does not depend on the frame rate, and it cannot swing
-// past the target unless released with speed toward it.
-static void FMSpringStep(CGFloat *x,CGFloat *v,CGFloat target,CGFloat omega,CGFloat dt) {
-    CGFloat u=*x-target,c=*v+omega*u,decay=exp(-omega*dt);
-    *x=target+(u+c*dt)*decay;
-    *v=(*v-omega*c*dt)*decay;
+// Spring advanced by exactly dt seconds. It is the closed form, so the result
+// does not depend on the frame rate. omega is the natural frequency in rad/s
+// (2*pi/response); zeta is the damping ratio: 1 never overshoots, below 1 it
+// overshoots by exp(-pi*zeta/sqrt(1-zeta^2)) (about 5.4% at .68) and rings down.
+static void FMSpringStep(CGFloat *x,CGFloat *v,CGFloat target,CGFloat omega,CGFloat zeta,CGFloat dt) {
+    CGFloat u=*x-target;
+    if(zeta>=.999) {
+        CGFloat c=*v+omega*u,decay=exp(-omega*dt);
+        *x=target+(u+c*dt)*decay;
+        *v=(*v-omega*c*dt)*decay;
+        return;
+    }
+    CGFloat damping=zeta*omega,ringing=omega*sqrt(1-zeta*zeta);
+    CGFloat decay=exp(-damping*dt),cosine=cos(ringing*dt),sine=sin(ringing*dt);
+    CGFloat b=(*v+damping*u)/ringing;
+    *x=target+decay*(u*cosine+b*sine);
+    *v=decay*((*v)*cosine-(u*omega*omega+damping*(*v))/ringing*sine);
+}
+// Elastic resistance past a limit: it starts at slope one, so the finger and the
+// drawer move together at first, and it never exceeds limit.
+static CGFloat FMRubberBand(CGFloat over,CGFloat limit) {
+    over=MAX(0,over);
+    limit=MAX(limit,1e-6);
+    return limit*(1-1/(1+over/limit));
+}
+// Progress as a finger drags it: beyond fully open the drawer stretches against
+// rising resistance, up to about 6%, and springs back when released.
+static CGFloat FMRubberProgress(CGFloat progress) {
+    return progress<=1?progress:1+FMRubberBand(progress-1,.06);
 }
 // FMDrawerMotion:end
 static BOOL FMClearGlassEnabled(void) {
@@ -1360,6 +1382,7 @@ static id FMLayoutChangeObserver=nil;
     CGPoint _morphRestCenter,_morphShift;
     CGFloat _morphProgress,_morphVelocity,_morphTarget,_morphTravel,_morphCommit;
     CGFloat _morphBeadAlpha,_morphShadow,_morphRoundness,_morphElapsed,_panelDragStart;
+    CGFloat _morphScale,_morphOmega,_morphZeta;
     CFTimeInterval _morphTick;
     CADisplayLink *_morphLink;
     BOOL _morphCompact,_morphActive,_morphDragging,_morphOpening,_morphFromBead;
@@ -2019,7 +2042,7 @@ static id FMLayoutChangeObserver=nil;
             
         } else if(_panUsesMorph && (_morphActive || (_panIsDropletPull && [self beginDrawerDragFromBead]))) {
             // === 抽屉从微珠里长出来，内侧边与手指一比一 ===
-            [self applyMorphProgress:inwardDist/_morphTravel];
+            [self applyMorphProgress:FMRubberProgress(inwardDist/_morphTravel)];
             if(inwardDist>=_morphCommit) {
                 if(!_morphCommitHaptic && BoolPref(@"haptic",YES))
                     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
@@ -2223,6 +2246,7 @@ static id FMLayoutChangeObserver=nil;
     CGFloat rawTop=(CGRectGetMinY(bead)-CGRectGetMinY(rest))*unit;
     CGFloat top=Clamp(rawTop,0,ph-beadHeight);
     _morphBead=FMBeadNotchParams(bead.size,unit,pw-beadWidth,top);
+    _morphScale=scale;
     _morphRestCenter=panel.center;
     _morphShift=CGPointMake(dx,(rawTop-top)*scale);
     _morphCompact=BoolPref(@"compactMode",NO);
@@ -2245,8 +2269,10 @@ static id FMLayoutChangeObserver=nil;
     UIView *panel=self.panel,*glass=[panel viewWithTag:9230];
     CAShapeLayer *clip=(CAShapeLayer *)glass.layer.mask;
     if(!panel || ![clip isKindOfClass:CAShapeLayer.class]) return;
-    CGFloat t=Clamp(progress,0,1);
-    _morphProgress=t;
+    // The outline stops at fully open; progress beyond 1 (a spring overshooting
+    // or a finger pulling past the end) shows as a stretch toward the screen.
+    CGFloat raw=MAX(progress,0),t=MIN(raw,1),stretch=Clamp(raw-1,0,.08);
+    _morphProgress=raw;
     // Hold the Bezier wrapper for the whole frame: its CGPath is borrowed.
     __attribute__((objc_precise_lifetime)) UIBezierPath *outline=
         FMDrawerMorphPath(glass.bounds,_morphBead,_morphDrawer,self.left,_morphCompact,t,_morphRoundness);
@@ -2259,7 +2285,11 @@ static id FMLayoutChangeObserver=nil;
     panel.layer.shadowPath=outline.CGPath;
     panel.layer.shadowOpacity=_morphShadow*FMSmooth(t/.5);
     [CATransaction commit];
-    panel.center=CGPointMake(_morphRestCenter.x+_morphShift.x*(1-t),_morphRestCenter.y+_morphShift.y*(1-t));
+    // Stretch about the docking wall: scaling about the center moves the wall
+    // too, so the center slides back by half the added width.
+    panel.transform=CGAffineTransformMakeScale(_morphScale*(1+stretch),_morphScale);
+    CGFloat slide=(self.left?1:-1)*stretch*CGRectGetWidth(glass.bounds)*_morphScale*.5;
+    panel.center=CGPointMake(_morphRestCenter.x+_morphShift.x*(1-t)+slide,_morphRestCenter.y+_morphShift.y*(1-t));
     // The bead fades out above the glass that replaces it; the panel itself
     // stays opaque, since alpha below one on an ancestor of a visual effect
     // view can flatten the material. Content comes in once the shell is wide
@@ -2312,6 +2342,10 @@ static id FMLayoutChangeObserver=nil;
     _morphOpening=open;
     _morphTarget=open?1:0;
     _morphVelocity=Clamp(velocity,-24,24);
+    // Opening is the dock's springy one (response .46 s, damping .68); closing is
+    // firmer (.40 s, .82) so it does not hang around after the bead is back.
+    _morphOmega=2*M_PI/(open?.46:.40);
+    _morphZeta=open?.68:.82;
     _morphTick=0;
     _morphElapsed=0;
     _panelDragLive=NO;
@@ -2328,10 +2362,12 @@ static id FMLayoutChangeObserver=nil;
     _morphTick=link.timestamp;
     _morphElapsed+=dt;
     CGFloat x=_morphProgress,v=_morphVelocity;
-    // omega 22 rad/s: ninety-nine percent of the way in about 0.3 s.
-    FMSpringStep(&x,&v,_morphTarget,22,dt);
+    FMSpringStep(&x,&v,_morphTarget,_morphOmega,_morphZeta,dt);
     _morphVelocity=v;
-    BOOL arrived=fabs(x-_morphTarget)<.0015 || _morphElapsed>1.2;
+    // Opening is done when the bounce has died down to about a point; closing is
+    // done the moment the shell reaches the bead (it cannot go further in).
+    BOOL arrived=_morphTarget>.5?(fabs(x-1)<.004 && fabs(v)<.15):x<=.0015;
+    arrived=arrived || _morphElapsed>1.2;
     [self applyMorphProgress:arrived?_morphTarget:x];
     if(arrived) [self finishDrawerMorph];
 }
@@ -2408,7 +2444,7 @@ static id FMLayoutChangeObserver=nil;
     if(!_panelDragLive) return;
     CGFloat outward=self.left?_panelDragStart-p.x:p.x-_panelDragStart;
     if(g.state==UIGestureRecognizerStateChanged) {
-        [self applyMorphProgress:1-outward/_morphTravel];
+        [self applyMorphProgress:FMRubberProgress(1-outward/_morphTravel)];
     } else if(g.state==UIGestureRecognizerStateEnded) {
         CGPoint v=[g velocityInView:self.overlayView];
         CGFloat outwardV=self.left?-v.x:v.x;
