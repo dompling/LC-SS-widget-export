@@ -36,6 +36,7 @@
 - (void)loadAppsScroll;
 - (void)persistAppsScroll;
 - (void)draw;
+- (void)refreshSystemAppearance;
 - (void)refreshAppsContent;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
 - (void)closeTaskFromButton:(UIControl *)sender;
@@ -535,6 +536,41 @@ static void Snapshot(FMManager *m,NSString *name) {
 static void RunTests(void) {
     UIEdgeInsets ordinary=UIEdgeInsetsMake(0,0,21,0);
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    // A Guest's forced appearance must never override the menu's selection.
+    id savedAppearance=[prefs objectForKey:@"LCFloatingMenu.appearanceMode"];
+    [prefs setObject:@2 forKey:@"LCFloatingMenu.appearanceMode"];
+    FMManager *forcedNight=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    forcedNight.window.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;
+    [forcedNight refreshSystemAppearance];
+    UIView *nightGlass=[forcedNight.orb viewWithTag:9202];
+    UIVisualEffectView *nightMaterial=nil;
+    for(UIView *child in nightGlass.subviews)
+        if([child isKindOfClass:UIVisualEffectView.class]) nightMaterial=(UIVisualEffectView *)child;
+    Check(@"guest-forced-light-preserves-menu-dark",
+          forcedNight.overlayView.overrideUserInterfaceStyle==UIUserInterfaceStyleDark &&
+          nightGlass.overrideUserInterfaceStyle==UIUserInterfaceStyleDark &&
+          nightMaterial.overrideUserInterfaceStyle==UIUserInterfaceStyleDark,
+          @{@"overlay":@(forcedNight.overlayView.overrideUserInterfaceStyle),
+            @"glass":@(nightGlass.overrideUserInterfaceStyle),
+            @"material":@(nightMaterial.overrideUserInterfaceStyle)});
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.appearanceMode"];
+    FMManager *forcedDay=Manager(NO,1,667,ordinary,NO,NO,@"apps");
+    forcedDay.window.overrideUserInterfaceStyle=UIUserInterfaceStyleDark;
+    [forcedDay refreshSystemAppearance];
+    UIView *dayGlass=[forcedDay.orb viewWithTag:9202];
+    Check(@"guest-forced-dark-preserves-menu-light",
+          forcedDay.overlayView.overrideUserInterfaceStyle==UIUserInterfaceStyleLight &&
+          dayGlass.overrideUserInterfaceStyle==UIUserInterfaceStyleLight,nil);
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.appearanceMode"];
+    [forcedNight refreshSystemAppearance];
+    UIUserInterfaceStyle screenStyle=UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+    if(screenStyle==UIUserInterfaceStyleLight || screenStyle==UIUserInterfaceStyleDark)
+        Check(@"follow-system-does-not-inherit-guest-light",
+              forcedNight.overlayView.overrideUserInterfaceStyle==screenStyle &&
+              [forcedNight.orb viewWithTag:9202].overrideUserInterfaceStyle==screenStyle,
+              @{@"screen":@(screenStyle),@"guest":@(forcedNight.window.overrideUserInterfaceStyle)});
+    if(savedAppearance) [prefs setObject:savedAppearance forKey:@"LCFloatingMenu.appearanceMode"];
+    else [prefs removeObjectForKey:@"LCFloatingMenu.appearanceMode"];
     [prefs setObject:@NO forKey:@"LCFloatingMenu.recentAppsFirst"];
     // Test actual UIKit hit-testing, not just the visible 16pt bead frame.
     // Old symmetric -14pt expansion left only ~30pt reachable on the screen.
