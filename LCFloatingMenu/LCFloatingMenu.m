@@ -134,7 +134,33 @@ static inline CGFloat Clamp(CGFloat x, CGFloat a, CGFloat b) { return fmax(a,fmi
 static UIColor *RGBA(CGFloat r,CGFloat g,CGFloat b,CGFloat a) {
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
-static LCOrbitPreferences *HostDefaults(void) { return [LCOrbitStorage preferences]; }
+// Reading a setting locks the config file and parses it twice (see LCOrbitStorage), and
+// drawing the settings preview reads a few hundred of them. Between Begin and End the
+// plugin's settings are served from one copy instead. Writes still go to the store.
+@interface FMPreferenceSnapshot : LCOrbitPreferences
+@property(nonatomic,copy) NSDictionary *values;
+@end
+@implementation FMPreferenceSnapshot
+- (id)objectForKey:(NSString *)key {
+    if(![key hasPrefix:@"LCFloatingMenu."] || [key isEqualToString:@"LCFloatingMenu.previousMultitaskMode"])
+        return [super objectForKey:key];
+    return self.values[key];
+}
+@end
+static FMPreferenceSnapshot *FMSnapshot;
+static NSUInteger FMSnapshotDepth;
+static LCOrbitPreferences *HostDefaults(void) {
+    if(FMSnapshot) return FMSnapshot;
+    return [LCOrbitStorage preferences];
+}
+static void FMBeginPreferenceSnapshot(void) {
+    if(FMSnapshotDepth++) return;
+    FMSnapshot=[FMPreferenceSnapshot new];
+    FMSnapshot.values=[[LCOrbitStorage preferences] dictionaryRepresentation];
+}
+static void FMEndPreferenceSnapshot(void) {
+    if(FMSnapshotDepth && !--FMSnapshotDepth) FMSnapshot=nil;
+}
 static NSDictionary *GuestInfo(void) { return [LCOrbitHost guestInfo]; }
 static BOOL FMHostUI(void) { return [LCOrbitHost isHostUI]; }
 static NSString *GuestID(void) { return [LCOrbitHost guestIdentifier]; }
@@ -3575,6 +3601,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     body.tag=9211;body.userInteractionEnabled=NO;
     FMAddOrbBackdrop(body,left);
     UIView *glass=[self glass:body.bounds radius:w*.5 strong:NO];
+    // The same accent shadow the real bead casts (the outline sets the shadow path).
+    body.layer.shadowColor=FMAccent().CGColor;
+    body.layer.shadowOpacity=.24;body.layer.shadowRadius=6;
+    body.layer.shadowOffset=CGSizeMake(0,1);
     FMApplySideNotch(glass,body.layer,left,YES,YES);
     FMAddOrbCapsule(glass,left);
     [body addSubview:glass];
@@ -3582,6 +3612,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     line.center=CGPointMake(w*.5,h*.5);
     line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
     line.layer.cornerRadius=line.bounds.size.width*.5;
+    line.layer.cornerCurve=kCACornerCurveCircular;
+    line.layer.borderWidth=.4;
+    line.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.4].CGColor;
     [glass addSubview:line];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
@@ -5223,6 +5256,8 @@ static NSDictionary *FMDockOption(NSString *key,NSString *title) {
     return nil;
 }
 static CGFloat FMDockStoredValue(NSDictionary *option) {
+    // The bead size may still come from the old width setting; show what is in use.
+    if([option[@"key"] isEqualToString:@"orbScale"]) return FMOrbScale();
     CGFloat fallback=[option[@"default"] doubleValue],value=FloatPref(option[@"key"],fallback);
     return Clamp(isfinite(value)?value:fallback,[option[@"min"] doubleValue],[option[@"max"] doubleValue]);
 }
@@ -5317,10 +5352,11 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSArray<NSDictionary *> *_popItems;
     NSArray<UIView *> *_popDividers;
     FMNotchParams _beadParams,_dropletParams,_drawerParams;
-    BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded;
+    BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded,_rebuildScheduled;
     CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth;
+    CGFloat _idleAlpha,_fadedAlpha;
     CGFloat _progress,_velocity,_omega,_zeta;
-    CFTimeInterval _tick,_elapsed;
+    CFTimeInterval _tick,_elapsed,_builtAt;
     CADisplayLink *_link;
     NSTimer *_fadeTimer;
 }
@@ -5359,11 +5395,18 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)didMoveToWindow {
     [super didMoveToWindow];
-    if(self.window) [self scheduleFade];
+    if(!self.window) return;
+    // A spring stopped by leaving the window must not leave the card half open.
+    if(!_link && fabs(_progress-(_open?1:0))>.001 && _glass) {
+        _velocity=0;
+        [self applyProgress:_open?1:0];
+    }
+    [self scheduleFade];
 }
 // The drawer's size from the current settings, exactly as the real drawer lays out
 // three apps, and how tall the card is closed and open.
 - (void)measure {
+    FMBeginPreferenceSnapshot();
     FMManager *manager=[FMManager shared];
     _left=BoolPref(@"onLeft",manager.left);
     _compact=BoolPref(@"compactMode",NO);
@@ -5374,9 +5417,15 @@ static UIView *FMDockCard(UIStackView *rows) {
     _pw=_compact?76:240;
     _ph=_compact?20+3*65+footer+12+2*shoulder:(64+shoulder)+(footer+6+shoulder)+3*(rowHeight+4);
     _closedHeight=MAX([manager orbHeight]+100,190);
-    CGFloat open=MIN(_ph*_actual+24,420);
-    if(_maxHeight>0) open=MIN(open,MAX(_maxHeight,_closedHeight));
-    _openHeight=open;
+    // A short window cannot spare that much: the card gives way before the options do.
+    if(_maxHeight>0) _closedHeight=MIN(_closedHeight,MAX(_maxHeight,[manager orbHeight]+24));
+    CGFloat opened=MIN(_ph*_actual+24,420);
+    if(_maxHeight>0) opened=MIN(opened,MAX(_maxHeight,_closedHeight));
+    _openHeight=opened;
+    // Read once here: every frame of a spring needs them.
+    _idleAlpha=Clamp(FloatPref(@"idleAlpha",.72),.25,1);
+    _fadedAlpha=FMOrbStyleValue(@"fadedOpacity");
+    FMEndPreferenceSnapshot();
 }
 - (void)syncHeight {
     CGFloat height=_closedHeight+(_openHeight-_closedHeight)*Clamp(_progress,-.03,1.1);
@@ -5395,13 +5444,32 @@ static UIView *FMDockCard(UIStackView *rows) {
     [super layoutSubviews];
     CGFloat width=CGRectGetWidth(self.bounds);
     if(width<1) return;
-    if(!_scene || _dirty || fabs(width-_builtWidth)>.5) {
-        if(_pw<=0) [self measure];
-        _dirty=NO;
-        _builtWidth=width;
-        [self build];
-    }
-    [self placeScene];
+    // A drag moves a slider many times a second: the picture is rebuilt at most about twenty
+    // times a second, and the last value always gets its turn.
+    BOOL due=CACurrentMediaTime()-_builtAt>=.05;
+    BOOL rebuild=!_scene || fabs(width-_builtWidth)>.5 || (_dirty && due);
+    // Nothing in the card may ride on an animation that happens to be running around it
+    // (the page's groups unfolding lays this view out too).
+    [UIView performWithoutAnimation:^{
+        if(rebuild) {
+            if(self->_pw<=0) [self measure];
+            self->_dirty=NO;
+            self->_builtWidth=width;
+            [self build];
+        } else if(self->_dirty) [self rebuildSoon];
+        [self placeScene];
+    }];
+}
+- (void)rebuildSoon {
+    if(_rebuildScheduled) return;
+    _rebuildScheduled=YES;
+    __weak typeof(self) weakSelf=self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.05*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        typeof(self) strongSelf=weakSelf;
+        if(!strongSelf) return;
+        strongSelf->_rebuildScheduled=NO;
+        [strongSelf setNeedsLayout];
+    });
 }
 - (UIView *)iconForSlot:(NSUInteger)slot size:(CGFloat)size apps:(NSArray<NSDictionary *> *)apps {
     if(slot<apps.count) return [[FMManager shared] iconViewForApp:apps[slot] size:size];
@@ -5444,6 +5512,17 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)buildContents {
     FMManager *manager=[FMManager shared];
     NSArray<NSDictionary *> *apps=[manager orderedAppsForMenu];
+    // The strip on top shows the favorites, or else the first apps, as the drawer's header does.
+    NSMutableArray<NSDictionary *> *strip=[NSMutableArray array];
+    for(NSString *key in [manager favorites]) for(NSDictionary *item in apps)
+        if(([key isEqualToString:FMAppKey(item)] || [key isEqualToString:item[@"path"]]) && strip.count<4) {
+            [strip addObject:item];
+            break;
+        }
+    if(!strip.count) for(NSDictionary *item in apps) {
+        if(strip.count==4) break;
+        [strip addObject:item];
+    }
     _content=[[UIView alloc] initWithFrame:_glass.bounds];
     [FMGlassContent(_glass) addSubview:_content];
     NSMutableArray<UIView *> *items=[NSMutableArray array],*dividers=[NSMutableArray array];
@@ -5483,7 +5562,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         CGFloat inner=pw-24,gap=4,cell=(inner-gap*3)/4;
         for(NSUInteger index=0;index<4;index++) {
             UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(12+index*(cell+gap),36,cell,40)];
-            UIView *icon=[self iconForSlot:index size:32 apps:apps];
+            UIView *icon=[self iconForSlot:index size:32 apps:strip];
             icon.frame=CGRectMake((cell-32)*.5,4,32,32);
             [tile addSubview:icon];
             [_content addSubview:tile];
@@ -5541,6 +5620,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 // The whole picture again: the drawer as a real glass shell, then the docked bead over
 // it, both at real size inside a scene that is scaled to fit the card.
 - (void)build {
+    FMBeginPreferenceSnapshot();
     FMManager *manager=[FMManager shared];
     [_fadeTimer invalidate];
     _fadeTimer=nil;
@@ -5576,6 +5656,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     _revealed=_started=_progress>=.5;
     [self applyProgress:_progress];
     [self scheduleFade];
+    _builtAt=CACurrentMediaTime();
+    FMEndPreferenceSnapshot();
 }
 - (void)placeScene {
     if(!_scene) return;
@@ -5592,10 +5674,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     _drawer.center=CGPointMake(rest+(_left?1:-1)*stretch*visible*.5,sceneHeight*.5);
     _bead.frame=CGRectMake(_left?0:sceneWidth-_beadW,(sceneHeight-_beadH)*.5,_beadW,_beadH);
 }
-- (CGFloat)restAlpha {
-    if(_faded) return FMOrbStyleValue(@"fadedOpacity");
-    return Clamp(FloatPref(@"idleAlpha",.72),.25,1);
-}
+- (CGFloat)restAlpha { return _faded?_fadedAlpha:_idleAlpha; }
 // One frame at progress 0 (the docked bead) to 1 (the open drawer), as the real drawer's
 // applyMorphProgress: draws it.
 - (void)applyProgress:(CGFloat)progress {
@@ -5616,17 +5695,21 @@ static UIView *FMDockCard(UIStackView *rows) {
     _drawer.layer.shadowPath=outline.CGPath;
     _drawer.layer.shadowOpacity=_shadow*FMSmooth(t/.5);
     [CATransaction commit];
-    BOOL reveal=_revealed?t>=.42:t>=.5,flipped=reveal!=_revealed;
+    BOOL reveal=_revealed?t>=.42:t>=.5,flipped=reveal!=_revealed,still=UIAccessibilityIsReduceMotionEnabled();
     _revealed=reveal;
     if(reveal) _started=YES;
     if(flipped) {
-        // With the pop-in off the contents leave with the shell instead of waiting for it to shrink around them.
-        if(!reveal && FMPopMode()==2) _started=NO;
-        FMPopItems(_popItems,_popDividers,_left,reveal);
+        // With the pop-in off, or no motion wanted, the contents leave with the shell instead of waiting for it to shrink around them.
+        if(!reveal && (FMPopMode()==2 || still)) _started=NO;
+        if(!still) FMPopItems(_popItems,_popDividers,_left,reveal);
     }
+    // Closed, nothing of the contents may remain, whatever became of their animations.
+    if(raw<=.001) _started=NO;
     _content.alpha=_started?1:0;
     _edge.alpha=FMSmooth((t-.1)/.5);
-    // Without room for the morph the bead and the drawer cross-fade.
+    // At rest the bead is all there is: a shell clipped to its outline would show through
+    // when the bead fades. Without room for the morph the two cross-fade instead.
+    _drawer.hidden=raw<=.001;
     _drawer.alpha=_placed?1:FMSmooth(t);
     _bead.alpha=[self restAlpha]*(1-FMSmooth(t/.3));
     [self setNeedsLayout];
@@ -5775,7 +5858,8 @@ static UIView *FMDockCard(UIStackView *rows) {
 // The card may take about half of the room, so the options stay in reach on a small phone.
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    CGFloat cap=Clamp(self.view.safeAreaLayoutGuide.layoutFrame.size.height*.55,190,420);
+    BOOL wide=CGRectGetWidth(self.view.bounds)>CGRectGetHeight(self.view.bounds);
+    CGFloat cap=Clamp(self.view.safeAreaLayoutGuide.layoutFrame.size.height*(wide?.45:.55),120,420);
     if(fabs(self.preview.maxHeight-cap)>.5) self.preview.maxHeight=cap;
 }
 // The page shows the bead itself, so the one floating over the settings steps aside.
@@ -5816,8 +5900,10 @@ static UIView *FMDockCard(UIStackView *rows) {
         [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-32]
     ]];
     self.stack=stack;
+    FMBeginPreferenceSnapshot();
     for(NSInteger group=0;group<FMDockGroupCount;group++) [self addGroup:(FMDockGroup)group];
     [self addResetCard];
+    FMEndPreferenceSnapshot();
     [self applyVisibilityAnimated:NO];
     [self.preview reload];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -5950,7 +6036,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     FMDockGroup group=FMDockGroupPosition;
     [self addSlider:FMDockOption(@"orbSnapDuration",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbSnapDamping",nil) to:rows group:group when:FMDockWhenAlways];
-    [self addNote:@"微珠的位置不在这里调：在屏幕上按住它，直接拖到想放的地方，松手会吸到最近的一边。上面两项管松手吸边时的快慢和回弹。" to:rows group:group];
+    [self addNote:@"微珠的位置不在这里调：在屏幕上直接把它拖到想放的地方，松手会吸到最近的一边。上面两项管松手吸边时的快慢和回弹。" to:rows group:group];
 }
 - (void)addHandleRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupHandle;
@@ -6035,12 +6121,14 @@ static UIView *FMDockCard(UIStackView *rows) {
 // Shows the rows of the open group that apply, hides the rest, and turns the chevrons.
 - (void)applyVisibilityAnimated:(BOOL)animated {
     void (^apply)(void)=^{
+        FMBeginPreferenceSnapshot();
         for(NSDictionary *entry in self.bodyRows) {
             UIView *row=entry[@"view"];
             BOOL visible=[entry[@"group"] integerValue]==self.openGroup && [self whenHolds:(FMDockWhen)[entry[@"when"] integerValue]];
             row.hidden=!visible;
             row.alpha=visible?1:0;
         }
+        FMEndPreferenceSnapshot();
         for(NSUInteger index=0;index<self.chevrons.count;index++) {
             BOOL open=(NSInteger)index==self.openGroup;
             self.chevrons[index].transform=open?CGAffineTransformMakeRotation(M_PI_2):CGAffineTransformIdentity;
@@ -6085,6 +6173,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)switchChanged:(FMDockSwitch *)toggle {
     SetPref(toggle.key,@(toggle.isOn));
+    if([toggle.key isEqualToString:@"compactMode"]) FMLog(@"display-mode",toggle.isOn?@"icons":@"list");
     // The fade settings and the icon size follow these switches.
     [self applyVisibilityAnimated:YES];
     [self.preview reload];

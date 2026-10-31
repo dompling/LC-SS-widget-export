@@ -560,6 +560,11 @@ static NSArray<NSString *> *ShownKeys(UIView *root,NSString *className) {
     for(UIView *view in Views(root)) if([view isKindOfClass:NSClassFromString(className)] && ShownIn(view,root)) [keys addObject:DockKey(view)];
     return keys;
 }
+// The preview redraws at most every 50 ms and always ends on the last value; let it catch up.
+static void Settle(UIView *view) {
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.12]];
+    [view layoutIfNeeded];
+}
 static FMDockSettingsController *PresentDockPage(FMManager *manager,CGSize size) {
     GeometryWindow *window=[[GeometryWindow alloc] initWithFrame:(CGRect){CGPointZero,size}];
     window.fixtureSize=size;window.fixtureInsets=UIEdgeInsetsMake(0,0,21,0);
@@ -817,7 +822,7 @@ static void RunTests(void) {
     handleStyle.selectedSegmentIndex=0;[dock segmentChanged:handleStyle];
     UISlider *reach=(UISlider *)DockControl(dock.view,@"FMDockSlider",@"orbHandleReach");
     Check(@"dock-slider-moves-in-the-dock-steps",reach && reach.minimumValue==14 && reach.maximumValue==34 && reach.value==22,nil);
-    reach.value=31.4;[dock sliderChanged:reach];[dock.view layoutIfNeeded];
+    reach.value=31.4;[dock sliderChanged:reach];Settle(dock.view);
     Check(@"dock-slider-applies-and-persists",[prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31 && reach.value==31 && fabs([dockPreview viewWithTag:9211].bounds.size.width-31)<.01,@([prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]));
     UIControl *trayHeader=nil;
     for(UIView *view in Views(dock.view)) if([view isKindOfClass:UIControl.class] && view.tag==3 &&
