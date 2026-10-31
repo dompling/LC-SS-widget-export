@@ -551,9 +551,11 @@ static void FMAddOrbCapsule(UIView *glass,BOOL left) {
     [glass.layer addSublayer:surface];
     CAGradientLayer *capsule=[CAGradientLayer layer];
     capsule.name=@"fm.orb.capsule";
-    capsule.colors=FMMenuDark()?@[(id)[UIColor.whiteColor colorWithAlphaComponent:.40].CGColor,
-                     (id)[UIColor.whiteColor colorWithAlphaComponent:.18].CGColor,
-                     (id)[UIColor.whiteColor colorWithAlphaComponent:.32].CGColor]:
+    // Preserve a subtle highlight, but do not wash the dark bead back to
+    // white when iOS native glass is sampling a Guest with a light canvas.
+    capsule.colors=FMMenuDark()?@[(id)[UIColor.whiteColor colorWithAlphaComponent:.24].CGColor,
+                     (id)[UIColor.whiteColor colorWithAlphaComponent:.09].CGColor,
+                     (id)[UIColor.whiteColor colorWithAlphaComponent:.18].CGColor]:
                    @[(id)[UIColor.blackColor colorWithAlphaComponent:.16].CGColor,
                      (id)[UIColor.blackColor colorWithAlphaComponent:.07].CGColor,
                      (id)[UIColor.blackColor colorWithAlphaComponent:.12].CGColor];
@@ -1346,6 +1348,19 @@ static id FMLayoutChangeObserver=nil;
     material.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     material.userInteractionEnabled=YES;
     [surface addSubview:material];
+    if(nativeGlass && !strong && FMMenuDark()) {
+        // iOS 26+ glass adapts optically to the background even when the
+        // effect view has a Dark trait. In a forced-Light Guest its thin bead
+        // consequently becomes nearly white while the expanded menu is dark.
+        // Tint only the collapsed bead's glass content, keeping real system
+        // refraction underneath and preserving both expanded and Light modes.
+        UIView *nightBacking=[[UIView alloc] initWithFrame:material.contentView.bounds];
+        nightBacking.tag=9217; // Runtime contrast regression identifier.
+        nightBacking.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        nightBacking.backgroundColor=[FMThemeColor(FMColorBackground) colorWithAlphaComponent:.68];
+        nightBacking.userInteractionEnabled=NO;
+        [material.contentView addSubview:nightBacking];
+    }
     // LC's colorful app cards and translucent TabView show through the
     // native drawer. Give only the host drawer a light readability backing.
     if(strong && FMHostUI()) {
