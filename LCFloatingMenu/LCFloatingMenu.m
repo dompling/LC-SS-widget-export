@@ -444,12 +444,21 @@ static UIBezierPath *FMNotchFamilyPath(FMNotchParams p) {
     [path closePath];
     return path;
 }
+// The drawer's head: an ordinary rounded corner against the wall, with only its foot
+// flowing into the screen edge, or the sweep at both ends it used to have. Read as a
+// number, because the geometry tests reach the settings through FloatPref alone.
+static BOOL FMDrawerRoundedTop(void) { return FloatPref(@"roundedTop",1)>=.5; }
 // The open drawer, exactly as FMSideNotchPath draws it.
 static FMNotchParams FMDrawerNotchParams(CGFloat w,CGFloat h,BOOL compact) {
     CGFloat r=MIN(FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28),MIN(w*.48,h*.17));
     CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
     CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
-    FMNotchParams p={0,0,w,h,r,r,r,softness,1,radius,radius,radius,radius*(1-(1-softness)*1.25)};
+    // A root flare with a negative vertical size is a convex corner of the body instead of a
+    // flare onto the wall, so the head becomes an ordinary corner by moving the wall's start
+    // down by the corner's own height and taking the flare back up by the same amount.
+    BOOL rounded=FMDrawerRoundedTop();
+    FMNotchParams p={0,rounded?radius:0,w,h,r,rounded?-radius:r,r,softness,1,
+                     radius,radius,radius,radius*(1-(1-softness)*1.25)};
     return p;
 }
 // The docked handle as the wloc dock draws it (its DockLayout.metrics(at: 0) with
@@ -525,16 +534,21 @@ static UIBezierPath *FMSideNotchPath(CGRect bounds, BOOL dockLeft, BOOL compact,
         path=[UIBezierPath bezierPath];
         CGFloat radius=MIN(FMMenuStyleValue(@"menuCornerRadius")*(compact?1:30./26),MIN(w-r,h*.25));
         CGFloat softness=FMMenuStyleValue(@"menuCurveSoftness");
-        // Keep extension and the inward-facing corner radius independent.
-        [path moveToPoint:CGPointMake(w,0)];
-        [path addCurveToPoint:CGPointMake(w-r,r)
-                controlPoint1:CGPointMake(w,r*softness)
-                controlPoint2:CGPointMake(w,r)];
+        // Keep extension and the inward-facing corner radius independent. top is where the
+        // wall begins and t0 the body's own top edge: a rounded head drops the one and lifts
+        // the other, a swept head is the mirror of the foot. Same curve either way, and the
+        // same one FMDrawerNotchParams describes.
+        BOOL rounded=FMDrawerRoundedTop();
+        CGFloat top=rounded?radius:0,t0=rounded?0:r;
+        [path moveToPoint:CGPointMake(w,top)];
+        [path addCurveToPoint:CGPointMake(w-r,t0)
+                controlPoint1:CGPointMake(w,top+(t0-top)*softness)
+                controlPoint2:CGPointMake(w,t0)];
         CGFloat inner=radius;
-        [path addLineToPoint:CGPointMake(inner,r)];
-        [path addCurveToPoint:CGPointMake(0,r+radius)
-                controlPoint1:CGPointMake(0,r)
-                controlPoint2:CGPointMake(0,r+radius*(1-softness)*1.25)];
+        [path addLineToPoint:CGPointMake(inner,t0)];
+        [path addCurveToPoint:CGPointMake(0,t0+radius)
+                controlPoint1:CGPointMake(0,t0)
+                controlPoint2:CGPointMake(0,t0+radius*(1-softness)*1.25)];
         [path addLineToPoint:CGPointMake(0,h-r-radius)];
         [path addCurveToPoint:CGPointMake(inner,h-r)
                 controlPoint1:CGPointMake(0,h-r-radius*(1-softness)*1.25)
@@ -4035,6 +4049,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);SetPref(@"glowLine",@YES);
+    SetPref(@"roundedTop",@YES);SetPref(@"previewFollowsMode",@YES);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
 }
 
@@ -5419,7 +5434,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (instancetype)initWithFrame:(CGRect)frame {
     if(!(self=[super initWithFrame:frame])) return nil;
     CAGradientLayer *gradient=(CAGradientLayer *)self.layer;
-    gradient.colors=@[(id)RGBA(.74,.86,.78,1).CGColor,(id)RGBA(.62,.78,.92,1).CGColor];
+    [self applyScene];
     gradient.startPoint=CGPointMake(0,0);
     gradient.endPoint=CGPointMake(1,1);
     gradient.cornerRadius=22;
@@ -5431,6 +5446,15 @@ static UIView *FMDockCard(UIStackView *rows) {
     self.accessibilityTraits=UIAccessibilityTraitButton;
     [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)]];
     return self;
+}
+// The card stands in for the screen behind the dock, so following the chosen appearance
+// shows the glass over something like what it will really sit on. The dock's own settings
+// page keeps its light wash whatever the mode, which is why this is a setting.
+- (void)applyScene {
+    BOOL night=BoolPref(@"previewFollowsMode",YES) && FMMenuDark();
+    ((CAGradientLayer *)self.layer).colors=night?
+        @[(id)RGBA(.17,.20,.25,1).CGColor,(id)RGBA(.06,.08,.12,1).CGColor]:
+        @[(id)RGBA(.74,.86,.78,1).CGColor,(id)RGBA(.62,.78,.92,1).CGColor];
 }
 - (BOOL)isOpen { return _open; }
 - (void)setMaxHeight:(CGFloat)maxHeight {
@@ -5492,6 +5516,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 // Settings changed: measure again now (the card's height follows) and redraw at the
 // next layout, however many changes arrive before it.
 - (void)reload {
+    [self applyScene];
     [self measure];
     [self syncHeight];
     _dirty=YES;
@@ -6154,6 +6179,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     FMDockGroup group=FMDockGroupTray;
     [self add:[self switchRow:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"图标玻璃底座" key:@"iconFrame" defaultValue:YES] to:rows group:group when:FMDockWhenCompact];
+    [self add:[self switchRow:@"上方常规圆角" key:@"roundedTop" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"预览底色跟随深浅" key:@"previewFollowsMode" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"panelScale",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"menuExtension",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"menuCornerRadius",nil) to:rows group:group when:FMDockWhenAlways];
@@ -6168,7 +6195,7 @@ static UIView *FMDockCard(UIStackView *rows) {
                to:rows group:group when:FMDockWhenAlways];
     }
     [self addSlider:FMDockOption(@"glassTint",nil) to:rows group:group when:FMDockWhenAlways];
-    [self addNote:@"展开后，长按某个 App 再上下滑，一块玻璃镜片会跟着手指走，松手切换，拖出菜单外松手则取消。App 很多时，把手指推到列表上下边缘，列表会自己滚动。" to:rows group:group];
+    [self addNote:@"「上方常规圆角」开着时菜单上方是普通圆角、只有下方顺着屏幕边缘扫出去；关掉则上下都是对称的贴合弧。「预览底色跟随深浅」让上面那张预览卡在夜间换成深色底，看玻璃更接近真机；关掉就一直是浅色。\n展开后，长按某个 App 再上下滑，一块玻璃镜片会跟着手指走，松手切换，拖出菜单外松手则取消。App 很多时，把手指推到列表上下边缘，列表会自己滚动。" to:rows group:group];
 }
 - (void)addResetCard {
     UIControl *button=[UIControl new];

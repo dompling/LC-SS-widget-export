@@ -352,6 +352,39 @@ int main(void) { @autoreleasepool {
         Expect(RowsMatch(PathRows(family.CGPath),PathRows(production.CGPath),1e-9),
                "drawer parameters reproduce the production drawer outline");
     }
+    // The drawer's head: an ordinary rounded corner against the wall, or the same sweep its
+    // foot has. The foot is untouched either way, both mirror, and both keep the parameter
+    // form and the production outline in step.
+    for(NSNumber *compact in @[@NO,@YES]) {
+        CGFloat w=compact.boolValue?76:240,h=compact.boolValue?470:430;
+        CGFloat r=MIN(28*(compact.boolValue?26./28:30./28),MIN(w*.48,h*.17));
+        stylePreferences[@"roundedTop"]=@1;
+        UIBezierPath *rounded=FMSideNotchPath(CGRectMake(0,0,w,h),NO,compact.boolValue,NO);
+        stylePreferences[@"roundedTop"]=@0;
+        UIBezierPath *swept=FMSideNotchPath(CGRectMake(0,0,w,h),NO,compact.boolValue,NO);
+        Expect(CGPathContainsPoint(rounded.CGPath,NULL,CGPointMake(w*.5,.5),NO) &&
+               !CGPathContainsPoint(swept.CGPath,NULL,CGPointMake(w*.5,.5),NO),
+               "a rounded head reaches the very top, where a swept one is still open");
+        Expect(!CGPathContainsPoint(rounded.CGPath,NULL,CGPointMake(w-.5,.5),NO),
+               "a rounded head cuts its own corner at the wall");
+        Expect(CGPathContainsPoint(swept.CGPath,NULL,CGPointMake(w*.5,r+.5),NO),
+               "a swept head closes up below its sweep");
+        for(NSNumber *head in @[@1,@0]) {
+            stylePreferences[@"roundedTop"]=head;
+            UIBezierPath *right=FMSideNotchPath(CGRectMake(0,0,w,h),NO,compact.boolValue,NO);
+            UIBezierPath *left=FMSideNotchPath(CGRectMake(0,0,w,h),YES,compact.boolValue,NO);
+            UIBezierPath *family=FMNotchFamilyPath(FMDrawerNotchParams(w,h,compact.boolValue));
+            Expect(RowsMatch(PathRows(family.CGPath),PathRows(right.CGPath),1e-9),
+                   "both heads keep the parameter form and the production outline in step");
+            Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(w-.5,h*.5),NO) &&
+                   CGPathContainsPoint(right.CGPath,NULL,CGPointMake(w*.5,h-r-.5),NO),
+                   "the foot and the docking wall are the same whichever head it has");
+            for(CGFloat x=3;x<w;x+=7.3) for(CGFloat y=3;y<h;y+=11.7)
+                Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(x,y),NO)==
+                       CGPathContainsPoint(left.CGPath,NULL,CGPointMake(w-x,y),NO),"both heads mirror exactly");
+        }
+        [stylePreferences removeObjectForKey:@"roundedTop"];
+    }
     [stylePreferences removeAllObjects];
 
     // Reference frames from the geometry model this port was checked against.
