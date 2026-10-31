@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.12 formal release request
+
+Version: 1.0.12
+Source: lcss-original, independent orb/menu dimensions settings and live previews
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.12.md
+Publish: compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.12 tag, GitHub Release, and refresh fm-latest.
