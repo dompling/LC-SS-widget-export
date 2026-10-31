@@ -205,37 +205,40 @@ static void FMLog(NSString *event, NSString *detail) {
 // Public Guest APIs are implemented in LCOrbitGuestService for all future modules.
 static NSArray<NSDictionary*> *InstalledApps(void) { return [LCOrbitGuestService installedApps]; }
 
-// Resolve from the overlay's scene, before considering UIScreen. Screen traits
-// can lag the scene or stay Light even when the scene has switched to Dark.
+// UIScreen describes the display's base appearance; a Guest's UIWindowScene
+// can report its own forced Light/Dark appearance instead of the device choice.
+// Read screen traits first so "Follow System" does not inherit Guest styling.
 static __weak UIWindowScene *FMStyleScene;
 static UIUserInterfaceStyle FMLastResolvedSystemStyle=UIUserInterfaceStyleLight;
 static BOOL FMValidStyle(UIUserInterfaceStyle style) {
     return style==UIUserInterfaceStyleLight || style==UIUserInterfaceStyleDark;
 }
 static UIUserInterfaceStyle FMSystemAppearance(void) {
-    UIUserInterfaceStyle style=FMStyleScene.traitCollection.userInterfaceStyle;
+    UIUserInterfaceStyle style=UIScreen.mainScreen.traitCollection.userInterfaceStyle;
     if(!FMValidStyle(style)) {
-        for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if(![scene isKindOfClass:UIWindowScene.class] ||
-               scene.activationState!=UISceneActivationStateForegroundActive) continue;
-            style=((UIWindowScene *)scene).traitCollection.userInterfaceStyle;
-            if(FMValidStyle(style)) break;
+        style=FMStyleScene.traitCollection.userInterfaceStyle;
+        if(!FMValidStyle(style)) {
+            for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+                if(![scene isKindOfClass:UIWindowScene.class] ||
+                   scene.activationState!=UISceneActivationStateForegroundActive) continue;
+                style=((UIWindowScene *)scene).traitCollection.userInterfaceStyle;
+                if(FMValidStyle(style)) break;
+            }
         }
     }
-    if(!FMValidStyle(style))
-        style=UIScreen.mainScreen.traitCollection.userInterfaceStyle;
     // Retain the last resolved style during transient Unspecified traits.
     if(FMValidStyle(style)) FMLastResolvedSystemStyle=style;
     return FMLastResolvedSystemStyle;
 }
-static UIUserInterfaceStyle FMMenuOverride(void) {
-    NSInteger mode=[HostDefaults() integerForKey:Pref(@"appearanceMode")];
-    return mode==1?UIUserInterfaceStyleLight:
-           mode==2?UIUserInterfaceStyleDark:UIUserInterfaceStyleUnspecified;
-}
 static UIUserInterfaceStyle FMMenuAppearance(void) {
     NSInteger mode=[HostDefaults() integerForKey:Pref(@"appearanceMode")];
     return mode==1?UIUserInterfaceStyleLight:mode==2?UIUserInterfaceStyleDark:FMSystemAppearance();
+}
+static UIUserInterfaceStyle FMMenuOverride(void) {
+    // Even Follow System needs an explicit style: Unspecified inherits the
+    // Guest's UIUserInterfaceStyle=Light / parent-window trait in some apps.
+    // Override only our module view, never LCOrbit's shared UIWindow.
+    return FMMenuAppearance();
 }
 static BOOL FMMenuDark(void) { return FMMenuAppearance()==UIUserInterfaceStyleDark; }
 typedef NS_ENUM(NSUInteger, FMColorRole) {
@@ -1287,6 +1290,9 @@ static id FMLayoutChangeObserver=nil;
 // use ordinary fills, avoiding nested refraction behind small text and symbols.
 - (UIView *)glass:(CGRect)frame radius:(CGFloat)radius strong:(BOOL)strong {
     UIView *surface=[[UIView alloc] initWithFrame:frame];
+    // A Guest can force Light globally. Pin the glass subtree's UIKit traits
+    // to our selected theme instead of trusting the parent window or scene.
+    surface.overrideUserInterfaceStyle=FMMenuOverride();
     surface.backgroundColor=UIColor.clearColor;
     surface.layer.cornerRadius=radius;
     surface.clipsToBounds=YES;
@@ -1335,6 +1341,7 @@ static id FMLayoutChangeObserver=nil;
         [surface addSubview:backing];
     }
     UIVisualEffectView *material=[[UIVisualEffectView alloc] initWithEffect:effect];
+    material.overrideUserInterfaceStyle=FMMenuOverride();
     material.frame=surface.bounds;
     material.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     material.userInteractionEnabled=YES;
@@ -2827,7 +2834,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         self.overlayView.overrideUserInterfaceStyle!=override;
     self.lastSystemStyle=style;
     self.lastMenuStyle=renderedStyle;
-    // Unspecified lets UIKit inherit subsequent scene changes in System mode.
+    // Never allow the Guest's inherited scene trait to recolor the module.
+    // Follow System is also pinned explicitly and refreshed on appearance changes.
     self.overlayView.overrideUserInterfaceStyle=override;
     if(self.settingsWindow) {
         changed=changed || self.settingsWindow.overrideUserInterfaceStyle!=override;
@@ -2836,10 +2844,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(!changed) return;
     if(self.settingsWindow) [self updateSettingsContent];
     else [self draw];
-    FMLog(@"system-appearance",[NSString stringWithFormat:@"scene=%@ menu=%@ mode=%ld",
-        style==UIUserInterfaceStyleDark?@"dark":@"light",
-        renderedStyle==UIUserInterfaceStyleDark?@"dark":@"light",
-        (long)[HostDefaults() integerForKey:Pref(@"appearanceMode")]]);
+    FMLog(@"system-appearance",[NSString stringWithFormat:@"screen=%ld scene=%ld menu=%ld mode=%ld",
+        (long)UIScreen.mainScreen.traitCollection.userInterfaceStyle,
+        (long)self.window.windowScene.traitCollection.userInterfaceStyle,
+        (long)renderedStyle,(long)[HostDefaults() integerForKey:Pref(@"appearanceMode")]]);
 }
 - (void)cancelAppearanceCheck {
     self.appearancePollGeneration++;
