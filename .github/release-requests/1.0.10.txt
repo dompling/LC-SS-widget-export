@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.10 formal release request
+
+Version: 1.0.10
+Source: lcss-original, adjustable glass orb, live settings preview, and capsule cap geometry fixes
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.10.md
+Publish: verify and compile arm64 LCFloatingMenu.dylib, create annotated 1.0.10 tag, GitHub Release, and refresh fm-latest.
