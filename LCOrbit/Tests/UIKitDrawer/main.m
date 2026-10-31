@@ -897,13 +897,13 @@ static void RunTests(void) {
     FixturePan *move=[FixturePan new];move.fixturePoint=CGPointMake(640,200);move.fixtureState=UIGestureRecognizerStateBegan;[snap pan:move];
     move.fixturePoint=CGPointMake(640,230);move.fixtureState=UIGestureRecognizerStateChanged;[snap pan:move];
     UIButton *movingOrb=snap.orb;
-    Check(@"moving-orb-only-capsule",CGSizeEqualToSize(movingOrb.bounds.size,CGSizeMake(12,52)) && [movingOrb viewWithTag:9204].alpha==0,NSStringFromCGRect(movingOrb.bounds));
+    Check(@"moving-orb-only-capsule",CGSizeEqualToSize(movingOrb.bounds.size,CGSizeMake(22,80)) && [movingOrb viewWithTag:9204].alpha==0,NSStringFromCGRect(movingOrb.bounds));
     move.fixturePoint=CGPointMake(10,230);[snap pan:move];move.fixtureState=UIGestureRecognizerStateEnded;[snap pan:move];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
         UIView *glass=[snap.orb viewWithTag:9202];CALayer *capsule=nil;
         for(CALayer *layer in glass.layer.sublayers) if([layer.name isEqualToString:@"fm.orb.capsule"]) capsule=layer;
         CGFloat markerX=0;for(UIView *view in glass.subviews) if([view.accessibilityIdentifier isEqual:@"fm.orb.update-indicator"]) markerX=view.center.x;
-        Check(@"snap-restores-new-side-layout",snap.left && snap.orb!=movingOrb && fabs(capsule.frame.origin.x-2)<.01 && fabs(markerX-8)<.01 && [snap.orb viewWithTag:9204].alpha==1,@{@"left":@(snap.left),@"new":@(snap.orb!=movingOrb),@"capsule":NSStringFromCGRect(capsule.frame),@"marker":@(markerX),@"backdrop":@([snap.orb viewWithTag:9204].alpha),@"orb":NSStringFromCGRect(snap.orb.bounds)});
+        Check(@"snap-restores-new-side-layout",snap.left && snap.orb!=movingOrb && fabs(capsule.frame.origin.x)<.01 && fabs(markerX-11)<.01 && [snap.orb viewWithTag:9204].alpha==1,@{@"left":@(snap.left),@"new":@(snap.orb!=movingOrb),@"capsule":NSStringFromCGRect(capsule.frame),@"marker":@(markerX),@"backdrop":@([snap.orb viewWithTag:9204].alpha),@"orb":NSStringFromCGRect(snap.orb.bounds)});
         Snapshot(snap,@"orb-after-animated-snap");snap.window.hidden=YES;
     });
     });

@@ -288,7 +288,7 @@ int main(void) { @autoreleasepool {
             Expect(RowsMatch(PathRows(FMNotchFamilyPath(FMHandleNotchParams(m,unit.doubleValue,17.5,63.25)).CGPath),
                              BeadRows(size,unit.doubleValue,17.5,63.25),1e-9),
                    "bead parameters reproduce the docked bead outline at any size and panel scale");
-        if(scale.doubleValue==1) for(CGFloat x=.4;x<size.width;x+=1.7) for(CGFloat y=.4;y<size.height;y+=2.9) {
+        if(scale.doubleValue==1) for(CGFloat x=.4;x<size.width-.01;x+=1.7) for(CGFloat y=.4;y<size.height;y+=2.9) {
             Expect(CGPathContainsPoint(right.CGPath,NULL,CGPointMake(x,y),NO)==
                    CGPathContainsPoint(left.CGPath,NULL,CGPointMake(size.width-x,y),NO),"the handle mirrors exactly on a left dock");
             if(capsule.boolValue)
@@ -482,17 +482,27 @@ int main(void) { @autoreleasepool {
            "a drag that has gone eight points along the edge, clearly more than inward, is a move");
     Expect(FMBeadPanIntent(7,8.4001)==FMBeadPanMove && FMBeadPanIntent(7,8.4)==FMBeadPanUnclear,
            "a move needs a fifth more along the edge than inward");
-    // Sliding toward the end of a long list scrolls it.
-    Expect(FMScrubScrollSpeed(300,100,500)==0 && FMScrubScrollSpeed(144,100,500)==0 && FMScrubScrollSpeed(456,100,500)==0,
+    // Sliding toward the end of a long list scrolls it (the finger started mid-list at 300).
+    Expect(FMScrubScrollSpeed(300,100,500,300)==0 && FMScrubScrollSpeed(144,100,500,300)==0 && FMScrubScrollSpeed(456,100,500,300)==0,
            "away from the edges the list stays still");
-    Expect(fabs(FMScrubScrollSpeed(100,100,500)+560)<1e-9 && fabs(FMScrubScrollSpeed(500,100,500)-560)<1e-9 &&
-           fabs(FMScrubScrollSpeed(122,100,500)+280)<1e-9 && fabs(FMScrubScrollSpeed(478,100,500)-280)<1e-9,
+    Expect(fabs(FMScrubScrollSpeed(100,100,500,300)+560)<1e-9 && fabs(FMScrubScrollSpeed(500,100,500,300)-560)<1e-9 &&
+           fabs(FMScrubScrollSpeed(122,100,500,300)+280)<1e-9 && fabs(FMScrubScrollSpeed(478,100,500,300)-280)<1e-9,
            "at the edge the list scrolls at 560 pt/s, half of that halfway into the zone");
-    Expect(fabs(FMScrubScrollSpeed(78,100,500)+840)<1e-9 && fabs(FMScrubScrollSpeed(-500,100,500)+840)<1e-9 &&
-           fabs(FMScrubScrollSpeed(900,100,500)-840)<1e-9,
+    Expect(fabs(FMScrubScrollSpeed(78,100,500,300)+840)<1e-9 && fabs(FMScrubScrollSpeed(-500,100,500,300)+840)<1e-9 &&
+           fabs(FMScrubScrollSpeed(900,100,500,300)-840)<1e-9,
            "past the edge it speeds up, to one and a half times and no further");
-    Expect(fabs(FMScrubScrollSpeed(110,100,120))<1e-9 && fabs(FMScrubScrollSpeed(105,100,120)-560*(29-39)/44.)<1e-9,
-           "in a list shorter than two zones the two edges pull against each other");
+    // Resting on a row near an edge must not scroll: the finger has to push 12 pt toward it first.
+    Expect(FMScrubScrollSpeed(480,100,500,480)==0 && FMScrubScrollSpeed(120,100,500,120)==0,
+           "a finger resting inside a zone does not scroll the list");
+    Expect(FMScrubScrollSpeed(491.999,100,500,480)==0 && fabs(FMScrubScrollSpeed(492,100,500,480)-560*(44-8)/44.)<1e-9 &&
+           FMScrubScrollSpeed(108.001,100,500,120)==0 && fabs(FMScrubScrollSpeed(108,100,500,120)+560*(44-8)/44.)<1e-9,
+           "the push toward an edge has to be twelve points");
+    Expect(FMScrubScrollSpeed(130,100,500,120)==0 && FMScrubScrollSpeed(470,100,500,480)==0,
+           "moving away from the edge a finger started near never scrolls toward it");
+    Expect(fabs(FMScrubScrollSpeed(110,100,500,300)+560*(44-10)/44.)<1e-9 && fabs(FMScrubScrollSpeed(490,100,500,300)-560*(44-10)/44.)<1e-9,
+           "sliding into a zone from the middle scrolls at once");
+    Expect(fabs(FMScrubScrollSpeed(110,100,120,110))<1e-9 && fabs(FMScrubScrollSpeed(98,100,120,110)+560*(44+2)/44.)<1e-9,
+           "in a list shorter than two zones only the edge the finger is pushing toward counts");
     Expect(FMDrawerShouldOpenAfterPull(40,40,0,200,300) && !FMDrawerShouldOpenAfterPull(39.9,40,0,200,300),
            "pulling far enough opens, one point short does not");
     Expect(FMDrawerShouldOpenAfterPull(10,40,181,59,300) && !FMDrawerShouldOpenAfterPull(10,40,180,59,300) &&

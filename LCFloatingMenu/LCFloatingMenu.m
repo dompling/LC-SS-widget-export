@@ -566,7 +566,8 @@ static void FMLayoutOrbCapsule(UIView *glass) {
             CAShapeLayer *mask=(CAShapeLayer *)layer.mask;
             if(!mask) {mask=[CAShapeLayer layer];layer.mask=mask;}
             mask.frame=layer.bounds;
-            mask.path=FMNotchFamilyPath(FMHandleNotchParams(pill,1,0,0)).CGPath;
+            __attribute__((objc_precise_lifetime)) UIBezierPath *fill=FMNotchFamilyPath(FMHandleNotchParams(pill,1,0,0));
+            mask.path=fill.CGPath;
         } else if([layer.name isEqualToString:@"fm.orb.surface"]) {
             layer.frame=glass.bounds;
         }
@@ -816,10 +817,13 @@ static BOOL FMScrubIsOutside(CGFloat x,CGFloat width) {
 // Sliding toward the top or bottom edge of a long list scrolls it that way, so every app
 // can be reached without letting go: nothing until the finger is within 44 pt of the edge,
 // then faster the nearer it gets, 560 pt/s at the edge itself and up to one and a half
-// times that beyond it. Negative scrolls toward the top.
-static CGFloat FMScrubScrollSpeed(CGFloat y,CGFloat top,CGFloat bottom) {
-    const CGFloat zone=44,fastest=560;
-    CGFloat above=Clamp((zone-(y-top))/zone,0,1.5),below=Clamp((zone-(bottom-y))/zone,0,1.5);
+// times that beyond it. Negative scrolls toward the top. It only counts when the finger
+// has gone 12 pt toward that edge from where it first pressed (startY), so resting on a
+// row that happens to sit near an edge never scrolls the list.
+static CGFloat FMScrubScrollSpeed(CGFloat y,CGFloat top,CGFloat bottom,CGFloat startY) {
+    const CGFloat zone=44,fastest=560,push=12;
+    CGFloat above=startY-y>=push?Clamp((zone-(y-top))/zone,0,1.5):0;
+    CGFloat below=y-startY>=push?Clamp((zone-(bottom-y))/zone,0,1.5):0;
     return fastest*(below-above);
 }
 // FMDrawerMotion:end
@@ -1462,7 +1466,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     NSArray<UIControl *> *_scrubControls;
     NSArray<NSValue *> *_scrubFrames;
     CGRect _scrubViewport;
-    CGFloat _scrubFirstMid,_scrubLastMid,_scrubHalf;
+    CGFloat _scrubFirstMid,_scrubLastMid,_scrubHalf,_scrubStartY;
     CGPoint _scrubPoint;
     CADisplayLink *_scrubLink;
     CFTimeInterval _scrubScrollTick;
@@ -2101,7 +2105,9 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
         } else if(_morphActive && _morphDragging) {
             // === 抽屉跟手松开：拉得够远、或甩得够快就展开，否则收回 ===
             CGFloat pulled=_panOriginalLeft?(p.x-_panStartPoint.x):(_panStartPoint.x-p.x);
-            BOOL open=FMDrawerShouldOpenAfterPull(pulled,_morphCommit,inwardV,finalVerticalDist,finalTotalDist);
+            // The drawer only follows a pull of several points, so letting go near where the finger
+            // started means it was pulled back: that closes it, it is not a tap.
+            BOOL open=FMDrawerShouldOpenAfterPull(pulled,_morphCommit,inwardV,finalVerticalDist,CGFLOAT_MAX);
             if(open) [self commitDrawerOpen];
             [self settleDrawerMorphOpen:open velocity:inwardV/_morphTravel];
         } else {
@@ -2596,6 +2602,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     _scrubIndex=(NSInteger)found;
     _scrubCancelling=NO;_scrubActive=YES;
     _scrubPoint=[g locationInView:glass];
+    _scrubStartY=_scrubPoint.y;
     CGRect box=CGRectInset([rows[found] convertRect:rows[found].bounds toView:glass],-3,-3);
     _scrubHalf=box.size.height*.5;
     [self scrubMeasure];
@@ -2696,11 +2703,26 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     [self refreshScrub];
     [self updateScrubAutoScroll];
 }
-// A finger near the top or bottom of the list keeps scrolling it, one frame at a time, for
-// as long as it stays there (or until the end of the list).
+// The list's scrollable range, as content offsets.
+- (void)scrubScrollRangeLow:(CGFloat *)low high:(CGFloat *)high {
+    UIScrollView *scroll=self.appsScroll;
+    *low=-scroll.adjustedContentInset.top;
+    *high=MAX(*low,scroll.contentSize.height-scroll.bounds.size.height+scroll.adjustedContentInset.bottom);
+}
+// How fast the finger is asking the list to scroll right now: zero unless it is pushing
+// toward an end that can still move.
+- (CGFloat)scrubAutoScrollSpeed {
+    UIScrollView *scroll=self.appsScroll;
+    if(!_scrubActive || !scroll) return 0;
+    CGFloat speed=FMScrubScrollSpeed(_scrubPoint.y,CGRectGetMinY(_scrubViewport),CGRectGetMaxY(_scrubViewport),_scrubStartY);
+    CGFloat low,high,offset=scroll.contentOffset.y;
+    [self scrubScrollRangeLow:&low high:&high];
+    return (speed<0 && offset>low+.01) || (speed>0 && offset<high-.01)?speed:0;
+}
+// A finger pushing toward the top or bottom of the list keeps scrolling it, one frame at
+// a time, for as long as it stays there (or until the end of the list).
 - (void)updateScrubAutoScroll {
-    CGFloat speed=_scrubActive?FMScrubScrollSpeed(_scrubPoint.y,CGRectGetMinY(_scrubViewport),CGRectGetMaxY(_scrubViewport)):0;
-    if(speed==0) {
+    if([self scrubAutoScrollSpeed]==0) {
         [_scrubLink invalidate];
         _scrubLink=nil;
         return;
@@ -2712,20 +2734,15 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
 }
 - (void)scrubScrollFrame:(CADisplayLink *)link {
     UIScrollView *scroll=self.appsScroll;
-    CGFloat speed=_scrubActive?FMScrubScrollSpeed(_scrubPoint.y,CGRectGetMinY(_scrubViewport),CGRectGetMaxY(_scrubViewport)):0;
+    // The list went away under the finger (the scene detached): nothing left to scroll.
+    if(!scroll || !_scrubLens) { [self endScrubAnimated:NO]; return; }
+    CGFloat speed=[self scrubAutoScrollSpeed];
     CFTimeInterval dt=_scrubScrollTick>0?MIN(link.timestamp-_scrubScrollTick,1/20.):1/60.;
     _scrubScrollTick=link.timestamp;
-    if(!scroll || speed==0) { [self updateScrubAutoScroll]; return; }
-    CGFloat low=-scroll.adjustedContentInset.top;
-    CGFloat high=MAX(low,scroll.contentSize.height-scroll.bounds.size.height+scroll.adjustedContentInset.bottom);
-    CGFloat target=Clamp(scroll.contentOffset.y+speed*dt,low,high);
-    if(fabs(target-scroll.contentOffset.y)<.01) {
-        // At the end of the list: nothing more to scroll until the finger moves again.
-        [_scrubLink invalidate];
-        _scrubLink=nil;
-        return;
-    }
-    scroll.contentOffset=CGPointMake(scroll.contentOffset.x,target);
+    if(speed==0) { [self updateScrubAutoScroll]; return; }
+    CGFloat low,high;
+    [self scrubScrollRangeLow:&low high:&high];
+    scroll.contentOffset=CGPointMake(scroll.contentOffset.x,Clamp(scroll.contentOffset.y+speed*dt,low,high));
     [self refreshScrub];
 }
 
