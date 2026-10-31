@@ -337,20 +337,23 @@ static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
         @{@"key":@"orbHandleLength",@"title":@"长度",@"min":@(56),@"max":@(140),@"default":@(80),@"unit":@"点",@"step":@(2)},
         @{@"key":@"orbCapsuleCorner",@"title":@"圆角",@"min":@(0.55),@"max":@(1),@"default":@(0.83),@"unit":@"%",@"step":@(0.01)},
         @{@"key":@"orbSoftness",@"title":@"柔和度",@"min":@(0.4),@"max":@(1.6),@"default":@(1),@"unit":@"%",@"step":@(0.05)},
-        @{@"key":@"orbGlowLength",@"title":@"背景散光长度",@"min":@(0),@"max":@(100),@"default":@(56),@"unit":@"点"},
-        @{@"key":@"orbGlowBrightness",@"title":@"背景散光亮度",@"min":@(0),@"max":@(0.35),@"default":@(0.16),@"unit":@"%"},
-        @{@"key":@"orbSnapDuration",@"title":@"吸边动画时长",@"min":@(0.2),@"max":@(0.65),@"default":@(0.34),@"unit":@"秒"},
-        @{@"key":@"orbSnapDamping",@"title":@"吸边回弹阻尼",@"min":@(0.65),@"max":@(1),@"default":@(0.78),@"unit":@"%"},
+        @{@"key":@"orbGlowLength",@"title":@"背景散光长度",@"min":@(0),@"max":@(100),@"default":@(56),@"unit":@"点",@"step":@(1)},
+        @{@"key":@"orbGlowBrightness",@"title":@"背景散光亮度",@"min":@(0),@"max":@(0.35),@"default":@(0.16),@"unit":@"%",@"step":@(0.01)},
+        @{@"key":@"orbSnapDuration",@"title":@"吸边动画时长",@"min":@(0.2),@"max":@(0.65),@"default":@(0.34),@"unit":@"秒",@"step":@(0.01)},
+        @{@"key":@"orbSnapDamping",@"title":@"吸边回弹阻尼",@"min":@(0.65),@"max":@(1),@"default":@(0.78),@"unit":@"%",@"step":@(0.01)},
+        // How long the bead rests before it fades, and how faint it gets (the dock's ranges).
+        @{@"key":@"fadeDelay",@"title":@"停手多久后淡化",@"min":@(2),@"max":@(15),@"default":@(5),@"unit":@"秒",@"step":@(1)},
+        @{@"key":@"fadedOpacity",@"title":@"淡化后的透明度",@"min":@(0.05),@"max":@(0.6),@"default":@(0.2),@"unit":@"%",@"step":@(0.05)},
     ]; });
     return options;
 }
 static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
     return @[
-        @{@"key":@"menuExtension",@"title":@"上下延展长度",@"min":@12,@"max":@44,@"default":@28,@"unit":@"点"},
-        @{@"key":@"menuCornerRadius",@"title":@"外框圆角半径",@"min":@8,@"max":@36,@"default":@26,@"unit":@"点"},
-        @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%"},
-        @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点"},
-        @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点"}
+        @{@"key":@"menuExtension",@"title":@"上下延展长度",@"min":@12,@"max":@44,@"default":@28,@"unit":@"点",@"step":@1},
+        @{@"key":@"menuCornerRadius",@"title":@"外框圆角半径",@"min":@8,@"max":@36,@"default":@26,@"unit":@"点",@"step":@1},
+        @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%",@"step":@.01},
+        @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点",@"step":@1},
+        @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点",@"step":@1}
     ];
 }
 static CGFloat FMMenuStyleValue(NSString *key) {
@@ -790,6 +793,17 @@ static CGFloat FMPopDelay(NSUInteger index,NSUInteger count) {
     CGFloat step=MIN(.07,.5/MAX(1.,(CGFloat)count-1));
     return .04+(CGFloat)index*step;
 }
+// The pop-in setting: 0 one element after another (the dock's), 1 all together, 2 off.
+static int FMPopMode(void) {
+    CGFloat value=FloatPref(@"popAnimation",0);
+    return !(value>=.5)?0:(value<1.5?1:2);
+}
+// Seconds before the index-th of count elements starts popping in under that
+// setting, or a negative number when nothing should animate.
+static CGFloat FMPopStart(int mode,NSUInteger index,NSUInteger count) {
+    if(mode==2) return -1;
+    return mode==1?FMPopDelay(0,1):FMPopDelay(index,count);
+}
 // A SwiftUI-style spring (response in seconds, damping fraction) as the
 // mass-one stiffness and damping coefficient CASpringAnimation takes.
 static CGFloat FMSpringStiffness(CGFloat response) {
@@ -1187,13 +1201,6 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     return result;
 }
 
-// The settings entry a style slider edits: bead options from tag 30, menu options from tag 40.
-static NSDictionary *FMStyleOptionForSlider(UISlider *slider) {
-    NSArray<NSDictionary *> *options=slider.tag>=40?FMMenuStyleOptions():FMOrbStyleOptions();
-    NSInteger index=slider.tag-(slider.tag>=40?40:30);
-    return index>=0 && index<(NSInteger)options.count?options[index]:nil;
-}
-
 @interface FMHitButton : UIButton
 @property(nonatomic,assign) BOOL docksLeft;
 @end
@@ -1285,15 +1292,16 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
 - (void)rebuild;
 @end
 @interface FMSettingsSectionController : UIViewController
-@property(nonatomic,strong) UIView *shapePreview;
-@property(nonatomic,strong) NSLayoutConstraint *previewHeight;
-@property(nonatomic,assign) CGSize lastPreviewSize;
 @property(nonatomic,copy) NSString *sectionKey;
 @property(nonatomic,assign) NSUInteger githubGeneration;
 @property(nonatomic,assign) BOOL checkingGitHub;
 @property(nonatomic,copy) NSString *githubResult;
 @property(nonatomic,strong) UIScrollView *contentScroll;
 - (instancetype)initWithSection:(NSString *)key;
+- (void)rebuild;
+@end
+// The sidebar page: the bead, the drawer and the pop-in, with a preview.
+@interface FMDockSettingsController : UIViewController
 - (void)rebuild;
 @end
 
@@ -1357,6 +1365,35 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     group.fillMode=kCAFillModeForwards;
     group.removedOnCompletion=NO;
     [layer addAnimation:group forKey:@"fm.pop.out"];
+}
+// Plays the drawer contents in or out. Each item is @{view,row,gap}: lowest row first and,
+// within a row, the one nearest the wall first, one after another or all at once as the
+// pop-in setting says. Dividers only fade, after the rest. With the setting off nothing
+// animates. The real drawer and the settings preview both go through here.
+static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *dividers,BOOL left,BOOL reveal) {
+    NSArray<NSDictionary *> *ordered=[items sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
+        NSComparisonResult lowerFirst=[b[@"row"] compare:a[@"row"]];
+        return lowerFirst!=NSOrderedSame?lowerFirst:[a[@"gap"] compare:b[@"gap"]];
+    }];
+    CGFloat toWall=left?-1:1;
+    NSUInteger count=ordered.count;
+    int mode=FMPopMode();
+    for(NSUInteger index=0;index<count;index++) {
+        UIView *view=ordered[index][@"view"];
+        CGFloat hidden=toWall*(MIN(CGRectGetHeight(view.bounds),56)+16);
+        if(reveal) {
+            [view.layer removeAnimationForKey:@"fm.pop.out"];
+            CGFloat start=FMPopStart(mode,index,count);
+            if(start>=0) FMPopInLayer(view.layer,hidden,start);
+        } else if(mode!=2) FMPopOutLayer(view.layer,hidden,NO);
+    }
+    for(UIView *divider in dividers) {
+        if(reveal) {
+            [divider.layer removeAnimationForKey:@"fm.pop.out"];
+            CGFloat start=FMPopStart(mode,count,count+1);
+            if(start>=0) FMPopInDivider(divider.layer,start);
+        } else if(mode!=2) FMPopOutLayer(divider.layer,0,YES);
+    }
 }
 
 @interface FMManager : NSObject <UIScrollViewDelegate,UIGestureRecognizerDelegate>
@@ -1827,7 +1864,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     if(!BoolPref(@"idleFade",YES) || self.orbUpdateAvailable) return;
     if(self.isOpen || !self.orb) return;
     __weak typeof(self) weakSelf=self;
-    self.orbFadeTimer=[NSTimer scheduledTimerWithTimeInterval:5.0 repeats:NO block:^(NSTimer * _Nonnull timer) {
+    self.orbFadeTimer=[NSTimer scheduledTimerWithTimeInterval:FMOrbStyleValue(@"fadeDelay") repeats:NO block:^(NSTimer * _Nonnull timer) {
         [weakSelf fadeOrb];
     }];
 }
@@ -1839,7 +1876,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
     if(_morphActive || self.isOpen || !self.orb || self.orbFaded || self.orbUpdateAvailable) return;
     self.orbFaded=YES;
     [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
-        self.orb.alpha=0.22;
+        self.orb.alpha=FMOrbStyleValue(@"fadedOpacity");
     } completion:nil];
 }
 - (void)wakeOrb {
@@ -2267,7 +2304,8 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
 }
 // The drawer contents come in one after another, like the wloc dock icons:
 // the lowest first (within a row, the one nearest the wall first), then upward,
-// the dividers last. Only rows in view take part. Going out is all at once.
+// the dividers last. Only rows in view take part. Going out is all at once. The pop-in
+// setting can make them come all at once instead, or not animate at all.
 - (void)popContent:(BOOL)reveal {
     UIView *glass=[self.panel viewWithTag:9230],*content=FMGlassContent(glass);
     if(!glass || content==glass) return;
@@ -2294,26 +2332,9 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
             if(CGRectIntersectsRect([row convertRect:row.bounds toView:glass],window)) add(row);
         break;
     }
-    [items sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
-        NSComparisonResult lowerFirst=[b[@"row"] compare:a[@"row"]];
-        return lowerFirst!=NSOrderedSame?lowerFirst:[a[@"gap"] compare:b[@"gap"]];
-    }];
-    CGFloat toWall=self.left?-1:1;
-    NSUInteger count=items.count;
-    for(NSUInteger index=0;index<count;index++) {
-        UIView *view=items[index][@"view"];
-        CGFloat hidden=toWall*(MIN(CGRectGetHeight(view.bounds),56)+16);
-        if(reveal) {
-            [view.layer removeAnimationForKey:@"fm.pop.out"];
-            FMPopInLayer(view.layer,hidden,FMPopDelay(index,count));
-        } else FMPopOutLayer(view.layer,hidden,NO);
-    }
-    for(UIView *divider in dividers) {
-        if(reveal) {
-            [divider.layer removeAnimationForKey:@"fm.pop.out"];
-            FMPopInDivider(divider.layer,FMPopDelay(count,count+1));
-        } else FMPopOutLayer(divider.layer,0,YES);
-    }
+    // With the pop-in off the contents leave with the shell instead of waiting for it to shrink around them.
+    if(!reveal && FMPopMode()==2) _popStarted=NO;
+    FMPopItems(items,dividers,self.left,reveal);
 }
 // Builds the drawer behind the bead the moment the pull starts. NO means the
 // drawer cannot be shown (no room, a settings window): the droplet carries on.
@@ -3569,7 +3590,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     return body;
 }
 - (void)refreshOrbPreview {
-    [self refreshDimensionsPreview];
     UIView *host=self.orbPreviewHost;if(!host) return;
     host.hidden=self.dimensionsPreview!=nil;
     if(host.hidden) return;
@@ -3593,6 +3613,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [(FMSettingsSectionController*)controller rebuild];
         else if([controller isKindOfClass:FMSettingsRootController.class])
             [(FMSettingsRootController*)controller rebuild];
+        else if([controller isKindOfClass:FMDockSettingsController.class])
+            [(FMDockSettingsController*)controller rebuild];
         else if([controller isKindOfClass:LCOrbitSharedTweaksViewController.class])
             [(LCOrbitSharedTweaksViewController*)controller
                 updateBackground:FMThemeColor(FMColorBackground)
@@ -3608,12 +3630,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self appearanceModeControl:s];
         [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
-        [self settingSwitch:s title:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO tag:16];
-        [self addRow:FMSettingsNavigationRow(@"尺寸与形状",@"微珠、展开菜单与图标尺寸",@"slider.horizontal.3",UIColor.systemOrangeColor,self,@selector(openDimensions)) height:65 to:s];
+        [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",@"sidebar.right",UIColor.systemOrangeColor,self,@selector(openDock)) height:65 to:s];
         [self spacer:s size:16];
         [self diyPage:s];
-    } else if([category isEqualToString:@"dimensions"]) {
-        [self dimensionsPage:s];
     } else if([category isEqualToString:@"behavior"]) {
         if(FMHostUI()) {
             [self section:@"多任务" sub:@"开启后切换 App 会保留其他任务；子任务不需要单独启用微珠。" in:s];
@@ -3633,7 +3652,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
-        [self settingSwitch:s title:@"自动淡化" key:@"idleFade" defaultValue:YES tag:21];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
         [self settingSwitch:s title:@"最近打开的 App 置顶"
@@ -3802,74 +3820,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UISlider *slider=[UISlider new];slider.minimumValue=min;slider.maximumValue=max;
     slider.value=FloatPref(key,def);slider.tag=tag;
     slider.tintColor=FMAccent();
-    if(tag>=30 && tag<45) {
-        objc_setAssociatedObject(slider,@selector(sliderFinished:),key,OBJC_ASSOCIATION_COPY_NONATOMIC);
-        objc_setAssociatedObject(slider,@selector(sliderChanged:),l,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        slider.accessibilityLabel=title;
-        [self updateOrbStyleLabel:slider];
-    }
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [slider addTarget:self action:@selector(sliderFinished:)
-        forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     [self addRow:slider height:28 to:s];
-}
-- (void)orbScaleControl:(UIStackView *)stack {
-    UIStackView *heading=[UIStackView new];
-    heading.axis=UILayoutConstraintAxisHorizontal;
-    UILabel *name=[self label:@"微珠缩放" size:14 weight:UIFontWeightMedium];
-    UILabel *percent=[self label:[NSString stringWithFormat:@"%.0f%%",100*FMOrbScale()]
-        size:13 weight:UIFontWeightSemibold];
-    percent.textColor=FMThemeColor(FMColorSecondary);
-    percent.textAlignment=NSTextAlignmentRight;
-    [heading addArrangedSubview:name];
-    [heading addArrangedSubview:percent];
-    [percent.widthAnchor constraintEqualToConstant:65].active=YES;
-    [self addRow:heading height:29 to:stack];
-    UISlider *slider=[UISlider new];
-    slider.minimumValue=.70; slider.maximumValue=1.90;
-    slider.value=FMOrbScale();slider.tag=11;slider.tintColor=FMAccent();
-    slider.accessibilityLabel=@"微珠缩放";
-    objc_setAssociatedObject(slider,@selector(sliderChanged:),percent,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [slider addTarget:self action:@selector(sliderFinished:)
-        forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
-    [self addRow:slider height:34 to:stack];
-}
-- (void)orbHandleStyleControl:(UIStackView *)stack {
-    UISegmentedControl *style=[[UISegmentedControl alloc] initWithItems:@[@"胶囊",@"水滴"]];
-    style.selectedSegmentIndex=FMOrbHandleIsCapsule()?0:1;
-    style.selectedSegmentTintColor=[FMAccent() colorWithAlphaComponent:.25];
-    style.accessibilityLabel=@"微珠样式";
-    [style addTarget:self action:@selector(orbHandleStyleChanged:) forControlEvents:UIControlEventValueChanged];
-    [self addRow:style height:38 to:stack];
-}
-- (void)orbHandleStyleChanged:(UISegmentedControl *)control {
-    SetPref(@"orbHandleStyle",@(control.selectedSegmentIndex));
-    // The corner slider and the note below depend on the style.
-    [self updateSettingsContent];
-}
-- (void)settingScaleControl:(UIStackView *)stack {
-    UIStackView *heading=[UIStackView new];
-    heading.axis=UILayoutConstraintAxisHorizontal;
-    heading.distribution=UIStackViewDistributionFill;
-    UILabel *name=[self label:@"弹出菜单缩放" size:14 weight:UIFontWeightMedium];
-    UILabel *percent=[self label:
-        [NSString stringWithFormat:@"%.0f%%",100*Clamp(FloatPref(@"panelScale",1.0),.50,1.20)]
-        size:13 weight:UIFontWeightSemibold];
-    percent.textColor=FMThemeColor(FMColorSecondary);
-    percent.textAlignment=NSTextAlignmentRight;
-    [heading addArrangedSubview:name];
-    [heading addArrangedSubview:percent];
-    [percent.widthAnchor constraintEqualToConstant:65].active=YES;
-    [self addRow:heading height:29 to:stack];
-    UISlider *slider=[UISlider new];
-    slider.minimumValue=.50;slider.maximumValue=1.20;
-    slider.value=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
-    slider.tag=14;slider.tintColor=FMAccent();
-    slider.accessibilityLabel=@"弹出菜单缩放";
-    objc_setAssociatedObject(slider,@selector(sliderChanged:),percent,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [self addRow:slider height:34 to:stack];
 }
 - (void)note:(NSString *)text in:(UIStackView *)stack {
     UILabel *description=[self label:text size:11 weight:UIFontWeightRegular];
@@ -3883,14 +3835,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)settingsPage:(UIStackView*)s {
     [self section:@"显示布局" sub:nil in:s];
-    [self settingSwitch:s title:@"精简模式 · 只显示 App 图标" key:@"compactMode" defaultValue:NO tag:16];
-    [self addRow:FMSettingsNavigationRow(@"尺寸与形状",@"微珠、展开菜单与图标尺寸",@"slider.horizontal.3",UIColor.systemOrangeColor,self,@selector(openDimensions)) height:65 to:s];
+    [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",@"sidebar.right",UIColor.systemOrangeColor,self,@selector(openDock)) height:65 to:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
     [self settingSwitch:s title:@"最近打开的 App 置顶"
                  key:@"recentAppsFirst" defaultValue:NO tag:20];
     [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
-    [self settingSwitch:s title:@"自动淡化" key:@"idleFade" defaultValue:YES tag:21];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
     [self spacer:s size:10];
     [self diyPage:s];
@@ -3987,96 +3937,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         sub:@"日间与夜间分别选择颜色，菜单会自动生成配套颜色。" in:s];
     [self customThemeColorRow:s title:@"日间主题色" dark:NO];
     [self customThemeColorRow:s title:@"夜间主题色" dark:YES];
-    [self spacer:s size:12];
-    [self section:@"玻璃与微珠" sub:nil in:s];
-    [self settingSwitch:s title:@"全菜单透明玻璃（Clear）" key:@"clearGlass" defaultValue:NO tag:18];
-    [self settingSlider:s title:@"收起透明度" key:@"idleAlpha" min:.20 max:1 def:.72 tag:10];
-    [self settingSlider:s title:@"玻璃主题着色增强" key:@"glassTint" min:0 max:.15 def:0 tag:13];
 }
-- (void)openDimensions {
-    [self.settingsNavigation pushViewController:[[FMSettingsSectionController alloc] initWithSection:@"dimensions"] animated:YES];
+- (void)openDock {
+    [self.settingsNavigation pushViewController:[FMDockSettingsController new] animated:YES];
 }
-- (void)dimensionsPage:(UIStackView *)s {
-    [self section:@"微珠" sub:@"选择收起时的样子；尺寸随微珠缩放。" in:s];
-    [self orbScaleControl:s];
-    [self orbHandleStyleControl:s];
-    NSArray<NSDictionary *> *orbOptions=FMOrbStyleOptions();
-    for(NSUInteger index=0;index<orbOptions.count;index++) {
-        NSDictionary *option=orbOptions[index];
-        // Only the capsule has a corner setting.
-        if([option[@"key"] isEqualToString:@"orbCapsuleCorner"] && !FMOrbHandleIsCapsule()) continue;
-        [self settingSlider:s title:option[@"title"] key:option[@"key"]
-            min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
-            def:[option[@"default"] floatValue] tag:30+(NSInteger)index];
-        if([option[@"key"] isEqualToString:@"orbSoftness"]) [self note:FMOrbHandleIsCapsule()?
-            @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
-            @"柔和度越大，微珠和屏幕边缘连得越平缓。" in:s];
-    }
-    [self appendResetRow:s title:@"恢复微珠默认值" action:@selector(resetOrbDimensions)];
-    [self spacer:s size:16];
-    [self section:@"展开菜单" sub:@"形状尺寸随菜单缩放；两种模式分别调整图标大小，点击区域保持不变。" in:s];
-    [self settingScaleControl:s];
-    NSInteger tag=40;
-    for(NSDictionary *option in FMMenuStyleOptions()) {
-        [self settingSlider:s title:option[@"title"] key:option[@"key"]
-            min:[option[@"min"] floatValue] max:[option[@"max"] floatValue]
-            def:[option[@"default"] floatValue] tag:tag++];
-    }
-    [self appendResetRow:s title:@"恢复菜单默认值" action:@selector(resetMenuDimensions)];
-    [self refreshDimensionsPreview];
-}
-- (void)resetOrbDimensions {
+// Everything the sidebar page edits, back to its default.
+- (void)resetDockSettings {
     for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
-    SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@1);
-    [self updateSettingsContent];[self refreshOrbPreview];[self draw];
-}
-- (void)resetMenuDimensions {
     for(NSDictionary *option in FMMenuStyleOptions()) SetPref(option[@"key"],option[@"default"]);
-    SetPref(@"panelScale",@1);
-    [self updateSettingsContent];[self refreshOrbPreview];[self draw];
-}
-- (void)refreshDimensionsPreview {
-    UIView *host=self.dimensionsPreview;if(!host || host.bounds.size.width<1 || host.bounds.size.height<1) return;
-    for(UIView *view in [host.subviews copy]) [view removeFromSuperview];
-    host.backgroundColor=FMThemeColor(FMColorBackground);
-    host.clipsToBounds=YES;host.userInteractionEnabled=NO;
-    BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat width=compact?76:240,height=280;
-    CGFloat available=MAX(1,host.bounds.size.height-32);
-    CGFloat scale=MIN(.65*Clamp(FloatPref(@"panelScale",1),.5,1.2),MIN(available/height,host.bounds.size.width*.70/width));
-    CGFloat centerY=24+available*.5;
-    UIView *body=[[UIView alloc] initWithFrame:CGRectMake(0,0,width,height)];
-    body.tag=9221;FMAddOrbBackdrop(body,YES);
-    UIView *glass=[self glass:body.bounds radius:26 strong:YES];
-    FMApplySideNotch(glass,body.layer,YES,compact,NO);[body addSubview:glass];
-    CGFloat start=FMMenuStyleValue(@"menuExtension")*(compact?26./28:30./28)+10;
-    CGFloat size=FMMenuStyleValue(compact?@"menuCompactIconSize":@"menuListIconSize");
-    NSArray *apps=[self orderedAppsForMenu];
-    for(NSUInteger i=0;i<MIN((NSUInteger)3,MAX((NSUInteger)1,apps.count));i++) {
-        UIView *icon=apps.count?[self iconViewForApp:apps[i] size:size]:[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"app.fill"]];
-        icon.frame=CGRectMake(compact?(width-size)*.5:16,start+i*63+(54-size)*.5,size,size);
-        icon.tintColor=FMAccent();[glass addSubview:icon];
-        if(!compact) {
-            UILabel *title=[self label:apps.count?FMAppCaption(apps[i]):@"应用预览" size:13 weight:UIFontWeightMedium];
-            title.frame=CGRectMake(24+size,start+i*63+12,width-size-40,30);
-            title.lineBreakMode=NSLineBreakByTruncatingTail;[glass addSubview:title];
-        }
-    }
-    body.transform=CGAffineTransformMakeScale(scale,scale);
-    body.frame=CGRectMake(0,centerY-height*scale*.5,width*scale,height*scale);
-    body.userInteractionEnabled=NO;[host addSubview:body];
-    CGFloat orbScale=MIN(1,available/MAX(1,self.orbHeight));
-    UIView *bead=[self orbPreviewWithFrame:CGRectMake(0,0,self.orbWidth,self.orbHeight) left:NO];
-    bead.transform=CGAffineTransformMakeScale(orbScale,orbScale);
-    bead.frame=CGRectMake(host.bounds.size.width-self.orbWidth*orbScale,centerY-self.orbHeight*orbScale*.5,self.orbWidth*orbScale,self.orbHeight*orbScale);
-    [host addSubview:bead];
-    for(NSNumber *right in @[@NO,@YES]) {
-        UILabel *label=[self label:right.boolValue?@"微珠":@"展开菜单" size:11 weight:UIFontWeightMedium];
-        label.textColor=FMThemeColor(FMColorSecondary);
-        label.textAlignment=right.boolValue?NSTextAlignmentRight:NSTextAlignmentLeft;
-        label.frame=CGRectMake(right.boolValue?host.bounds.size.width-116:14,4,102,20);
-        [host addSubview:label];
-    }
+    SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
+    SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
+    SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
+    SetPref(@"popAnimation",@0);
+    SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
 }
 
 - (void)pinApp:(UIControl *)button {
@@ -4424,21 +4297,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         case 3:key=@"showRestart";break;
         case 7:key=[@"override." stringByAppendingString:GuestID()];break;
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
-        case 16:key=@"compactMode";break;
         case 20:key=@"recentAppsFirst";break;
         case 22:key=@"unlockOrientation";break;
-        case 21: {
-            key=@"idleFade";
-            if(!sw.isOn) {
-                [self cancelOrbFade];
-                self.orbFaded=NO;
-                self.orb.alpha=self.orbNormalAlpha?:0.72;
-            } else {
-                [self scheduleOrbFade];
-            }
-            break;
-        }
-        case 18:key=@"clearGlass";break;
         case 4:key=AppPref();break;
         default:return;
     }
@@ -4447,49 +4307,17 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if(sw.isOn) { self.appsScrollOffset=0; [self rememberCurrentApp]; }
         FMLog(@"recent-apps-first",sw.isOn?@"on":@"off");
     }
-    if(sw.tag==3||sw.tag==7||sw.tag==8||sw.tag==18) [self draw];
-    if(sw.tag==16) FMLog(@"display-mode",sw.on?@"icons":@"list");
+    if(sw.tag==3||sw.tag==7||sw.tag==8) [self draw];
 }
-- (void)updateOrbStyleLabel:(UISlider *)slider {
-    NSDictionary *option=FMStyleOptionForSlider(slider);
-    if(!option) return;
-    NSString *unit=option[@"unit"];
-    CGFloat value=slider.value*([unit isEqualToString:@"%"]?100:1);
-    NSString *number=[unit isEqualToString:@"秒"]?[NSString stringWithFormat:@"%.2f",value]:
-        [NSString stringWithFormat:@"%.0f",value];
-    UILabel *label=objc_getAssociatedObject(slider,@selector(sliderChanged:));
-    label.text=[NSString stringWithFormat:@"%@：%@ %@",option[@"title"],number,unit];
-    slider.accessibilityValue=[NSString stringWithFormat:@"%@ %@",number,unit];
-}
+// The per-app bead opacity slider.
 - (void)sliderChanged:(UISlider*)slider {
-    NSString *key=slider.tag==14?@"panelScale":slider.tag==10?@"idleAlpha":
-        slider.tag==11?@"orbScale":
-        slider.tag==13?@"glassTint":
-        slider.tag==12?[@"appAlpha." stringByAppendingString:GuestID()]:nil;
-    if(slider.tag>=30 && slider.tag<45) {
-        key=objc_getAssociatedObject(slider,@selector(sliderFinished:));
-        // The handle sliders move in the wloc dock's steps (1 pt, 2 pt, 1 %, 5 %).
-        CGFloat step=[FMStyleOptionForSlider(slider)[@"step"] doubleValue];
-        if(step>0) slider.value=round(slider.value/step)*step;
-        [self updateOrbStyleLabel:slider];
-    }
-    if(!key) return;
-    SetPref(key,@(slider.value));
+    if(slider.tag!=12) return;
+    SetPref([@"appAlpha." stringByAppendingString:GuestID()],@(slider.value));
     [self refreshOrbPreview];
-    if(slider.tag==14 || slider.tag==11) {
-        UILabel *value=objc_getAssociatedObject(slider,@selector(sliderChanged:));
-        value.text=[NSString stringWithFormat:@"%.0f%%",round(slider.value*100)];
-        slider.accessibilityValue=value.text;
-    }
-    if(slider.tag==10 || slider.tag==12) {
-        CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
-            FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
-            FloatPref(@"idleAlpha",.72);
-        self.orb.alpha=alpha;
-    }
-}
-- (void)sliderFinished:(UISlider*)slider {
-    if(slider.tag==14||slider.tag==11||slider.tag==13||(slider.tag>=30 && slider.tag<45)) [self draw];
+    CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
+        FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
+        FloatPref(@"idleAlpha",.72);
+    self.orb.alpha=alpha;
 }
 - (void)openMenuLogs {
     if(!self.settingsNavigation) return;
@@ -4580,19 +4408,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self addRow:row height:65 to:stack];
 }
 - (void)resetStyle {
-    for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
-    for(NSDictionary *option in FMMenuStyleOptions()) SetPref(option[@"key"],option[@"default"]);
-    SetPref(@"idleAlpha",@(.72));SetPref(@"orbScale",@(1.0));SetPref(@"orbHandleStyle",@0);
+    [self resetDockSettings];
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"recentAppsFirst",@NO);
-    SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
     SetPref(@"appearanceMode",@(0));
     SetPref(@"unlockOrientation",@YES);
     for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth"]) {
         [HostDefaults() removeObjectForKey:Pref(key)];
     }
-    SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
-    
     dispatch_async(dispatch_get_main_queue(), ^{
         UIUserInterfaceStyle skin=FMMenuOverride();
         self.overlayView.overrideUserInterfaceStyle=skin;
@@ -5142,7 +4965,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
-    NSDictionary *titles=@{@"dimensions":@"尺寸与形状",@"appearance":@"显示与外观",@"behavior":@"交互与切换",
+    NSDictionary *titles=@{@"appearance":@"显示与外观",@"behavior":@"交互与切换",
                            @"apps":@"应用管理",@"diagnostics":@"诊断与日志",@"github":@"GitHub 访问"};
     self.title=titles[self.sectionKey]?:@"设置";
     self.view.backgroundColor=FMThemeColor(FMColorBackground);
@@ -5152,48 +4975,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     scroll.alwaysBounceVertical=YES;
     scroll.showsVerticalScrollIndicator=YES;
     [self.view addSubview:scroll];
-    UIView *preview=nil;
-    if([self.sectionKey isEqualToString:@"dimensions"]) {
-        preview=[UIView new];preview.tag=9220;
-        preview.translatesAutoresizingMaskIntoConstraints=NO;
-        preview.userInteractionEnabled=NO;
-        self.shapePreview=preview;[self.view addSubview:preview];
-        self.previewHeight=[preview.heightAnchor constraintEqualToConstant:200];
-        [NSLayoutConstraint activateConstraints:@[
-            [preview.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-            [preview.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-            [preview.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-            self.previewHeight
-        ]];
-    }
     [NSLayoutConstraint activateConstraints:@[
         [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [scroll.topAnchor constraintEqualToAnchor:preview?preview.bottomAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
     ]];
     self.contentScroll=scroll;
     [self rebuild];
-}
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    if(self.shapePreview) {
-        [FMManager shared].dimensionsPreview=self.shapePreview;
-        [FMManager shared].orbPreviewHost.hidden=YES;
-        [[FMManager shared] refreshOrbPreview];
-    }
-}
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    if(!self.shapePreview) return;
-    CGFloat available=self.view.safeAreaLayoutGuide.layoutFrame.size.height;
-    CGFloat height=MIN(220,MAX(72,available*.30));
-    if(fabs(self.previewHeight.constant-height)>.5) {self.previewHeight.constant=height;return;}
-    if(!CGSizeEqualToSize(self.lastPreviewSize,self.shapePreview.bounds.size)) {
-        self.lastPreviewSize=self.shapePreview.bounds.size;
-        [FMManager shared].dimensionsPreview=self.shapePreview;
-        [[FMManager shared] refreshOrbPreview];
-    }
 }
 - (BOOL)isGitHubPageVisible {
     return FMHostUI() && [self.sectionKey isEqualToString:@"github"] && self.isViewLoaded &&
@@ -5210,11 +4999,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if([self.sectionKey isEqualToString:@"github"] &&
        (self.isMovingFromParentViewController || self.navigationController.isBeingDismissed ||
         self.navigationController.topViewController!=self)) [self invalidateGitHubVerification];
-    if(self.shapePreview && [FMManager shared].dimensionsPreview==self.shapePreview) {
-        [FMManager shared].dimensionsPreview=nil;
-        [FMManager shared].orbPreviewHost.hidden=NO;
-        [[FMManager shared] refreshOrbPreview];
-    }
 }
 - (void)showGitHubMessage:(NSString *)message {
     if(![self isGitHubPageVisible] || self.presentedViewController) return;
@@ -5378,7 +5162,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-32],
         [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-36]
     ]];
-    if(self.shapePreview) [FMManager shared].dimensionsPreview=self.shapePreview;
     if([self.sectionKey isEqualToString:@"github"]) [self populateGitHub:stack];
     else [[FMManager shared] populateSettingsCategory:self.sectionKey stack:stack];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -5387,6 +5170,950 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height);
         [scroll setContentOffset:CGPointMake(0,MIN(offset,maxY)) animated:NO];
     });
+}
+@end
+
+// ---------------------------------------------------------------------------
+// The sidebar settings page, after the wloc dock's: a preview card stays pinned
+// on top and the options below it come in groups, one open at a time.
+
+typedef NS_ENUM(NSInteger, FMDockGroup) {
+    FMDockGroupPosition,FMDockGroupHandle,FMDockGroupOpacity,FMDockGroupTray,FMDockGroupCount
+};
+// When a row shows inside its open group.
+typedef NS_ENUM(NSInteger, FMDockWhen) {
+    FMDockWhenAlways,FMDockWhenCapsule,FMDockWhenFade,FMDockWhenCompact,FMDockWhenList
+};
+
+@interface FMDockSlider : UISlider
+@property(nonatomic,copy) NSDictionary *option;
+@property(nonatomic,weak) UILabel *valueLabel;
+@end
+@implementation FMDockSlider
+@end
+@interface FMDockSwitch : UISwitch
+@property(nonatomic,copy) NSString *key;
+@end
+@implementation FMDockSwitch
+@end
+@interface FMDockSegments : UISegmentedControl
+@property(nonatomic,copy) NSString *key;
+@end
+@implementation FMDockSegments
+@end
+
+// The settings this page adds to the two option tables, in the same form.
+static NSArray<NSDictionary *> *FMDockExtraOptions(void) {
+    return @[
+        @{@"key":@"orbScale",@"title":@"微珠缩放",@"min":@.7,@"max":@1.9,@"default":@1,@"unit":@"%",@"step":@.05},
+        @{@"key":@"idleAlpha",@"title":@"平时的透明度",@"min":@.25,@"max":@1,@"default":@.72,@"unit":@"%",@"step":@.05},
+        @{@"key":@"panelScale",@"title":@"弹出菜单缩放",@"min":@.5,@"max":@1.2,@"default":@1,@"unit":@"%",@"step":@.05},
+        @{@"key":@"glassTint",@"title":@"玻璃主题着色增强",@"min":@0,@"max":@.15,@"default":@0,@"unit":@"%",@"step":@.01}
+    ];
+}
+// One setting by key, optionally under another title.
+static NSDictionary *FMDockOption(NSString *key,NSString *title) {
+    NSArray<NSArray<NSDictionary *> *> *tables=@[FMOrbStyleOptions(),FMMenuStyleOptions(),FMDockExtraOptions()];
+    for(NSArray<NSDictionary *> *table in tables) for(NSDictionary *option in table) if([option[@"key"] isEqualToString:key]) {
+        if(!title) return option;
+        NSMutableDictionary *renamed=[option mutableCopy];
+        renamed[@"title"]=title;
+        return renamed;
+    }
+    return nil;
+}
+static CGFloat FMDockStoredValue(NSDictionary *option) {
+    CGFloat fallback=[option[@"default"] doubleValue],value=FloatPref(option[@"key"],fallback);
+    return Clamp(isfinite(value)?value:fallback,[option[@"min"] doubleValue],[option[@"max"] doubleValue]);
+}
+// "22 pt", "83%", "5 秒" (two decimals when the step is finer than a second).
+static NSString *FMDockValueText(NSDictionary *option,CGFloat value) {
+    NSString *unit=option[@"unit"];
+    if([unit isEqualToString:@"%"]) return [NSString stringWithFormat:@"%ld%%",lround(value*100)];
+    if([unit isEqualToString:@"秒"])
+        return [option[@"step"] doubleValue]<1?[NSString stringWithFormat:@"%.2f 秒",value]:[NSString stringWithFormat:@"%ld 秒",lround(value)];
+    return [NSString stringWithFormat:@"%ld pt",lround(value)];
+}
+static UILabel *FMDockLabel(NSString *text,CGFloat size,UIColor *color) {
+    UILabel *label=[UILabel new];
+    label.text=text;
+    label.font=[UIFont systemFontOfSize:size weight:UIFontWeightRegular];
+    label.textColor=color;
+    label.numberOfLines=0;
+    return label;
+}
+static CGFloat FMDockCardRadius(void) {
+    if(@available(iOS 26.0,*)) return 26;
+    return 14;
+}
+// One row of a group: the content inset like a list row, a hairline above it and
+// at least minHeight tall. The paddings and the minimum give way (silently) when a
+// stack view collapses the row to nothing.
+static UIView *FMDockRow(UIView *content,CGFloat padding,BOOL separator,CGFloat minHeight) {
+    UIView *row=[UIView new];
+    content.translatesAutoresizingMaskIntoConstraints=NO;
+    [row addSubview:content];
+    NSLayoutConstraint *top=[content.topAnchor constraintGreaterThanOrEqualToAnchor:row.topAnchor constant:padding];
+    NSLayoutConstraint *bottom=[content.bottomAnchor constraintLessThanOrEqualToAnchor:row.bottomAnchor constant:-padding];
+    NSLayoutConstraint *least=[row.heightAnchor constraintGreaterThanOrEqualToConstant:minHeight];
+    NSLayoutConstraint *natural=[row.heightAnchor constraintEqualToAnchor:content.heightAnchor constant:2*padding];
+    top.priority=bottom.priority=least.priority=999;
+    natural.priority=250;
+    [NSLayoutConstraint activateConstraints:@[
+        [content.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:20],
+        [content.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-20],
+        [content.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        top,bottom,least,natural
+    ]];
+    if(separator) {
+        UIView *line=[UIView new];
+        line.translatesAutoresizingMaskIntoConstraints=NO;
+        line.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.38];
+        line.userInteractionEnabled=NO;
+        [row addSubview:line];
+        [NSLayoutConstraint activateConstraints:@[
+            [line.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:20],
+            [line.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-20],
+            [line.topAnchor constraintEqualToAnchor:row.topAnchor],
+            [line.heightAnchor constraintEqualToConstant:1/UIScreen.mainScreen.scale]
+        ]];
+    }
+    return row;
+}
+// A group's rounded container.
+static UIView *FMDockCard(UIStackView *rows) {
+    UIView *card=[UIView new];
+    card.backgroundColor=FMThemeColor(FMColorSurface);
+    card.layer.cornerRadius=FMDockCardRadius();
+    card.layer.cornerCurve=kCACornerCurveContinuous;
+    card.clipsToBounds=YES;
+    rows.translatesAutoresizingMaskIntoConstraints=NO;
+    [card addSubview:rows];
+    [NSLayoutConstraint activateConstraints:@[
+        [rows.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
+        [rows.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
+        [rows.topAnchor constraintEqualToAnchor:card.topAnchor],
+        [rows.bottomAnchor constraintEqualToAnchor:card.bottomAnchor]
+    ]];
+    return card;
+}
+
+// The card pinned at the top of the page: the drawer and its bead as the settings
+// would draw them, on the dock's own pastel gradient. It is built like the real
+// thing (glass shell clipped to the same morph outline, same contents), moves with
+// the same springs and pops its contents in the way the setting says. Tapping it
+// opens and closes it.
+@interface FMDockPreviewView : UIView
+@property(nonatomic,weak) NSLayoutConstraint *heightConstraint;
+@property(nonatomic,assign) CGFloat maxHeight;
+@property(nonatomic,copy) void (^onToggle)(BOOL open);
+@property(nonatomic,readonly) BOOL isOpen;
+- (void)reload;
+- (void)setOpen:(BOOL)open animated:(BOOL)animated;
+- (void)replay;
+@end
+@implementation FMDockPreviewView {
+    UIView *_scene,*_drawer,*_glass,*_content,*_bead,*_edge;
+    NSArray<NSDictionary *> *_popItems;
+    NSArray<UIView *> *_popDividers;
+    FMNotchParams _beadParams,_dropletParams,_drawerParams;
+    BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded;
+    CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth;
+    CGFloat _progress,_velocity,_omega,_zeta;
+    CFTimeInterval _tick,_elapsed;
+    CADisplayLink *_link;
+    NSTimer *_fadeTimer;
+}
++ (Class)layerClass { return CAGradientLayer.class; }
+- (instancetype)initWithFrame:(CGRect)frame {
+    if(!(self=[super initWithFrame:frame])) return nil;
+    CAGradientLayer *gradient=(CAGradientLayer *)self.layer;
+    gradient.colors=@[(id)RGBA(.74,.86,.78,1).CGColor,(id)RGBA(.62,.78,.92,1).CGColor];
+    gradient.startPoint=CGPointMake(0,0);
+    gradient.endPoint=CGPointMake(1,1);
+    gradient.cornerRadius=22;
+    gradient.cornerCurve=kCACornerCurveContinuous;
+    self.clipsToBounds=YES;
+    self.isAccessibilityElement=YES;
+    self.accessibilityLabel=@"侧边栏预览";
+    self.accessibilityHint=@"轻点展开或收起";
+    self.accessibilityTraits=UIAccessibilityTraitButton;
+    [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)]];
+    return self;
+}
+- (BOOL)isOpen { return _open; }
+- (void)setMaxHeight:(CGFloat)maxHeight {
+    _maxHeight=maxHeight;
+    [self reload];
+}
+- (void)dealloc {
+    [_link invalidate];
+    [_fadeTimer invalidate];
+}
+- (void)willMoveToWindow:(UIWindow *)newWindow {
+    [super willMoveToWindow:newWindow];
+    if(newWindow) return;
+    [self stopLink];
+    [_fadeTimer invalidate];
+    _fadeTimer=nil;
+}
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if(self.window) [self scheduleFade];
+}
+// The drawer's size from the current settings, exactly as the real drawer lays out
+// three apps, and how tall the card is closed and open.
+- (void)measure {
+    FMManager *manager=[FMManager shared];
+    _left=BoolPref(@"onLeft",manager.left);
+    _compact=BoolPref(@"compactMode",NO);
+    _actual=Clamp(FloatPref(@"panelScale",1.0),.50,1.20);
+    CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(_compact?22./28:1);
+    CGFloat rowHeight=_compact?63:MAX(56,48/MAX(.50,_actual));
+    CGFloat footer=_compact?76:44;
+    _pw=_compact?76:240;
+    _ph=_compact?20+3*65+footer+12+2*shoulder:(64+shoulder)+(footer+6+shoulder)+3*(rowHeight+4);
+    _closedHeight=MAX([manager orbHeight]+100,190);
+    CGFloat open=MIN(_ph*_actual+24,420);
+    if(_maxHeight>0) open=MIN(open,MAX(_maxHeight,_closedHeight));
+    _openHeight=open;
+}
+- (void)syncHeight {
+    CGFloat height=_closedHeight+(_openHeight-_closedHeight)*Clamp(_progress,-.03,1.1);
+    NSLayoutConstraint *constraint=self.heightConstraint;
+    if(constraint && fabs(constraint.constant-height)>.01) constraint.constant=height;
+}
+// Settings changed: measure again now (the card's height follows) and redraw at the
+// next layout, however many changes arrive before it.
+- (void)reload {
+    [self measure];
+    [self syncHeight];
+    _dirty=YES;
+    [self setNeedsLayout];
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat width=CGRectGetWidth(self.bounds);
+    if(width<1) return;
+    if(!_scene || _dirty || fabs(width-_builtWidth)>.5) {
+        if(_pw<=0) [self measure];
+        _dirty=NO;
+        _builtWidth=width;
+        [self build];
+    }
+    [self placeScene];
+}
+- (UIView *)iconForSlot:(NSUInteger)slot size:(CGFloat)size apps:(NSArray<NSDictionary *> *)apps {
+    if(slot<apps.count) return [[FMManager shared] iconViewForApp:apps[slot] size:size];
+    UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    box.layer.cornerRadius=size*.22;
+    box.clipsToBounds=YES;
+    box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
+    UIImageView *glyph=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"app.fill"]];
+    glyph.tintColor=FMAccent();
+    glyph.contentMode=UIViewContentModeScaleAspectFit;
+    glyph.frame=CGRectInset(box.bounds,size*.26,size*.26);
+    [box addSubview:glyph];
+    return box;
+}
+// A footer button as the drawer draws it, without the action.
+- (UIView *)footerTile:(NSString *)symbol compact:(BOOL)compact size:(CGFloat)size {
+    BOOL dark=FMMenuDark();
+    UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    tile.layer.cornerRadius=size*.26;
+    tile.layer.cornerCurve=kCACornerCurveContinuous;
+    tile.backgroundColor=compact?[UIColor.whiteColor colorWithAlphaComponent:dark?.10:.18]:FMClearGlassEnabled()?
+        [FMThemeColor(FMColorTool) colorWithAlphaComponent:UIAccessibilityIsReduceTransparencyEnabled()?.94:.48]:
+        FMThemeColor(FMColorTool);
+    tile.layer.borderWidth=.8;
+    tile.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:dark?.55:.28].CGColor;
+    tile.layer.shadowColor=UIColor.blackColor.CGColor;
+    tile.layer.shadowOpacity=dark?.20:.09;
+    tile.layer.shadowRadius=3;
+    UIImageSymbolConfiguration *configuration=[UIImageSymbolConfiguration
+        configurationWithPointSize:compact?23:22 weight:UIImageSymbolWeightSemibold];
+    UIImageView *glyph=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
+    glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
+    glyph.contentMode=UIViewContentModeScaleAspectFit;
+    glyph.tintColor=compact?FMThemeColor(FMColorText):FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+    [tile addSubview:glyph];
+    return tile;
+}
+// Three apps (a strip of favorites on top in the list layout), the footer buttons and
+// the dividers, at the positions buildPanel and its helpers give them.
+- (void)buildContents {
+    FMManager *manager=[FMManager shared];
+    NSArray<NSDictionary *> *apps=[manager orderedAppsForMenu];
+    _content=[[UIView alloc] initWithFrame:_glass.bounds];
+    [FMGlassContent(_glass) addSubview:_content];
+    NSMutableArray<UIView *> *items=[NSMutableArray array],*dividers=[NSMutableArray array];
+    CGFloat pw=_pw,ph=_ph,hairline=1/UIScreen.mainScreen.scale;
+    CGFloat shoulder=FMMenuStyleValue(@"menuExtension")*(_compact?22./28:1);
+    UIColor *rule=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
+    BOOL dark=FMMenuDark();
+    if(_compact) {
+        CGFloat top=shoulder+8,size=FMMenuStyleValue(@"menuCompactIconSize"),width=pw-6;
+        for(NSUInteger index=0;index<3;index++) {
+            UIView *row=[[UIView alloc] initWithFrame:CGRectMake(3,top+index*66,width,63)];
+            if(FMHostUI()) {
+                UIView *backing=[[UIView alloc] initWithFrame:CGRectMake((width-54)*.5,(63-54)*.5,54,54)];
+                backing.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74];
+                backing.layer.cornerRadius=14;
+                [row addSubview:backing];
+            }
+            UIView *icon=[self iconForSlot:index size:size apps:apps];
+            icon.center=CGPointMake(width*.5,63*.5);
+            icon.layer.borderWidth=.55;
+            icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:dark?.54:.36].CGColor;
+            [row addSubview:icon];
+            [_content addSubview:row];
+            [items addObject:row];
+        }
+        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(3,ph-76-6-22,width,76)];
+        [_content addSubview:bar];
+        UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(13,0,width-26,.8)];
+        divider.backgroundColor=rule;
+        [bar addSubview:divider];
+        [dividers addObject:divider];
+        UIView *home=[self footerTile:@"house.fill" compact:YES size:50];
+        home.center=CGPointMake(width*.5,4+(76-4)*.5);
+        [bar addSubview:home];
+        [items addObject:home];
+    } else {
+        CGFloat inner=pw-24,gap=4,cell=(inner-gap*3)/4;
+        for(NSUInteger index=0;index<4;index++) {
+            UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(12+index*(cell+gap),36,cell,40)];
+            UIView *icon=[self iconForSlot:index size:32 apps:apps];
+            icon.frame=CGRectMake((cell-32)*.5,4,32,32);
+            [tile addSubview:icon];
+            [_content addSubview:tile];
+            [items addObject:tile];
+        }
+        UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(12,84,inner,hairline)];
+        divider.backgroundColor=rule;
+        [_content addSubview:divider];
+        [dividers addObject:divider];
+        CGFloat top=64+shoulder,rowHeight=MAX(56,48/MAX(.50,_actual)),size=FMMenuStyleValue(@"menuListIconSize");
+        for(NSUInteger index=0;index<3;index++) {
+            UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+index*(rowHeight+4),inner,rowHeight)];
+            row.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
+                FMHostUI()?(FMClearGlassEnabled()?.79:.88):FMReadableRowAlpha()];
+            row.layer.cornerRadius=17;
+            UIView *icon=[self iconForSlot:index size:size apps:apps];
+            icon.frame=CGRectMake(12,(rowHeight-size)*.5,size,size);
+            [row addSubview:icon];
+            NSString *name=index<apps.count?FMAppCaption(apps[index]):[NSString stringWithFormat:@"应用 %lu",(unsigned long)index+1];
+            UILabel *title=[manager label:name size:13 weight:UIFontWeightSemibold];
+            title.numberOfLines=1;
+            title.lineBreakMode=NSLineBreakByTruncatingTail;
+            title.frame=CGRectMake(12+size+8,0,inner-12-size-8-26,rowHeight);
+            [row addSubview:title];
+            UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
+            arrow.tintColor=FMThemeColor(FMColorText);
+            arrow.contentMode=UIViewContentModeScaleAspectFit;
+            arrow.frame=CGRectMake(inner-4-18,(rowHeight-18)*.5,18,18);
+            [row addSubview:arrow];
+            [_content addSubview:row];
+            [items addObject:row];
+        }
+        UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(12,ph-44-6-28,inner,44)];
+        [_content addSubview:bar];
+        NSArray<NSString *> *glyphs=@[@"house.fill",@"gearshape.fill",_left?@"chevron.compact.left":@"chevron.compact.right"];
+        CGFloat slot=inner/glyphs.count;
+        for(NSUInteger index=0;index<glyphs.count;index++) {
+            UIView *tile=[self footerTile:glyphs[index] compact:NO size:36];
+            tile.frame=CGRectMake(index*slot+(slot-36)*.5,(44-36)*.5,36,36);
+            [bar addSubview:tile];
+            [items addObject:tile];
+        }
+    }
+    // The pop-in order: lowest row first, and within a row the one nearest the wall.
+    NSMutableArray<NSDictionary *> *entries=[NSMutableArray array];
+    CGFloat wall=_left?0:pw;
+    for(UIView *view in items) {
+        CGRect frame=[view convertRect:view.bounds toView:_content];
+        [entries addObject:@{@"view":view,@"row":@(lround(CGRectGetMidY(frame)/8)),
+                             @"gap":@(fabs(CGRectGetMidX(frame)-wall))}];
+    }
+    _popItems=entries;
+    _popDividers=dividers;
+}
+// The whole picture again: the drawer as a real glass shell, then the docked bead over
+// it, both at real size inside a scene that is scaled to fit the card.
+- (void)build {
+    FMManager *manager=[FMManager shared];
+    [_fadeTimer invalidate];
+    _fadeTimer=nil;
+    [_scene removeFromSuperview];
+    _scene=[UIView new];
+    _scene.userInteractionEnabled=NO;
+    [self addSubview:_scene];
+    _fit=Clamp(MIN((_openHeight-24)/MAX(1,_ph*_actual),(CGRectGetWidth(self.bounds)-16)/MAX(1,_pw*_actual)),.3,1);
+    _drawer=[[UIView alloc] initWithFrame:CGRectMake(0,0,_pw,_ph)];
+    _shadow=FMMenuDark()?.30:.18;
+    _drawer.layer.shadowColor=UIColor.blackColor.CGColor;
+    _drawer.layer.shadowRadius=18;
+    _drawer.layer.shadowOffset=CGSizeMake(0,3);
+    FMAddOrbBackdrop(_drawer,_left);
+    _edge=[_drawer viewWithTag:9204];
+    _glass=[manager glass:_drawer.bounds radius:_compact?MIN(25,_pw*.33):29 strong:YES];
+    FMApplySideNotch(_glass,_drawer.layer,_left,_compact,NO);
+    for(CALayer *layer in _glass.layer.sublayers)
+        if([layer isKindOfClass:CAShapeLayer.class]) layer.name=@"fm.panel.rim";
+    [_drawer addSubview:_glass];
+    [_scene addSubview:_drawer];
+    [self buildContents];
+    _beadW=[manager orbWidth];
+    _beadH=[manager orbHeight];
+    _bead=[manager orbPreviewWithFrame:CGRectMake(0,0,_beadW,_beadH) left:_left];
+    [_scene addSubview:_bead];
+    CGFloat shift=0;
+    _placed=FMPlaceHandles(FMOrbHandleMetrics(YES),FMOrbHandleMetrics(NO),FMOrbHandleIsCapsule(),1/_actual,_pw,_ph,
+                           _ph*.5,&_beadParams,&_dropletParams,&shift);
+    _drawerParams=FMDrawerNotchParams(_pw,_ph,_compact);
+    _faded=NO;
+    // A rebuild mid-way keeps what is on show; it must not pop the contents in again.
+    _revealed=_started=_progress>=.5;
+    [self applyProgress:_progress];
+    [self scheduleFade];
+}
+- (void)placeScene {
+    if(!_scene) return;
+    CGFloat width=CGRectGetWidth(self.bounds),height=CGRectGetHeight(self.bounds);
+    CGFloat sceneWidth=width/_fit,sceneHeight=height/_fit;
+    _scene.transform=CGAffineTransformIdentity;
+    _scene.bounds=CGRectMake(0,0,sceneWidth,sceneHeight);
+    _scene.center=CGPointMake(width*.5,height*.5);
+    _scene.transform=CGAffineTransformMakeScale(_fit,_fit);
+    // Past fully open the drawer stretches toward the screen about its wall.
+    CGFloat stretch=Clamp(MAX(_progress,0)-1,0,.08),visible=_pw*_actual;
+    _drawer.transform=CGAffineTransformMakeScale(_actual*(1+stretch),_actual);
+    CGFloat rest=_left?visible*.5:sceneWidth-visible*.5;
+    _drawer.center=CGPointMake(rest+(_left?1:-1)*stretch*visible*.5,sceneHeight*.5);
+    _bead.frame=CGRectMake(_left?0:sceneWidth-_beadW,(sceneHeight-_beadH)*.5,_beadW,_beadH);
+}
+- (CGFloat)restAlpha {
+    if(_faded) return FMOrbStyleValue(@"fadedOpacity");
+    return Clamp(FloatPref(@"idleAlpha",.72),.25,1);
+}
+// One frame at progress 0 (the docked bead) to 1 (the open drawer), as the real drawer's
+// applyMorphProgress: draws it.
+- (void)applyProgress:(CGFloat)progress {
+    _progress=progress;
+    [self syncHeight];
+    if(!_glass) return;
+    CGFloat raw=MAX(progress,0),t=MIN(raw,1);
+    __attribute__((objc_precise_lifetime)) UIBezierPath *outline=_placed?
+        FMDrawerMorphPath(_glass.bounds,_beadParams,_dropletParams,_drawerParams,_left,_compact,t):
+        FMSideNotchPath(_glass.bounds,_left,_compact,NO);
+    CAShapeLayer *clip=(CAShapeLayer *)_glass.layer.mask;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if([clip isKindOfClass:CAShapeLayer.class]) clip.path=outline.CGPath;
+    for(CALayer *layer in _glass.layer.sublayers)
+        if([layer.name isEqualToString:@"fm.panel.rim"] && [layer isKindOfClass:CAShapeLayer.class])
+            ((CAShapeLayer *)layer).path=outline.CGPath;
+    _drawer.layer.shadowPath=outline.CGPath;
+    _drawer.layer.shadowOpacity=_shadow*FMSmooth(t/.5);
+    [CATransaction commit];
+    BOOL reveal=_revealed?t>=.42:t>=.5,flipped=reveal!=_revealed;
+    _revealed=reveal;
+    if(reveal) _started=YES;
+    if(flipped) {
+        // With the pop-in off the contents leave with the shell instead of waiting for it to shrink around them.
+        if(!reveal && FMPopMode()==2) _started=NO;
+        FMPopItems(_popItems,_popDividers,_left,reveal);
+    }
+    _content.alpha=_started?1:0;
+    _edge.alpha=FMSmooth((t-.1)/.5);
+    // Without room for the morph the bead and the drawer cross-fade.
+    _drawer.alpha=_placed?1:FMSmooth(t);
+    _bead.alpha=[self restAlpha]*(1-FMSmooth(t/.3));
+    [self setNeedsLayout];
+}
+- (void)stopLink {
+    [_link invalidate];
+    _link=nil;
+}
+- (void)setOpen:(BOOL)open animated:(BOOL)animated {
+    [self wake];
+    _open=open;
+    CGFloat target=open?1:0;
+    if(!animated || UIAccessibilityIsReduceMotionEnabled() || !self.window) {
+        [self stopLink];
+        _velocity=0;
+        [self applyProgress:target];
+        if(!open) [self scheduleFade];
+        return;
+    }
+    [_bead.layer removeAnimationForKey:@"opacity"];
+    // The dock's springs: opening bounces, closing is firmer so it does not hang around.
+    _omega=2*M_PI/(open?.46:.40);
+    _zeta=open?.68:.82;
+    _tick=0;
+    _elapsed=0;
+    if(_link) return;
+    _link=[CADisplayLink displayLinkWithTarget:self selector:@selector(springFrame:)];
+    [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+- (void)springFrame:(CADisplayLink *)link {
+    CFTimeInterval dt=_tick>0?MIN(link.timestamp-_tick,1/20.):1/60.;
+    _tick=link.timestamp;
+    _elapsed+=dt;
+    CGFloat target=_open?1:0,x=_progress,v=_velocity;
+    FMSpringStep(&x,&v,target,_omega,_zeta,dt);
+    _velocity=v;
+    BOOL arrived=(fabs(x-target)<.004 && fabs(v)<.15) || _elapsed>1.2;
+    [self applyProgress:arrived?target:x];
+    if(!arrived) return;
+    _velocity=0;
+    [self stopLink];
+    if(!_open) [self scheduleFade];
+}
+- (void)tapped {
+    BOOL open=!_open;
+    [self setOpen:open animated:YES];
+    if(self.onToggle) self.onToggle(open);
+}
+// Closes without ceremony, then opens with the animation: to show what a setting does.
+- (void)replay {
+    [self setOpen:NO animated:NO];
+    [self setOpen:YES animated:YES];
+    if(self.onToggle) self.onToggle(YES);
+}
+// Left alone the bead fades after the set time to the set opacity, and a touch brings it
+// back, like the real one.
+- (void)scheduleFade {
+    [_fadeTimer invalidate];
+    _fadeTimer=nil;
+    if(!BoolPref(@"idleFade",YES) || _open || !self.window) return;
+    __weak typeof(self) weakSelf=self;
+    _fadeTimer=[NSTimer scheduledTimerWithTimeInterval:FMOrbStyleValue(@"fadeDelay") repeats:NO block:^(NSTimer *timer) {
+        [weakSelf fade];
+    }];
+}
+- (void)fade {
+    if(_open || _link || _faded) return;
+    _faded=YES;
+    [UIView animateWithDuration:.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction
+        animations:^{ self->_bead.alpha=[self restAlpha]; } completion:nil];
+}
+- (void)wake {
+    [_fadeTimer invalidate];
+    _fadeTimer=nil;
+    if(!_faded) return;
+    _faded=NO;
+    CGFloat t=Clamp(_progress,0,1);
+    [UIView animateWithDuration:.2 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction
+        animations:^{ self->_bead.alpha=[self restAlpha]*(1-FMSmooth(t/.3)); } completion:nil];
+}
+@end
+
+@interface FMDockSettingsController ()
+@property(nonatomic,strong) FMDockPreviewView *preview;
+@property(nonatomic,strong) UISegmentedControl *stateControl;
+@property(nonatomic,strong) UIScrollView *scroll;
+@property(nonatomic,strong) UIStackView *stack;
+@property(nonatomic,strong) NSLayoutConstraint *previewHeight;
+@property(nonatomic,strong) NSMutableArray<NSDictionary *> *bodyRows;
+@property(nonatomic,strong) NSMutableArray<UIImageView *> *chevrons;
+@property(nonatomic,strong) NSMutableArray<UIControl *> *headers;
+@property(nonatomic,strong) UILabel *handleNote;
+@property(nonatomic,assign) NSInteger openGroup;
+@end
+
+@implementation FMDockSettingsController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=@"侧边栏";
+    self.navigationItem.largeTitleDisplayMode=UINavigationItemLargeTitleDisplayModeNever;
+    self.view.backgroundColor=FMThemeColor(FMColorBackground);
+    self.bodyRows=[NSMutableArray array];
+    self.chevrons=[NSMutableArray array];
+    self.headers=[NSMutableArray array];
+    // The handle group is open to begin with, with the preview docked.
+    self.openGroup=FMDockGroupHandle;
+    FMDockPreviewView *preview=[FMDockPreviewView new];
+    preview.translatesAutoresizingMaskIntoConstraints=NO;
+    self.previewHeight=[preview.heightAnchor constraintEqualToConstant:190];
+    preview.heightConstraint=self.previewHeight;
+    __weak typeof(self) weakSelf=self;
+    preview.onToggle=^(BOOL open) {
+        weakSelf.stateControl.selectedSegmentIndex=open?1:0;
+    };
+    UISegmentedControl *state=[[UISegmentedControl alloc] initWithItems:@[@"收起",@"展开"]];
+    state.translatesAutoresizingMaskIntoConstraints=NO;
+    state.selectedSegmentIndex=0;
+    state.accessibilityLabel=@"预览状态";
+    [state addTarget:self action:@selector(previewStateChanged:) forControlEvents:UIControlEventValueChanged];
+    UIScrollView *scroll=[UIScrollView new];
+    scroll.translatesAutoresizingMaskIntoConstraints=NO;
+    scroll.alwaysBounceVertical=YES;
+    scroll.backgroundColor=UIColor.clearColor;
+    [self.view addSubview:scroll];
+    [self.view addSubview:preview];
+    [self.view addSubview:state];
+    UILayoutGuide *safe=self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [preview.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
+        [preview.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+        [preview.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+        self.previewHeight,
+        [state.topAnchor constraintEqualToAnchor:preview.bottomAnchor constant:10],
+        [state.leadingAnchor constraintEqualToAnchor:preview.leadingAnchor],
+        [state.trailingAnchor constraintEqualToAnchor:preview.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:state.bottomAnchor constant:6],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
+    ]];
+    self.preview=preview;
+    self.stateControl=state;
+    self.scroll=scroll;
+    [self rebuild];
+}
+// The card may take about half of the room, so the options stay in reach on a small phone.
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat cap=Clamp(self.view.safeAreaLayoutGuide.layoutFrame.size.height*.55,190,420);
+    if(fabs(self.preview.maxHeight-cap)>.5) self.preview.maxHeight=cap;
+}
+// The page shows the bead itself, so the one floating over the settings steps aside.
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    FMManager *manager=[FMManager shared];
+    manager.dimensionsPreview=self.preview;
+    manager.orbPreviewHost.hidden=YES;
+}
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    FMManager *manager=[FMManager shared];
+    if(manager.dimensionsPreview!=self.preview) return;
+    manager.dimensionsPreview=nil;
+    manager.orbPreviewHost.hidden=NO;
+    [manager refreshOrbPreview];
+}
+- (void)rebuild {
+    if(!self.isViewLoaded) return;
+    self.view.backgroundColor=FMThemeColor(FMColorBackground);
+    self.stateControl.selectedSegmentTintColor=[FMAccent() colorWithAlphaComponent:.25];
+    UIScrollView *scroll=self.scroll;
+    CGFloat offset=scroll.contentOffset.y;
+    [self.stack removeFromSuperview];
+    [self.bodyRows removeAllObjects];
+    [self.chevrons removeAllObjects];
+    [self.headers removeAllObjects];
+    UIStackView *stack=[UIStackView new];
+    stack.axis=UILayoutConstraintAxisVertical;
+    stack.spacing=16;
+    stack.translatesAutoresizingMaskIntoConstraints=NO;
+    [scroll addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:16],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-16],
+        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:8],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-32],
+        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-32]
+    ]];
+    self.stack=stack;
+    for(NSInteger group=0;group<FMDockGroupCount;group++) [self addGroup:(FMDockGroup)group];
+    [self addResetCard];
+    [self applyVisibilityAnimated:NO];
+    [self.preview reload];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(self.scroll!=scroll || !scroll.window) return;
+        [scroll layoutIfNeeded];
+        CGFloat maxY=MAX(0,scroll.contentSize.height-scroll.bounds.size.height);
+        [scroll setContentOffset:CGPointMake(0,MIN(offset,maxY)) animated:NO];
+    });
+}
+
+// ---- rows
+- (UIControl *)headerForGroup:(FMDockGroup)group {
+    NSArray<NSString *> *titles=@[@"位置",@"把手",@"透明度",@"托盘"];
+    NSArray<NSString *> *symbols=@[@"arrow.left.and.right",@"capsule.portrait",@"circle.lefthalf.filled",@"square.grid.2x2"];
+    UIControl *row=[UIControl new];
+    row.tag=group;
+    UIImageSymbolConfiguration *regular=[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightRegular];
+    UIImageSymbolConfiguration *small=[UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
+    UIImageView *icon=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbols[group] withConfiguration:regular]];
+    icon.tintColor=FMThemeColor(FMColorText);
+    icon.contentMode=UIViewContentModeScaleAspectFit;
+    UILabel *title=FMDockLabel(titles[group],17,FMThemeColor(FMColorText));
+    UIImageView *chevron=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right" withConfiguration:small]];
+    chevron.tintColor=FMThemeColor(FMColorSecondary);
+    for(UIView *view in @[icon,title,chevron]) {
+        view.translatesAutoresizingMaskIntoConstraints=NO;
+        view.userInteractionEnabled=NO;
+        [row addSubview:view];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:52],
+        [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:20],
+        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:26],
+        [title.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:10],
+        [title.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:chevron.leadingAnchor constant:-8],
+        [chevron.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-20],
+        [chevron.centerYAnchor constraintEqualToAnchor:row.centerYAnchor]
+    ]];
+    row.accessibilityLabel=titles[group];
+    row.accessibilityTraits=UIAccessibilityTraitButton;
+    [row addTarget:self action:@selector(headerTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [self.chevrons addObject:chevron];
+    [self.headers addObject:row];
+    return row;
+}
+- (UIView *)sliderRow:(NSDictionary *)option {
+    UILabel *title=FMDockLabel(option[@"title"],17,FMThemeColor(FMColorText));
+    UILabel *value=FMDockLabel(nil,17,FMThemeColor(FMColorSecondary));
+    value.font=[UIFont monospacedDigitSystemFontOfSize:17 weight:UIFontWeightRegular];
+    value.textAlignment=NSTextAlignmentRight;
+    [value setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [value setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    UIStackView *line=[[UIStackView alloc] initWithArrangedSubviews:@[title,value]];
+    line.axis=UILayoutConstraintAxisHorizontal;
+    line.spacing=12;
+    FMDockSlider *slider=[FMDockSlider new];
+    slider.option=option;
+    slider.valueLabel=value;
+    slider.minimumValue=[option[@"min"] floatValue];
+    slider.maximumValue=[option[@"max"] floatValue];
+    CGFloat current=FMDockStoredValue(option);
+    slider.value=current;
+    slider.tintColor=FMAccent();
+    value.text=FMDockValueText(option,current);
+    slider.accessibilityLabel=option[@"title"];
+    slider.accessibilityValue=value.text;
+    [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    UIStackView *column=[[UIStackView alloc] initWithArrangedSubviews:@[line,slider]];
+    column.axis=UILayoutConstraintAxisVertical;
+    column.spacing=6;
+    return FMDockRow(column,11,YES,0);
+}
+- (UIView *)switchRow:(NSString *)title key:(NSString *)key defaultValue:(BOOL)defaultValue {
+    UILabel *label=FMDockLabel(title,17,FMThemeColor(FMColorText));
+    FMDockSwitch *toggle=[FMDockSwitch new];
+    toggle.key=key;
+    toggle.on=BoolPref(key,defaultValue);
+    toggle.onTintColor=FMSwitchGreen();
+    toggle.accessibilityLabel=title;
+    [toggle setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [toggle addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
+    UIStackView *line=[[UIStackView alloc] initWithArrangedSubviews:@[label,toggle]];
+    line.axis=UILayoutConstraintAxisHorizontal;
+    line.alignment=UIStackViewAlignmentCenter;
+    line.spacing=12;
+    return FMDockRow(line,10,YES,52);
+}
+// A segmented choice under an optional title; the stored number is the chosen index.
+- (UIView *)segmentRow:(NSString *)title items:(NSArray<NSString *> *)items key:(NSString *)key selected:(NSInteger)selected {
+    FMDockSegments *control=[[FMDockSegments alloc] initWithItems:items];
+    control.key=key;
+    control.selectedSegmentIndex=selected;
+    control.selectedSegmentTintColor=[FMAccent() colorWithAlphaComponent:.25];
+    control.accessibilityLabel=title?:key;
+    [control addTarget:self action:@selector(segmentChanged:) forControlEvents:UIControlEventValueChanged];
+    if(!title) return FMDockRow(control,10,YES,52);
+    UIStackView *column=[[UIStackView alloc] initWithArrangedSubviews:@[FMDockLabel(title,17,FMThemeColor(FMColorText)),control]];
+    column.axis=UILayoutConstraintAxisVertical;
+    column.spacing=8;
+    return FMDockRow(column,10,YES,52);
+}
+- (void)add:(UIView *)row to:(UIStackView *)rows group:(FMDockGroup)group when:(FMDockWhen)when {
+    [rows addArrangedSubview:row];
+    [self.bodyRows addObject:@{@"view":row,@"group":@(group),@"when":@(when)}];
+}
+- (void)addNote:(NSString *)text to:(UIStackView *)rows group:(FMDockGroup)group {
+    [self add:FMDockRow(FMDockLabel(text,13,FMThemeColor(FMColorSecondary)),10,YES,0) to:rows group:group when:FMDockWhenAlways];
+}
+- (void)addSlider:(NSDictionary *)option to:(UIStackView *)rows group:(FMDockGroup)group when:(FMDockWhen)when {
+    [self add:[self sliderRow:option] to:rows group:group when:when];
+}
+
+// ---- groups
+- (void)addGroup:(FMDockGroup)group {
+    UIStackView *rows=[UIStackView new];
+    rows.axis=UILayoutConstraintAxisVertical;
+    [rows addArrangedSubview:[self headerForGroup:group]];
+    switch(group) {
+        case FMDockGroupPosition: [self addPositionRows:rows]; break;
+        case FMDockGroupHandle: [self addHandleRows:rows]; break;
+        case FMDockGroupOpacity: [self addOpacityRows:rows]; break;
+        default: [self addTrayRows:rows]; break;
+    }
+    [self.stack addArrangedSubview:FMDockCard(rows)];
+}
+// The bead has no place to set here: it is dragged on the screen itself.
+- (void)addPositionRows:(UIStackView *)rows {
+    FMDockGroup group=FMDockGroupPosition;
+    [self addSlider:FMDockOption(@"orbSnapDuration",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbSnapDamping",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addNote:@"微珠的位置不在这里调：在屏幕上按住它，直接拖到想放的地方，松手会吸到最近的一边。上面两项管松手吸边时的快慢和回弹。" to:rows group:group];
+}
+- (void)addHandleRows:(UIStackView *)rows {
+    FMDockGroup group=FMDockGroupHandle;
+    [self add:[self segmentRow:nil items:@[@"胶囊",@"水滴"] key:@"orbHandleStyle" selected:FMOrbHandleIsCapsule()?0:1]
+           to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbHandleReach",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbHandleLength",nil) to:rows group:group when:FMDockWhenAlways];
+    // Only the capsule has a corner setting.
+    [self addSlider:FMDockOption(@"orbCapsuleCorner",nil) to:rows group:group when:FMDockWhenCapsule];
+    [self addSlider:FMDockOption(@"orbSoftness",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbScale",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbGlowLength",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbGlowBrightness",nil) to:rows group:group when:FMDockWhenAlways];
+    UILabel *note=FMDockLabel(nil,13,FMThemeColor(FMColorSecondary));
+    self.handleNote=note;
+    [self applyHandleNote];
+    [self add:FMDockRow(note,10,YES,0) to:rows group:group when:FMDockWhenAlways];
+}
+- (void)applyHandleNote {
+    self.handleNote.text=FMOrbHandleIsCapsule()?
+        @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
+        @"柔和度越大，微珠和屏幕边缘连得越平缓。";
+}
+- (void)addOpacityRows:(UIStackView *)rows {
+    FMDockGroup group=FMDockGroupOpacity;
+    [self addSlider:FMDockOption(@"idleAlpha",nil) to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"停手后自动淡化" key:@"idleFade" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"fadeDelay",nil) to:rows group:group when:FMDockWhenFade];
+    [self addSlider:FMDockOption(@"fadedOpacity",nil) to:rows group:group when:FMDockWhenFade];
+    [self addNote:@"停手一阵后，收起的微珠会慢慢淡到很淡，不挡视线；手一碰就亮回来。" to:rows group:group];
+}
+- (void)addTrayRows:(UIStackView *)rows {
+    FMDockGroup group=FMDockGroupTray;
+    [self add:[self switchRow:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"panelScale",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"menuExtension",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"menuCornerRadius",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"menuCurveSoftness",nil) to:rows group:group when:FMDockWhenAlways];
+    // The two layouts each keep their own icon size; only the one in use shows.
+    [self addSlider:FMDockOption(@"menuCompactIconSize",@"图标大小") to:rows group:group when:FMDockWhenCompact];
+    [self addSlider:FMDockOption(@"menuListIconSize",@"图标大小") to:rows group:group when:FMDockWhenList];
+    [self add:[self segmentRow:@"弹出动画" items:@[@"逐个",@"一起",@"关"] key:@"popAnimation" selected:FMPopMode()]
+           to:rows group:group when:FMDockWhenAlways];
+    if(@available(iOS 26.0,*)) {
+        [self add:[self segmentRow:@"材质" items:@[@"标准玻璃",@"透明玻璃"] key:@"clearGlass" selected:BoolPref(@"clearGlass",NO)?1:0]
+               to:rows group:group when:FMDockWhenAlways];
+    }
+    [self addSlider:FMDockOption(@"glassTint",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addNote:@"展开后，长按某个 App 再上下滑，一块玻璃镜片会跟着手指走，松手切换，拖出菜单外松手则取消。App 很多时，把手指推到列表上下边缘，列表会自己滚动。" to:rows group:group];
+}
+- (void)addResetCard {
+    UIControl *button=[UIControl new];
+    UILabel *label=FMDockLabel(@"恢复默认",17,UIColor.systemRedColor);
+    label.translatesAutoresizingMaskIntoConstraints=NO;
+    label.userInteractionEnabled=NO;
+    [button addSubview:label];
+    [NSLayoutConstraint activateConstraints:@[
+        [button.heightAnchor constraintEqualToConstant:52],
+        [label.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:20],
+        [label.trailingAnchor constraintLessThanOrEqualToAnchor:button.trailingAnchor constant:-20],
+        [label.centerYAnchor constraintEqualToAnchor:button.centerYAnchor]
+    ]];
+    button.accessibilityLabel=@"恢复默认";
+    button.accessibilityTraits=UIAccessibilityTraitButton;
+    [button addTarget:self action:@selector(confirmReset) forControlEvents:UIControlEventTouchUpInside];
+    UIStackView *rows=[UIStackView new];
+    rows.axis=UILayoutConstraintAxisVertical;
+    [rows addArrangedSubview:button];
+    [self.stack addArrangedSubview:FMDockCard(rows)];
+}
+
+// ---- what shows
+- (BOOL)whenHolds:(FMDockWhen)when {
+    switch(when) {
+        case FMDockWhenCapsule: return FMOrbHandleIsCapsule();
+        case FMDockWhenFade: return BoolPref(@"idleFade",YES);
+        case FMDockWhenCompact: return BoolPref(@"compactMode",NO);
+        case FMDockWhenList: return !BoolPref(@"compactMode",NO);
+        default: return YES;
+    }
+}
+// Shows the rows of the open group that apply, hides the rest, and turns the chevrons.
+- (void)applyVisibilityAnimated:(BOOL)animated {
+    void (^apply)(void)=^{
+        for(NSDictionary *entry in self.bodyRows) {
+            UIView *row=entry[@"view"];
+            BOOL visible=[entry[@"group"] integerValue]==self.openGroup && [self whenHolds:(FMDockWhen)[entry[@"when"] integerValue]];
+            row.hidden=!visible;
+            row.alpha=visible?1:0;
+        }
+        for(NSUInteger index=0;index<self.chevrons.count;index++) {
+            BOOL open=(NSInteger)index==self.openGroup;
+            self.chevrons[index].transform=open?CGAffineTransformMakeRotation(M_PI_2):CGAffineTransformIdentity;
+            self.headers[index].accessibilityValue=open?@"已展开":@"已收起";
+        }
+        if(animated) [self.view layoutIfNeeded];
+    };
+    if(!animated) {
+        apply();
+        return;
+    }
+    [UIView animateWithDuration:.32 delay:0 usingSpringWithDamping:.9 initialSpringVelocity:0
+        options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionAllowUserInteraction
+        animations:apply completion:nil];
+}
+
+// ---- actions
+// Opening a group shows the state it is about: the tray group the open drawer, the rest the docked bead.
+- (void)headerTapped:(UIControl *)header {
+    NSInteger group=header.tag;
+    BOOL opening=self.openGroup!=group;
+    self.openGroup=opening?group:-1;
+    [self applyVisibilityAnimated:YES];
+    if(!opening) return;
+    BOOL wantsOpen=group==FMDockGroupTray;
+    [self.preview setOpen:wantsOpen animated:YES];
+    self.stateControl.selectedSegmentIndex=wantsOpen?1:0;
+}
+- (void)previewStateChanged:(UISegmentedControl *)control {
+    [self.preview setOpen:control.selectedSegmentIndex==1 animated:YES];
+}
+- (void)sliderChanged:(FMDockSlider *)slider {
+    NSDictionary *option=slider.option;
+    CGFloat step=[option[@"step"] doubleValue],value=slider.value;
+    if(step>0) value=round(value/step)*step;
+    value=Clamp(value,[option[@"min"] doubleValue],[option[@"max"] doubleValue]);
+    slider.value=value;
+    slider.valueLabel.text=FMDockValueText(option,value);
+    slider.accessibilityValue=slider.valueLabel.text;
+    SetPref(option[@"key"],@(value));
+    [self.preview reload];
+}
+- (void)switchChanged:(FMDockSwitch *)toggle {
+    SetPref(toggle.key,@(toggle.isOn));
+    // The fade settings and the icon size follow these switches.
+    [self applyVisibilityAnimated:YES];
+    [self.preview reload];
+}
+- (void)segmentChanged:(FMDockSegments *)control {
+    SetPref(control.key,@(control.selectedSegmentIndex));
+    if([control.key isEqualToString:@"orbHandleStyle"]) {
+        [self applyHandleNote];
+        [self applyVisibilityAnimated:YES];
+    }
+    [self.preview reload];
+    // Show what the pop-in setting does.
+    if([control.key isEqualToString:@"popAnimation"]) {
+        [self.preview replay];
+        self.stateControl.selectedSegmentIndex=1;
+    }
+}
+- (void)confirmReset {
+    if(self.presentedViewController) return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"恢复侧边栏的默认设置？"
+        message:@"微珠、展开菜单、透明度和弹出动画都会回到默认，主题配色和其他设置不受影响。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf=self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"恢复默认" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [[FMManager shared] resetDockSettings];
+        [weakSelf rebuild];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 @end
 

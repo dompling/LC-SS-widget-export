@@ -36,7 +36,7 @@ static BOOL PreferenceValue(NSString *key,id value) {
     } else if([@[@"accentLight",@"accentDark"] containsObject:name]) {
         return [value isKindOfClass:NSString.class];
     } else if([key hasPrefix:@"LCOrbit.module."] ||
-              [@[@"fullscreenMultitask",@"systemMultitaskMenu",@"autoSyncSharedTweaks",@"idleAlpha",@"menuExtension",@"menuCornerRadius",@"menuCurveSoftness",@"menuCompactIconSize",@"menuListIconSize",@"orbHandleStyle",@"orbHandleReach",@"orbHandleLength",@"orbCapsuleCorner",@"orbSoftness",@"orbGlowLength",@"orbGlowBrightness",@"orbSnapDuration",@"orbSnapDamping",@"orbScale",@"orbWidth",@"orbY",@"onLeft",@"roundOrb",@"autoFade",@"haptic",@"confirm",@"showRestart",@"compactRestart",@"compactMode",@"panelScale",@"glassTint",@"clearGlass",@"appearanceMode",@"preferDarkIcons"] containsObject:name] ||
+              [@[@"fullscreenMultitask",@"systemMultitaskMenu",@"autoSyncSharedTweaks",@"idleAlpha",@"menuExtension",@"menuCornerRadius",@"menuCurveSoftness",@"menuCompactIconSize",@"menuListIconSize",@"orbHandleStyle",@"orbHandleReach",@"orbHandleLength",@"orbCapsuleCorner",@"orbSoftness",@"orbGlowLength",@"orbGlowBrightness",@"orbSnapDuration",@"orbSnapDamping",@"fadeDelay",@"fadedOpacity",@"popAnimation",@"orbScale",@"orbWidth",@"orbY",@"onLeft",@"roundOrb",@"autoFade",@"haptic",@"confirm",@"showRestart",@"compactRestart",@"compactMode",@"panelScale",@"glassTint",@"clearGlass",@"appearanceMode",@"preferDarkIcons"] containsObject:name] ||
               [name hasPrefix:@"appAlpha."] || [name hasPrefix:@"override."] ||
               [name hasPrefix:@"doubleTap."] || [name hasPrefix:@"stealth."] || [name hasPrefix:@"appEnabled."]) {
         return [value isKindOfClass:NSNumber.class];
