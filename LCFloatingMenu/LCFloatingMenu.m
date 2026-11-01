@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.17"
+#define FM_MENU_VERSION @"1.0.18"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -377,7 +377,7 @@ static void FMRefreshSettingsColors(UIView *view,NSArray *before,NSArray *after)
         }
     }
     if([view isKindOfClass:UISlider.class]) {view.tintColor=FMAccent();return;}
-    if([view isKindOfClass:UISwitch.class]) {((UISwitch *)view).onTintColor=FMAccent();return;}
+    if([view isKindOfClass:UISwitch.class]) {((UISwitch *)view).onTintColor=FMSwitchGreen();return;}
     for(UIView *child in view.subviews) FMRefreshSettingsColors(child,before,after);
 }
 static CGFloat FMOrbScale(void) {
@@ -1352,8 +1352,14 @@ static void FMApplyNavigationTheme(UINavigationController *nav) {
     UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
     [appearance configureWithDefaultBackground];
     appearance.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:.92];
-    appearance.titleTextAttributes=@{NSForegroundColorAttributeName:FMThemeColor(FMColorText)};
-    appearance.largeTitleTextAttributes=appearance.titleTextAttributes;
+    appearance.titleTextAttributes=@{
+        NSForegroundColorAttributeName:FMThemeColor(FMColorText),
+        NSFontAttributeName:[UIFont systemFontOfSize:17 weight:UIFontWeightBold]
+    };
+    appearance.largeTitleTextAttributes=@{
+        NSForegroundColorAttributeName:FMThemeColor(FMColorText),
+        NSFontAttributeName:[UIFont systemFontOfSize:34 weight:UIFontWeightBold]
+    };
     nav.navigationBar.standardAppearance=appearance;
     nav.navigationBar.scrollEdgeAppearance=appearance;
     nav.navigationBar.compactAppearance=appearance;
@@ -1513,6 +1519,10 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
     row.accessibilityLabel=subtitle.length?[NSString stringWithFormat:@"%@，%@",name,subtitle]:name;
     row.accessibilityTraits=action?UIAccessibilityTraitButton:UIAccessibilityTraitStaticText;
     return row;
+}
+
+static UIControl *FMSettingsNavigationRowCustom(NSString *name,NSString *subtitle,NSString *symbol,UIColor *badgeColor,BOOL subtle,id target,SEL action) {
+    return FMSettingsNavigationRow(name,subtitle,symbol,badgeColor,target,action);
 }
 
 @interface FMSettingsRootController : UIViewController
@@ -3978,7 +3988,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self appearanceModeControl:s];
         [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
-        [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",nil,nil,self,@selector(openDock)) height:60 to:s];
+        [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠形态、展开栏布局、透明度与回弹动画",nil,nil,self,@selector(openDock)) height:60 to:s];
         [self spacer:s size:16];
         [self diyPage:s];
     } else if([category isEqualToString:@"behavior"]) {
@@ -4188,7 +4198,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)settingsPage:(UIStackView*)s {
     [self section:@"显示布局" sub:nil in:s];
-    [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",nil,nil,self,@selector(openDock)) height:60 to:s];
+    [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠形态、展开栏布局、透明度与回弹动画",nil,nil,self,@selector(openDock)) height:60 to:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
     [self settingSwitch:s title:@"最近打开的 App 置顶"
@@ -4759,7 +4769,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     badge.translatesAutoresizingMaskIntoConstraints=NO;
     badge.layer.cornerRadius=8;
     badge.layer.masksToBounds=YES;
-    badge.backgroundColor=[UIColor colorWithRed:255/255.0 green:149/255.0 blue:0/255.0 alpha:1.0];
+    badge.backgroundColor=[UIColor colorWithRed:255/255.0 green:59/255.0 blue:48/255.0 alpha:1.0];
     [button addSubview:badge];
     
     UIImageView *symbol=[[UIImageView alloc] initWithImage:
@@ -4769,7 +4779,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     symbol.contentMode=UIViewContentModeScaleAspectFit;
     [badge addSubview:symbol];
     
-    UILabel *label=[self label:title size:15 weight:UIFontWeightMedium];
+    UILabel *label=[self label:title size:15.5 weight:UIFontWeightSemibold];
+    label.textColor=UIColor.systemRedColor;
     label.translatesAutoresizingMaskIntoConstraints=NO;
     [button addSubview:label];
     
@@ -4794,6 +4805,23 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self addRow:row height:60 to:stack];
 }
 - (void)resetStyle {
+    UIViewController *top=self.settingsNavigation.topViewController?:self.settingsWindow.rootViewController;
+    if(top.presentedViewController) return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"恢复所有默认设置？"
+        message:@"悬浮微珠、展开栏布局、透明度、主题配色及基础交互等所有设置都会恢复为初始默认值。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf=self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"恢复默认" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [weakSelf performResetAllSettings];
+    }]];
+    if(top) {
+        [top presentViewController:alert animated:YES completion:nil];
+    } else {
+        [self performResetAllSettings];
+    }
+}
+- (void)performResetAllSettings {
     [self resetDockSettings];
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"recentAppsFirst",@NO);
@@ -5041,7 +5069,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 @implementation FMSettingsRootController
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"悬浮菜单";
+    self.title=@"设置";
+    self.navigationItem.largeTitleDisplayMode=UINavigationItemLargeTitleDisplayModeAlways;
     self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=[UIScrollView new];
     scroll.translatesAutoresizingMaskIntoConstraints=NO;
@@ -5070,6 +5099,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (UIControl *)navigationRow:(NSString *)name subtitle:(NSString *)subtitle
                      symbol:(NSString *)symbol badgeColor:(UIColor *)badgeColor action:(SEL)action {
     UIControl *row=FMSettingsNavigationRow(name,subtitle,symbol,badgeColor,self,action);
+    if(action==@selector(checkForUpdates)) self.updateStatusLabel=(UILabel *)[row viewWithTag:9235];
+    return row;
+}
+- (UIControl *)navigationRowSubtle:(NSString *)name subtitle:(NSString *)subtitle
+                           symbol:(NSString *)symbol badgeColor:(UIColor *)badgeColor action:(SEL)action {
+    UIControl *row=FMSettingsNavigationRowCustom(name,subtitle,symbol,badgeColor,YES,self,action);
     if(action==@selector(checkForUpdates)) self.updateStatusLabel=(UILabel *)[row viewWithTag:9235];
     return row;
 }
@@ -5620,13 +5655,16 @@ static NSString *FMDockValueText(NSDictionary *option,CGFloat value) {
         return [option[@"step"] doubleValue]<1?[NSString stringWithFormat:@"%.2f 秒",value]:[NSString stringWithFormat:@"%ld 秒",lround(value)];
     return [NSString stringWithFormat:@"%ld pt",lround(value)];
 }
-static UILabel *FMDockLabel(NSString *text,CGFloat size,UIColor *color) {
+static UILabel *FMDockLabelWithWeight(NSString *text,CGFloat size,UIFontWeight weight,UIColor *color) {
     UILabel *label=[UILabel new];
     label.text=text;
-    label.font=[UIFont systemFontOfSize:size weight:UIFontWeightRegular];
+    label.font=[UIFont systemFontOfSize:size weight:weight];
     label.textColor=color;
     label.numberOfLines=0;
     return label;
+}
+static UILabel *FMDockLabel(NSString *text,CGFloat size,UIColor *color) {
+    return FMDockLabelWithWeight(text,size,UIFontWeightRegular,color);
 }
 static CGFloat FMDockCardRadius(void) {
     if(@available(iOS 26.0,*)) return 26;
@@ -6181,8 +6219,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     self.groupStacks=[NSMutableArray array];
     self.chevrons=[NSMutableArray array];
     self.headers=[NSMutableArray array];
-    // The handle group is open to begin with, with the preview docked.
-    self.openGroup=FMDockGroupHandle;
+    // Default closed to avoid visual clutter until the user chooses a group.
+    self.openGroup=-1;
     FMDockPreviewView *preview=[FMDockPreviewView new];
     preview.translatesAutoresizingMaskIntoConstraints=NO;
     self.previewHeight=[preview.heightAnchor constraintEqualToConstant:190];
@@ -6306,7 +6344,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 
 // ---- rows
 - (UIControl *)headerForGroup:(FMDockGroup)group {
-    NSArray<NSString *> *titles=@[@"位置",@"把手",@"透明度",@"托盘"];
+    NSArray<NSString *> *titles=@[@"回弹",@"微珠",@"透明度",@"展开栏"];
     NSArray<NSString *> *symbols=@[@"arrow.left.and.right",@"capsule.portrait",@"circle.lefthalf.filled",@"square.grid.2x2"];
     UIControl *row=[UIControl new];
     row.tag=group;
@@ -6315,7 +6353,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     UIImageView *icon=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbols[group] withConfiguration:regular]];
     icon.tintColor=FMThemeColor(FMColorText);
     icon.contentMode=UIViewContentModeScaleAspectFit;
-    UILabel *title=FMDockLabel(titles[group],17,FMThemeColor(FMColorText));
+    UILabel *title=FMDockLabelWithWeight(titles[group],16,UIFontWeightSemibold,FMThemeColor(FMColorText));
     UIImageView *chevron=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right" withConfiguration:small]];
     chevron.tintColor=FMThemeColor(FMColorSecondary);
     for(UIView *view in @[icon,title,chevron]) {
@@ -6342,9 +6380,9 @@ static UIView *FMDockCard(UIStackView *rows) {
     return row;
 }
 - (UIView *)sliderRow:(NSDictionary *)option {
-    UILabel *title=FMDockLabel(option[@"title"],17,FMThemeColor(FMColorText));
-    UILabel *value=FMDockLabel(nil,17,FMThemeColor(FMColorSecondary));
-    value.font=[UIFont monospacedDigitSystemFontOfSize:17 weight:UIFontWeightRegular];
+    UILabel *title=FMDockLabelWithWeight(option[@"title"],14.5,UIFontWeightMedium,FMThemeColor(FMColorText));
+    UILabel *value=FMDockLabelWithWeight(nil,13,UIFontWeightMedium,FMThemeColor(FMColorSecondary));
+    value.font=[UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
     value.textAlignment=NSTextAlignmentRight;
     [value setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     [value setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
@@ -6371,7 +6409,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     return FMDockRow(column,11,YES,0);
 }
 - (UIView *)switchRow:(NSString *)title key:(NSString *)key defaultValue:(BOOL)defaultValue {
-    UILabel *label=FMDockLabel(title,17,FMThemeColor(FMColorText));
+    UILabel *label=FMDockLabelWithWeight(title,14.5,UIFontWeightMedium,FMThemeColor(FMColorText));
     FMDockSwitch *toggle=[FMDockSwitch new];
     toggle.key=key;
     toggle.on=BoolPref(key,defaultValue);
@@ -6393,7 +6431,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     control.accessibilityLabel=title?:key;
     [control addTarget:self action:@selector(segmentChanged:) forControlEvents:UIControlEventValueChanged];
     if(!title) return FMDockRow(control,10,YES,52);
-    UIStackView *column=[[UIStackView alloc] initWithArrangedSubviews:@[FMDockLabel(title,17,FMThemeColor(FMColorText)),control]];
+    UIStackView *column=[[UIStackView alloc] initWithArrangedSubviews:@[FMDockLabelWithWeight(title,14.5,UIFontWeightMedium,FMThemeColor(FMColorText)),control]];
     column.axis=UILayoutConstraintAxisVertical;
     column.spacing=8;
     return FMDockRow(column,10,YES,52);
@@ -6404,7 +6442,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self.bodyRows addObject:@{@"view":row,@"stack":rows,@"group":@(group),@"when":@(when)}];
 }
 - (void)addNote:(NSString *)text to:(UIStackView *)rows group:(FMDockGroup)group {
-    [self add:FMDockRow(FMDockLabel(text,13,FMThemeColor(FMColorSecondary)),10,YES,0) to:rows group:group when:FMDockWhenAlways];
+    [self add:FMDockRow(FMDockLabelWithWeight(text,12,UIFontWeightRegular,FMThemeColor(FMColorSecondary)),10,YES,0) to:rows group:group when:FMDockWhenAlways];
 }
 - (void)addSlider:(NSDictionary *)option to:(UIStackView *)rows group:(FMDockGroup)group when:(FMDockWhen)when {
     [self add:[self sliderRow:option] to:rows group:group when:when];
@@ -6445,7 +6483,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addSlider:FMDockOption(@"orbGlowLength",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbGlowBrightness",nil) to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"发光光条" key:@"glowLine" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
-    UILabel *note=FMDockLabel(nil,13,FMThemeColor(FMColorSecondary));
+    UILabel *note=FMDockLabelWithWeight(nil,12,UIFontWeightRegular,FMThemeColor(FMColorSecondary));
     self.handleNote=note;
     [self applyHandleNote];
     [self add:FMDockRow(note,10,YES,0) to:rows group:group when:FMDockWhenAlways];
@@ -6490,13 +6528,25 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)addResetCard {
     UIControl *button=[UIControl new];
-    UILabel *label=FMDockLabel(@"恢复默认",17,UIColor.systemRedColor);
+    UIImageSymbolConfiguration *regular=[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightRegular];
+    UIImageView *icon=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"arrow.counterclockwise" withConfiguration:regular]];
+    icon.tintColor=UIColor.systemRedColor;
+    icon.contentMode=UIViewContentModeScaleAspectFit;
+    icon.translatesAutoresizingMaskIntoConstraints=NO;
+    icon.userInteractionEnabled=NO;
+    [button addSubview:icon];
+
+    UILabel *label=FMDockLabelWithWeight(@"恢复默认",16,UIFontWeightSemibold,UIColor.systemRedColor);
     label.translatesAutoresizingMaskIntoConstraints=NO;
     label.userInteractionEnabled=NO;
     [button addSubview:label];
+
     [NSLayoutConstraint activateConstraints:@[
         [button.heightAnchor constraintEqualToConstant:52],
-        [label.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:20],
+        [icon.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:20],
+        [icon.centerYAnchor constraintEqualToAnchor:button.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:26],
+        [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:10],
         [label.trailingAnchor constraintLessThanOrEqualToAnchor:button.trailingAnchor constant:-20],
         [label.centerYAnchor constraintEqualToAnchor:button.centerYAnchor]
     ]];
