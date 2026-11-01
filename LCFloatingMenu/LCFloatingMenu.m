@@ -1926,12 +1926,23 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self cancelOrbFade];
     self.orbFaded=NO;
     if(self.orb && !self.isOpen) self.orb.alpha=1;
-    line.backgroundColor=[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1];
+    UIColor *red=[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1];
+    line.backgroundColor=red;
     line.layer.shadowColor=[UIColor colorWithRed:1 green:.09 blue:.16 alpha:1].CGColor;
-    line.layer.shadowOpacity=.85;
-    line.layer.shadowRadius=5;
+    line.layer.shadowOpacity=.92;
+    line.layer.shadowRadius=MAX(6,CGRectGetWidth(line.bounds)*1.6);
     line.layer.shadowOffset=CGSizeZero;
     line.alpha=1;
+    // Keep the inner gradient on the same hue, otherwise the blue lit overlay
+    // would tint the red bar purple.
+    for(CALayer *layer in line.layer.sublayers) {
+        if([layer.name isEqualToString:@"fm.orb.line.lit"] && [layer isKindOfClass:CAGradientLayer.class]) {
+            CAGradientLayer *lit=(CAGradientLayer *)layer;
+            lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.55].CGColor,
+                         (id)[red colorWithAlphaComponent:.25].CGColor,
+                         (id)[UIColor.blackColor colorWithAlphaComponent:.18].CGColor];
+        }
+    }
     if(!UIAccessibilityIsReduceMotionEnabled()) {
         CABasicAnimation *pulse=[CABasicAnimation animationWithKeyPath:@"opacity"];
         pulse.fromValue=@.38;
@@ -4075,7 +4086,17 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self customThemeColorRow:s title:@"夜间主题色" dark:YES];
 }
 - (void)openDock {
-    [self.settingsNavigation pushViewController:[FMDockSettingsController new] animated:YES];
+    FMDockSettingsController *controller=[FMDockSettingsController new];
+    __weak typeof(self) weakSelf=self;
+    controller.dockSettingsChanged=^{
+        // The settings page keeps a window of its own, so the bead behind it is
+        // redrawn on the next close. Rebuild it now anyway so reopening shows the
+        // new shape, size and colours instead of the ones from before the edit.
+        [weakSelf drawOrb];
+        [weakSelf applyOrbUpdateIndicator];
+        [weakSelf updateSettingsContent];
+    };
+    [self.settingsNavigation pushViewController:controller animated:YES];
 }
 // Everything the sidebar page edits, back to its default.
 - (void)resetDockSettings {
@@ -5644,9 +5665,11 @@ static UIView *FMDockCard(UIStackView *rows) {
         for(NSUInteger index=0;index<3;index++) {
             UIView *row=[[UIView alloc] initWithFrame:CGRectMake(3,top+index*66,width,63)];
             if(BoolPref(@"iconFrame",YES)) {
-                UIView *backing=[[UIView alloc] initWithFrame:CGRectMake((width-54)*.5,(63-54)*.5,54,54)];
+                CGFloat backingSize=round(size+8);
+                UIView *backing=[[UIView alloc] initWithFrame:CGRectMake((width-backingSize)*.5,(63-backingSize)*.5,backingSize,backingSize)];
                 backing.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74];
-                backing.layer.cornerRadius=14;
+                backing.layer.cornerRadius=round(backingSize*0.26);
+                backing.layer.cornerCurve=kCACornerCurveContinuous;
                 backing.layer.borderWidth=.5;
                 backing.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:dark?.26:.40].CGColor;
                 [row addSubview:backing];
@@ -5920,6 +5943,9 @@ static UIView *FMDockCard(UIStackView *rows) {
 @property(nonatomic,strong) UILabel *handleNote;
 @property(nonatomic,weak) CAGradientLayer *backdrop;
 @property(nonatomic,assign) NSInteger openGroup;
+// Fires after any sidebar preference changes so the live bead and drawer pick it up
+// without forcing the user to close and reopen the settings page.
+@property(nonatomic,copy) void (^dockSettingsChanged)(void);
 @end
 
 @implementation FMDockSettingsController
@@ -6325,6 +6351,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     slider.accessibilityValue=slider.valueLabel.text;
     SetPref(option[@"key"],@(value));
     [self.preview reload];
+    if(self.dockSettingsChanged) self.dockSettingsChanged();
 }
 - (void)switchChanged:(FMDockSwitch *)toggle {
     SetPref(toggle.key,@(toggle.isOn));
@@ -6332,6 +6359,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     // The fade settings and the icon size follow these switches.
     [self applyVisibilityAnimated:YES];
     [self.preview reload];
+    if(self.dockSettingsChanged) self.dockSettingsChanged();
 }
 - (void)segmentChanged:(FMDockSegments *)control {
     SetPref(control.key,@(control.selectedSegmentIndex));
@@ -6340,6 +6368,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         [self applyVisibilityAnimated:YES];
     }
     [self.preview reload];
+    if(self.dockSettingsChanged) self.dockSettingsChanged();
     // Show what the pop-in setting does.
     if([control.key isEqualToString:@"popAnimation"]) {
         [self.preview replay];
