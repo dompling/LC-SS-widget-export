@@ -1422,6 +1422,9 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
 // The sidebar page: the bead, the drawer and the pop-in, with a preview.
 @interface FMDockSettingsController : UIViewController
 - (void)rebuild;
+// Fires after any sidebar preference changes so the live bead and drawer pick it up
+// without forcing the user to close and reopen the settings page.
+@property(nonatomic,copy) void (^dockSettingsChanged)(void);
 @end
 
 static id FMOrientationObserver=nil;
@@ -5943,9 +5946,6 @@ static UIView *FMDockCard(UIStackView *rows) {
 @property(nonatomic,strong) UILabel *handleNote;
 @property(nonatomic,weak) CAGradientLayer *backdrop;
 @property(nonatomic,assign) NSInteger openGroup;
-// Fires after any sidebar preference changes so the live bead and drawer pick it up
-// without forcing the user to close and reopen the settings page.
-@property(nonatomic,copy) void (^dockSettingsChanged)(void);
 @end
 
 @implementation FMDockSettingsController
