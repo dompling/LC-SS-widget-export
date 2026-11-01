@@ -179,15 +179,34 @@ static NSString *FMAppRowTitle(NSDictionary *app) {
 }
 static NSString *Pref(NSString *key) { return [LCOrbitStorage key:key forModule:@"LCFloatingMenu"]; }
 static BOOL BoolPref(NSString *key,BOOL def) {
-    id v=[HostDefaults() objectForKey:Pref(key)];
+    id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v boolValue]:def;
 }
 static CGFloat FloatPref(NSString *key,CGFloat def) {
-    id v=[HostDefaults() objectForKey:Pref(key)];
+    id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v doubleValue]:def;
 }
 static void SetPref(NSString *key,id value) {
     [HostDefaults() setObject:value forKey:Pref(key)];
+    NSError *error=[LCOrbitStorage lastError];
+    if(error) [NSNotificationCenter.defaultCenter postNotificationName:@"LCOrbitConfigurationWriteFailed"
+        object:nil userInfo:@{@"error":error}];
+}
+// A drag produces dozens of values a second, and every write is a locked read-modify-write
+// of the whole configuration document. Values therefore wait in this overlay while the finger
+// moves (reads see them at once, so the preview follows), and land on disk once it lifts.
+static NSMutableDictionary *FMStaged=nil;
+static void FMStagePreference(NSString *key,id value) {
+    if(!key.length) return;
+    if(!FMStaged) FMStaged=[NSMutableDictionary dictionary];
+    FMStaged[Pref(key)]=value;
+}
+static BOOL FMHasStagedPreferences(void) { return FMStaged.count>0; }
+static void FMCommitStagedPreferences(void) {
+    if(!FMStaged.count) return;
+    NSDictionary *pending=[FMStaged copy];
+    [FMStaged removeAllObjects];
+    for(NSString *key in pending) [HostDefaults() setObject:pending[key] forKey:key];
     NSError *error=[LCOrbitStorage lastError];
     if(error) [NSNotificationCenter.defaultCenter postNotificationName:@"LCOrbitConfigurationWriteFailed"
         object:nil userInfo:@{@"error":error}];
@@ -1425,6 +1444,7 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
 // Fires after any sidebar preference changes so the live bead and drawer pick it up
 // without forcing the user to close and reopen the settings page.
 @property(nonatomic,copy) void (^dockSettingsChanged)(void);
+- (void)commitStagedSlider;
 @end
 
 static id FMOrientationObserver=nil;
@@ -1543,6 +1563,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,assign) BOOL launchMultitaskMode;
 @property(nonatomic,assign) BOOL launchSystemMenuMode;
 @property(nonatomic,strong) UIView *settingsScreen;
+@property(nonatomic,assign) BOOL settingsDockRedrawScheduled;
 @property(nonatomic,strong) UIWindow *settingsWindow;
 @property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,weak) UIView *dimensionsPreview;
@@ -4095,9 +4116,16 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         // The settings page keeps a window of its own, so the bead behind it is
         // redrawn on the next close. Rebuild it now anyway so reopening shows the
         // new shape, size and colours instead of the ones from before the edit.
-        [weakSelf drawOrb];
-        [weakSelf applyOrbUpdateIndicator];
-        [weakSelf updateSettingsContent];
+        // One redraw per burst, not one per control event.
+        FMManager *manager=weakSelf;
+        if(!manager || manager.settingsDockRedrawScheduled) return;
+        manager.settingsDockRedrawScheduled=YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(.12*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            manager.settingsDockRedrawScheduled=NO;
+            [manager drawOrb];
+            [manager applyOrbUpdateIndicator];
+            [manager refreshOrbPreview];
+        });
     };
     [self.settingsNavigation pushViewController:controller animated:YES];
 }
@@ -6129,6 +6157,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     line.axis=UILayoutConstraintAxisHorizontal;
     line.spacing=12;
     FMDockSlider *slider=[FMDockSlider new];
+    [slider addTarget:self action:@selector(commitStagedSlider)
+     forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     slider.option=option;
     slider.valueLabel=value;
     slider.minimumValue=[option[@"min"] floatValue];
@@ -6349,8 +6379,20 @@ static UIView *FMDockCard(UIStackView *rows) {
     slider.value=value;
     slider.valueLabel.text=FMDockValueText(option,value);
     slider.accessibilityValue=slider.valueLabel.text;
-    SetPref(option[@"key"],@(value));
+    // The preview is what has to follow the finger, and it throttles its own rebuilds. The
+    // bead and the rest of the page wait for the drag to end.
+    FMStagePreference(option[@"key"],@(value));
     [self.preview reload];
+    [self scheduleSliderCommit];
+}
+// The finger has stopped: the value reaches the configuration file and the bead is redrawn.
+- (void)scheduleSliderCommit {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitStagedSlider) object:nil];
+    [self performSelector:@selector(commitStagedSlider) withObject:nil afterDelay:.18];
+}
+- (void)commitStagedSlider {
+    if(!FMHasStagedPreferences()) return;
+    FMCommitStagedPreferences();
     if(self.dockSettingsChanged) self.dockSettingsChanged();
 }
 - (void)switchChanged:(FMDockSwitch *)toggle {
