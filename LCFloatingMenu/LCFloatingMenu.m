@@ -948,8 +948,8 @@ static UIView *FMOrbLine(CGRect bounds) {
     CGFloat scale=FMOrbScale(),height=CGRectGetHeight(bounds);
     FMHandleMetrics handle=FMOrbHandleMetrics(FMOrbHandleIsCapsule());
     CGFloat body=2*handle.half;
-    CGFloat w=glow?MAX(3*scale,handle.reach*.22):3*scale;
-    CGFloat h=glow?MIN(body*.31,height*.42):MIN(18*scale,height*.30);
+    CGFloat w=glow?MAX(3.8*scale,handle.reach*.23):3*scale;
+    CGFloat h=glow?MIN(body*.33,height*.44):MIN(18*scale,height*.30);
     UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,w,h)];
     line.center=CGPointMake(CGRectGetWidth(bounds)*.5,height*.5);
     line.layer.cornerRadius=w*.5;
@@ -959,9 +959,8 @@ static UIView *FMOrbLine(CGRect bounds) {
     line.userInteractionEnabled=NO;
     line.accessibilityIdentifier=@"fm.orb.update-indicator";
     if(glow) {
-        // Lit from the top and deeper at the foot, over whatever colour the fill is. The
-        // gradient has to mask itself: the line cannot clip its own sublayers without
-        // losing the halo with them.
+        // Top-lit gradient inside the bar for depth. The gradient has to mask itself: the
+        // line cannot clip its own sublayers without losing the halo with them.
         CAGradientLayer *lit=[CAGradientLayer layer];
         lit.name=@"fm.orb.line.lit";
         lit.frame=line.bounds;
