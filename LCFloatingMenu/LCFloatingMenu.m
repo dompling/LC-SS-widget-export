@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.14"
+#define FM_MENU_VERSION @"1.0.15"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -182,6 +182,7 @@ static NSString *Pref(NSString *key) { return [LCOrbitStorage key:key forModule:
 // of the whole configuration document. Values therefore wait in this overlay while the finger
 // moves (reads see them at once, so the preview follows), and land on disk once it lifts.
 static NSMutableDictionary *FMStaged=nil;
+static NSUInteger FMStagedRev=0;
 static BOOL BoolPref(NSString *key,BOOL def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v boolValue]:def;
@@ -200,13 +201,14 @@ static void FMStagePreference(NSString *key,id value) {
     if(!key.length) return;
     if(!FMStaged) FMStaged=[NSMutableDictionary dictionary];
     FMStaged[Pref(key)]=value;
+    FMStagedRev++;
 }
-static BOOL FMHasStagedPreferences(void) { return FMStaged.count>0; }
 static void FMCommitStagedPreferences(void) {
     if(!FMStaged.count) return;
     NSDictionary *pending=[FMStaged copy];
     [FMStaged removeAllObjects];
     for(NSString *key in pending) [HostDefaults() setObject:pending[key] forKey:key];
+    FMStagedRev++;
     NSError *error=[LCOrbitStorage lastError];
     if(error) [NSNotificationCenter.defaultCenter postNotificationName:@"LCOrbitConfigurationWriteFailed"
         object:nil userInfo:@{@"error":error}];
@@ -380,6 +382,9 @@ static void FMRefreshSettingsColors(UIView *view,NSArray *before,NSArray *after)
 static CGFloat FMOrbScale(void) {
     return Clamp(FloatPref(@"orbScale",Clamp(FloatPref(@"orbWidth",12)/12.,.70,1.90)),.70,1.90);
 }
+// The shape a drawer morph is built with, caught up with the staged values. Each key is
+// asked for again only after one of them changes: the geometry reads several, and the store
+// behind them is a file.
 static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
     static NSArray *options;static dispatch_once_t once;
     dispatch_once(&once, ^{ options=@[
@@ -410,6 +415,8 @@ static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
         @{@"key":@"menuTopPadding",@"title":@"上方留白",@"min":@(-16),@"max":@40,@"default":@0,@"unit":@"点",@"step":@1}
     ];
 }
+// The same lookup for the drawer's shape while a morph is being prepared: staged values win,
+// and a box is rebuilt only when one of them changes.
 static CGFloat FMMenuStyleValue(NSString *key) {
     for(NSDictionary *option in FMMenuStyleOptions()) if([option[@"key"] isEqualToString:key]) {
         CGFloat fallback=[option[@"default"] doubleValue],value=FloatPref(key,fallback);
@@ -1654,6 +1661,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     FMNotchParams _morphBead,_morphDroplet,_morphDrawer;
     CGPoint _morphRestCenter,_morphShift;
     CGFloat _morphProgress,_morphVelocity,_morphTarget,_morphTravel,_morphCommit;
+    // Outline rate limiting: when the last exact outline was made, the progress it was made
+    // at, how much overshoot the transform already carries, and the tick itself.
+    CFTimeInterval _morphFrameAt,_morphFrameTick;
+    CGFloat _morphShownT,_morphShownStretch;
     CGFloat _morphBeadAlpha,_morphShadow,_morphElapsed,_panelDragStart;
     CGFloat _morphScale,_morphOmega,_morphZeta;
     CFTimeInterval _morphTick;
@@ -2408,6 +2419,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     _morphCommit=MIN(FMDrawerCommitDistance(_morphTravel,FMOrbScale()),_morphTravel*.8);
     _morphCommitHaptic=NO;
     _morphBeadAlpha=self.orbUpdateAvailable?1:(self.orbNormalAlpha?:.72);
+    _morphFrameAt=0;
+    _morphShownT=0;
+    _morphShownStretch=0;
+    // One outline rebuild per display frame is all a drag can show; faster input than the
+    // screen would only be thrown away.
+    CGFloat maximum=UIScreen.mainScreen.maximumFramesPerSecond;
+    _morphFrameTick=maximum>90?1./maximum+.0005:1./60.+.0005;
     return YES;
 }
 // One frame of the morph. Everything that changes with progress is set here,
@@ -2420,23 +2438,45 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     // or a finger pulling past the end) shows as a stretch toward the screen.
     CGFloat raw=MAX(progress,0),t=MIN(raw,1),stretch=Clamp(raw-1,0,.08);
     _morphProgress=raw;
-    // Hold the Bezier wrapper for the whole frame: its CGPath is borrowed.
-    __attribute__((objc_precise_lifetime)) UIBezierPath *outline=
-        FMDrawerMorphPath(glass.bounds,_morphBead,_morphDroplet,_morphDrawer,self.left,_morphCompact,t);
+    // The two expensive parts of a frame are the outline geometry and the pop-in bookkeeping,
+    // and a drag delivers both far faster than the screen can show them. Both are therefore
+    // rated at the display rate: an interior frame keeps the outline it already has and only
+    // moves it, the first frame and the last one are always exact.
+    BOOL ends=(t<=0||t>=1),fresh=NO;
+    if(ends || !clip.path) {
+        fresh=YES;
+    } else if(CACurrentMediaTime()-_morphFrameAt>=_morphFrameTick) {
+        fresh=YES;
+    }
+    if(fresh) {
+        _morphFrameAt=CACurrentMediaTime();
+        // Hold the Bezier wrapper for the whole frame: its CGPath is borrowed.
+        __attribute__((objc_precise_lifetime)) UIBezierPath *outline=
+            FMDrawerMorphPath(glass.bounds,_morphBead,_morphDroplet,_morphDrawer,self.left,_morphCompact,t);
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        clip.path=outline.CGPath;
+        for(CALayer *layer in glass.layer.sublayers)
+            if([layer.name isEqualToString:@"fm.panel.rim"] && [layer isKindOfClass:CAShapeLayer.class])
+                ((CAShapeLayer *)layer).path=outline.CGPath;
+        panel.layer.shadowPath=outline.CGPath;
+        [CATransaction commit];
+        // The outline matches this progress exactly, so the transform only carries overshoot.
+        _morphShownT=t;
+        _morphShownStretch=0;
+    }
+    // A frame that was skipped is caught up by scaling the drawer the last exact frame was
+    // measured for. Between those two the shapes differ by a few points, which reads as the
+    // same shape moving rather than as a jump.
+    CGFloat along=_morphShownT>1e-4?t/_morphShownT:1,owed=stretch-_morphShownStretch;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    clip.path=outline.CGPath;
-    for(CALayer *layer in glass.layer.sublayers)
-        if([layer.name isEqualToString:@"fm.panel.rim"] && [layer isKindOfClass:CAShapeLayer.class])
-            ((CAShapeLayer *)layer).path=outline.CGPath;
-    panel.layer.shadowPath=outline.CGPath;
-    panel.layer.shadowOpacity=_morphShadow*FMSmooth(t/.5);
-    [CATransaction commit];
     // Stretch about the docking wall: scaling about the center moves the wall
     // too, so the center slides back by half the added width.
-    panel.transform=CGAffineTransformMakeScale(_morphScale*(1+stretch),_morphScale);
-    CGFloat slide=(self.left?1:-1)*stretch*CGRectGetWidth(glass.bounds)*_morphScale*.5;
+    panel.transform=CGAffineTransformMakeScale(_morphScale*(along+owed),_morphScale);
+    CGFloat slide=(self.left?1:-1)*owed*CGRectGetWidth(glass.bounds)*_morphScale*.5;
     panel.center=CGPointMake(_morphRestCenter.x+_morphShift.x*(1-t)+slide,_morphRestCenter.y+_morphShift.y*(1-t));
+    [CATransaction commit];
     // The bead fades out above the glass that replaces it; the panel itself
     // stays opaque, since alpha below one on an ancestor of a visual effect
     // view can flatten the material. The contents stay hidden until the shell
@@ -2445,9 +2485,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     BOOL reveal=_popRevealed?t>=.42:t>=.5,flipped=reveal!=_popRevealed;
     _popRevealed=reveal;
     if(reveal) _popStarted=YES;
-    for(UIView *child in FMGlassContent(glass).subviews)
-        if(child.tag!=9217 && child.tag!=9231) child.alpha=_popStarted?1:0;
-    if(flipped) [self popContent:reveal];
+    if(flipped) {
+        for(UIView *child in FMGlassContent(glass).subviews)
+            if(child.tag!=9217 && child.tag!=9231) child.alpha=_popStarted?1:0;
+        [self popContent:reveal];
+    }
     [panel viewWithTag:9204].alpha=FMSmooth((t-.1)/.5);
     self.dismissLayer.alpha=FMSmooth(t);
     self.orb.alpha=_morphBeadAlpha*(1-FMSmooth(t/.3));

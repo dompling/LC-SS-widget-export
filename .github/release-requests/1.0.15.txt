@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.15 formal release request
+
+Version: 1.0.15
+Source: smoother bead and drawer drags, staged slider writes, soft two-colour glow line
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.15.md
+Publish: compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.15 tag, GitHub Release, and refresh fm-latest.
