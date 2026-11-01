@@ -178,6 +178,10 @@ static NSString *FMAppRowTitle(NSDictionary *app) {
     return FMAppCaption(app);
 }
 static NSString *Pref(NSString *key) { return [LCOrbitStorage key:key forModule:@"LCFloatingMenu"]; }
+// A drag produces dozens of values a second, and every write is a locked read-modify-write
+// of the whole configuration document. Values therefore wait in this overlay while the finger
+// moves (reads see them at once, so the preview follows), and land on disk once it lifts.
+static NSMutableDictionary *FMStaged=nil;
 static BOOL BoolPref(NSString *key,BOOL def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v boolValue]:def;
@@ -192,10 +196,6 @@ static void SetPref(NSString *key,id value) {
     if(error) [NSNotificationCenter.defaultCenter postNotificationName:@"LCOrbitConfigurationWriteFailed"
         object:nil userInfo:@{@"error":error}];
 }
-// A drag produces dozens of values a second, and every write is a locked read-modify-write
-// of the whole configuration document. Values therefore wait in this overlay while the finger
-// moves (reads see them at once, so the preview follows), and land on disk once it lifts.
-static NSMutableDictionary *FMStaged=nil;
 static void FMStagePreference(NSString *key,id value) {
     if(!key.length) return;
     if(!FMStaged) FMStaged=[NSMutableDictionary dictionary];
