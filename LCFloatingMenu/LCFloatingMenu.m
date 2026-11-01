@@ -911,13 +911,33 @@ static CGFloat FMReadableRowAlpha(void) {
 }
 // The line down the middle of the handle, at rest. Its colour is the view's own fill, so
 // the red it turns while an update waits works the same on both styles.
+// The glow line colour: always a clean bright blue, independent of the user's
+// custom accent theme, so it matches the reference render (screenshot 3).
+static UIColor *FMOrbLineColor(void) {
+    return [UIColor colorWithRed:0.22 green:0.60 blue:1.0 alpha:1.0]; // #3899FF
+}
 static void FMApplyOrbLineRest(UIView *line) {
     BOOL glow=BoolPref(@"glowLine",YES);
-    line.backgroundColor=FMClearGlassEnabled()?UIColor.systemBlueColor:FMAccent();
-    line.layer.shadowColor=line.backgroundColor.CGColor;
+    UIColor *color=FMOrbLineColor();
+    line.backgroundColor=color;
+    line.layer.shadowColor=color.CGColor;
     line.layer.shadowOffset=CGSizeZero;
-    line.layer.shadowOpacity=glow?.5:0;
-    line.layer.shadowRadius=glow?MAX(3,CGRectGetWidth(line.bounds)*.9):0;
+    line.layer.shadowOpacity=glow?.92:0;
+    line.layer.shadowRadius=glow?MAX(6,CGRectGetWidth(line.bounds)*1.6):0;
+    for(CALayer *layer in line.layer.sublayers) {
+        if([layer.name isEqualToString:@"fm.orb.line.lit"] && [layer isKindOfClass:CAGradientLayer.class]) {
+            CAGradientLayer *lit=(CAGradientLayer *)layer;
+            lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.55].CGColor,
+                         (id)[color colorWithAlphaComponent:.25].CGColor,
+                         (id)[UIColor.blackColor colorWithAlphaComponent:.18].CGColor];
+        }
+    }
+}
+// Separator color that adapts smoothly between light and dark modes with clear contrast.
+static UIColor *FMSeparatorColor(void) {
+    BOOL dark=FMMenuDark();
+    return dark ? [UIColor.whiteColor colorWithAlphaComponent:.20] :
+                  [UIColor.blackColor colorWithAlphaComponent:.18];
 }
 // The author's line is a thin hairline. The other is the one from the reference render: a
 // bar about a fifth of the handle wide and a third of its body tall, lit from the top and
@@ -948,10 +968,11 @@ static UIView *FMOrbLine(CGRect bounds) {
         lit.cornerRadius=w*.5;
         lit.cornerCurve=kCACornerCurveCircular;
         lit.masksToBounds=YES;
-        lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.42].CGColor,
-                     (id)UIColor.clearColor.CGColor,
-                     (id)[UIColor.blackColor colorWithAlphaComponent:.20].CGColor];
-        lit.locations=@[@0,@.45,@1];
+        UIColor *accent=FMOrbLineColor();
+        lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.55].CGColor,
+                     (id)[accent colorWithAlphaComponent:.25].CGColor,
+                     (id)[UIColor.blackColor colorWithAlphaComponent:.18].CGColor];
+        lit.locations=@[@0,@.42,@1];
         [line.layer addSublayer:lit];
     }
     FMApplyOrbLineRest(line);
