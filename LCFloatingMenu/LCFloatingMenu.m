@@ -203,6 +203,7 @@ static void FMStagePreference(NSString *key,id value) {
     FMStaged[Pref(key)]=value;
     FMStagedRev++;
 }
+static BOOL FMHasStagedPreferences(void) { return FMStaged.count>0; }
 static void FMCommitStagedPreferences(void) {
     if(!FMStaged.count) return;
     NSDictionary *pending=[FMStaged copy];
