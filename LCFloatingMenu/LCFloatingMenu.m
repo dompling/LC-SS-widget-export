@@ -935,22 +935,34 @@ static CGFloat FMReadableRowAlpha(void) {
 static UIColor *FMOrbLineColor(void) {
     return [UIColor colorWithRed:0.22 green:0.60 blue:1.0 alpha:1.0]; // #3899FF
 }
-static void FMApplyOrbLineRest(UIView *line) {
+// Applies the one colour the line is allowed to have. With the glow setting on, the bar is
+// solid and a soft halo bleeds out of it; with it off, the bar keeps its colour and the halo
+// goes away entirely. Nothing here depends on light or dark mode: the line is blue at rest and
+// red while an update waits, in both.
+static void FMApplyOrbLineTint(UIView *line,UIColor *color) {
     BOOL glow=BoolPref(@"glowLine",YES);
-    UIColor *color=FMOrbLineColor();
     line.backgroundColor=color;
     line.layer.shadowColor=color.CGColor;
     line.layer.shadowOffset=CGSizeZero;
-    line.layer.shadowOpacity=glow?.92:0;
-    line.layer.shadowRadius=glow?MAX(6,CGRectGetWidth(line.bounds)*1.6):0;
+    line.layer.shadowOpacity=glow?.55:0;
+    line.layer.shadowRadius=glow?MAX(4,CGRectGetWidth(line.bounds)*.9):0;
     for(CALayer *layer in line.layer.sublayers) {
-        if([layer.name isEqualToString:@"fm.orb.line.lit"] && [layer isKindOfClass:CAGradientLayer.class]) {
+        if([layer.name isEqualToString:@"fm.orb.line.spread"]) {
+            layer.backgroundColor=color.CGColor;
+            layer.shadowColor=color.CGColor;
+            layer.shadowOffset=CGSizeZero;
+            layer.shadowOpacity=glow?.55:0;
+            layer.shadowRadius=glow?MAX(8,CGRectGetWidth(line.bounds)*2.6):0;
+        } else if([layer.name isEqualToString:@"fm.orb.line.lit"] && [layer isKindOfClass:CAGradientLayer.class]) {
             CAGradientLayer *lit=(CAGradientLayer *)layer;
-            lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.55].CGColor,
-                         (id)[color colorWithAlphaComponent:.25].CGColor,
-                         (id)[UIColor.blackColor colorWithAlphaComponent:.18].CGColor];
+            lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.85].CGColor,
+                         (id)[color colorWithAlphaComponent:.55].CGColor,
+                         (id)[color colorWithAlphaComponent:.90].CGColor];
         }
     }
+}
+static void FMApplyOrbLineRest(UIView *line) {
+    FMApplyOrbLineTint(line,FMOrbLineColor());
 }
 // Separator color that adapts smoothly between light and dark modes with clear contrast.
 static UIColor *FMSeparatorColor(void) {
@@ -978,8 +990,17 @@ static UIView *FMOrbLine(CGRect bounds) {
     line.userInteractionEnabled=NO;
     line.accessibilityIdentifier=@"fm.orb.update-indicator";
     if(glow) {
-        // Top-lit gradient inside the bar for depth. The gradient has to mask itself: the
-        // line cannot clip its own sublayers without losing the halo with them.
+        // Soft halo: a wide, heavily blurred copy of the bar sitting behind it, plus a
+        // smaller one hugging the edge. Both are ordinary CALayer shadows on sublayers, so
+        // the glow survives the parent mask that clips the handle's own shadow.
+        CALayer *spread=[CALayer layer];
+        spread.name=@"fm.orb.line.spread";
+        spread.frame=line.bounds;
+        spread.cornerRadius=w*.5;
+        spread.cornerCurve=kCACornerCurveCircular;
+        spread.backgroundColor=UIColor.clearColor.CGColor;
+        [line.layer insertSublayer:spread atIndex:0];
+        // Top-lit gradient inside the bar for depth.
         CAGradientLayer *lit=[CAGradientLayer layer];
         lit.name=@"fm.orb.line.lit";
         lit.frame=line.bounds;
@@ -987,10 +1008,10 @@ static UIView *FMOrbLine(CGRect bounds) {
         lit.cornerCurve=kCACornerCurveCircular;
         lit.masksToBounds=YES;
         UIColor *accent=FMOrbLineColor();
-        lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.55].CGColor,
-                     (id)[accent colorWithAlphaComponent:.25].CGColor,
-                     (id)[UIColor.blackColor colorWithAlphaComponent:.18].CGColor];
-        lit.locations=@[@0,@.42,@1];
+        lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.85].CGColor,
+                     (id)[accent colorWithAlphaComponent:.55].CGColor,
+                     (id)[accent colorWithAlphaComponent:.90].CGColor];
+        lit.locations=@[@0,@.45,@1];
         [line.layer addSublayer:lit];
     }
     FMApplyOrbLineRest(line);
@@ -1950,23 +1971,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self cancelOrbFade];
     self.orbFaded=NO;
     if(self.orb && !self.isOpen) self.orb.alpha=1;
-    UIColor *red=[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1];
-    line.backgroundColor=red;
-    line.layer.shadowColor=[UIColor colorWithRed:1 green:.09 blue:.16 alpha:1].CGColor;
-    line.layer.shadowOpacity=.92;
-    line.layer.shadowRadius=MAX(6,CGRectGetWidth(line.bounds)*1.6);
-    line.layer.shadowOffset=CGSizeZero;
+    // The second and only other colour: the same bar in red, with the same halo.
+    FMApplyOrbLineTint(line,[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1]);
     line.alpha=1;
-    // Keep the inner gradient on the same hue, otherwise the blue lit overlay
-    // would tint the red bar purple.
-    for(CALayer *layer in line.layer.sublayers) {
-        if([layer.name isEqualToString:@"fm.orb.line.lit"] && [layer isKindOfClass:CAGradientLayer.class]) {
-            CAGradientLayer *lit=(CAGradientLayer *)layer;
-            lit.colors=@[(id)[UIColor.whiteColor colorWithAlphaComponent:.55].CGColor,
-                         (id)[red colorWithAlphaComponent:.25].CGColor,
-                         (id)[UIColor.blackColor colorWithAlphaComponent:.18].CGColor];
-        }
-    }
     if(!UIAccessibilityIsReduceMotionEnabled()) {
         CABasicAnimation *pulse=[CABasicAnimation animationWithKeyPath:@"opacity"];
         pulse.fromValue=@.38;
