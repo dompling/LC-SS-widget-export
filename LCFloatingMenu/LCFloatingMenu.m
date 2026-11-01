@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.16"
+#define FM_MENU_VERSION @"1.0.17"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -391,6 +391,7 @@ static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
     dispatch_once(&once, ^{ options=@[
         // The first four shape the handle, with the wloc dock's ranges and steps.
         @{@"key":@"orbHandleReach",@"title":@"凸出宽度",@"min":@(14),@"max":@(34),@"default":@(22),@"unit":@"点",@"step":@(1)},
+        @{@"key":@"orbDropletBase",@"title":@"底座厚度",@"min":@(0),@"max":@(16),@"default":@(0),@"unit":@"点",@"step":@(1)},
         @{@"key":@"orbHandleLength",@"title":@"长度",@"min":@(56),@"max":@(140),@"default":@(80),@"unit":@"点",@"step":@(2)},
         @{@"key":@"orbCapsuleCorner",@"title":@"圆角",@"min":@(0.55),@"max":@(1),@"default":@(0.83),@"unit":@"%",@"step":@(0.01)},
         @{@"key":@"orbSoftness",@"title":@"柔和度",@"min":@(0.4),@"max":@(1.6),@"default":@(1),@"unit":@"%",@"step":@(0.05)},
@@ -545,8 +546,35 @@ static FMNotchParams FMHandleNotchParams(FMHandleMetrics m,CGFloat unit,CGFloat 
 // scales reach and length; the rest follows from them.
 static FMHandleMetrics FMOrbHandleMetrics(BOOL capsule) {
     CGFloat scale=FMOrbScale();
-    return FMHandleMetricsFor(FMOrbStyleValue(@"orbHandleReach")*scale,FMOrbStyleValue(@"orbHandleLength")*scale,
-        FMOrbStyleValue(@"orbSoftness"),capsule,FMOrbStyleValue(@"orbCapsuleCorner"));
+    CGFloat reach=FMOrbStyleValue(@"orbHandleReach")*scale;
+    CGFloat length=FMOrbStyleValue(@"orbHandleLength")*scale;
+    CGFloat softness=FMOrbStyleValue(@"orbSoftness");
+    CGFloat baseGap=!capsule ? FMOrbStyleValue(@"orbDropletBase")*scale : 0;
+    if(baseGap <= 0.001) {
+        return FMHandleMetricsFor(reach,length,softness,capsule,FMOrbStyleValue(@"orbCapsuleCorner"));
+    }
+    CGFloat totalReach=reach + baseGap;
+    CGFloat depth=baseGap + MIN(.586*reach*softness,.8*reach);
+    CGFloat tail=depth*(.675/.586);
+    // cornerX 与 cornerY 严格由微珠本体 reach 决定，保持外侧圆头尺寸固定
+    CGFloat cornerX=.413*reach, cornerY=.525*reach;
+    FMHandleMetrics m={totalReach,length/2,tail,depth,tail,depth,cornerX,cornerY,.575};
+    if(capsule) {
+        CGFloat cx=FMOrbStyleValue(@"orbCapsuleCorner")*reach/2, cy=MIN(cx*.525/.413,length/2);
+        m.topLength=m.bottomLength=-cy;
+        m.topDepth=m.bottomDepth=cx;
+        m.cornerX=cx;m.cornerY=cy;
+    }
+    m.reach=MAX(m.reach,4);
+    m.half=MAX(m.half,8);
+    m.cornerX=Clamp(m.cornerX,0,m.reach*.5);
+    m.cornerY=Clamp(m.cornerY,0,m.half);
+    CGFloat room=MAX(m.reach-m.cornerX,0);
+    if(m.topLength<0) m.topLength=-MIN(-m.topLength,m.half);
+    if(m.bottomLength<0) m.bottomLength=-MIN(-m.bottomLength,m.half);
+    m.topDepth=Clamp(m.topDepth,0,room);
+    m.bottomDepth=Clamp(m.bottomDepth,0,room);
+    return m;
 }
 // A mirrored, gently concave inner shoulder joins the side edge to the drawer.
 // The glass and its shadow use exactly the same path.
@@ -634,20 +662,25 @@ static void FMApplySideNotch(UIView *glass,CALayer *shadow,BOOL dockLeft,BOOL co
 }
 // The raised capsule has its own rounded optical fill, without an inset
 // stroke. Its broader edge backing remains visible above and below it.
-static void FMLayoutOrbCapsule(UIView *glass) {
-    CGFloat w=glass.bounds.size.width,h=glass.bounds.size.height;
-    // The fill is the capsule outline: all of the capsule handle, and for the
-    // droplet just the body between its two flares.
+static void FMLayoutOrbCapsule(UIView *glass, BOOL left) {
+    CGFloat h=glass.bounds.size.height;
+    CGFloat scale=FMOrbScale();
+    CGFloat beadReach=FMOrbStyleValue(@"orbHandleReach")*scale;
+    CGFloat baseGap=!FMOrbHandleIsCapsule() ? FMOrbStyleValue(@"orbDropletBase")*scale : 0;
     FMHandleMetrics pill=FMOrbHandleMetrics(YES);
     CGFloat body=FMHandleFrameSize(pill).height;
+    CGFloat beadX=left ? baseGap : 0;
+    CGFloat beadY=(h-body)*.5;
+    CGFloat cornerScale=FMOrbStyleValue(@"orbCapsuleCorner");
+    CGFloat radius=(beadReach*0.5)*cornerScale;
     for(CALayer *layer in glass.layer.sublayers) {
         if([layer.name isEqualToString:@"fm.orb.capsule"]) {
-            layer.frame=CGRectMake(0,(h-body)*.5,w,body);
+            layer.frame=CGRectMake(beadX,beadY,beadReach,body);
             layer.cornerRadius=0;
             CAShapeLayer *mask=(CAShapeLayer *)layer.mask;
             if(!mask) {mask=[CAShapeLayer layer];layer.mask=mask;}
             mask.frame=layer.bounds;
-            __attribute__((objc_precise_lifetime)) UIBezierPath *fill=FMNotchFamilyPath(FMHandleNotchParams(pill,1,0,0));
+            UIBezierPath *fill=[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0,0,beadReach,body) cornerRadius:radius];
             mask.path=fill.CGPath;
         } else if([layer.name isEqualToString:@"fm.orb.surface"]) {
             layer.frame=glass.bounds;
@@ -665,8 +698,6 @@ static void FMAddOrbCapsule(UIView *glass,BOOL left) {
     [glass.layer addSublayer:surface];
     CAGradientLayer *capsule=[CAGradientLayer layer];
     capsule.name=@"fm.orb.capsule";
-    // Preserve a subtle highlight, but do not wash the dark bead back to
-    // white when iOS native glass is sampling a Guest with a light canvas.
     capsule.colors=FMMenuDark()?@[(id)[UIColor.whiteColor colorWithAlphaComponent:.24].CGColor,
                      (id)[UIColor.whiteColor colorWithAlphaComponent:.09].CGColor,
                      (id)[UIColor.whiteColor colorWithAlphaComponent:.18].CGColor]:
@@ -677,7 +708,7 @@ static void FMAddOrbCapsule(UIView *glass,BOOL left) {
     capsule.startPoint=CGPointMake(left?1:0,0);capsule.endPoint=CGPointMake(left?0:1,1);
     capsule.cornerCurve=kCACornerCurveCircular;
     [glass.layer addSublayer:capsule];
-    FMLayoutOrbCapsule(glass);
+    FMLayoutOrbCapsule(glass,left);
 }
 // This backdrop extends beyond the handle but never expands its hit target.
 // Faded ends and a soft horizontal falloff prevent a second visible frame.
@@ -978,19 +1009,40 @@ static UIColor *FMSeparatorColor(void) {
     return dark ? [UIColor.whiteColor colorWithAlphaComponent:.20] :
                   [UIColor.blackColor colorWithAlphaComponent:.18];
 }
+// Separator with centered highlight and tapering soft ends in both light and dark modes.
+static UIView *FMMakeGlowSeparator(CGRect frame) {
+    UIView *sep=[[UIView alloc] initWithFrame:frame];
+    sep.userInteractionEnabled=NO;
+    sep.backgroundColor=UIColor.clearColor;
+    CAGradientLayer *grad=[CAGradientLayer layer];
+    grad.frame=sep.bounds;
+    grad.startPoint=CGPointMake(0,0.5);
+    grad.endPoint=CGPointMake(1,0.5);
+    BOOL dark=FMMenuDark();
+    UIColor *centerGlow=dark ? [UIColor colorWithWhite:1.0 alpha:0.95] : [UIColor colorWithWhite:1.0 alpha:0.92];
+    UIColor *midTone=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:dark?0.42:0.32];
+    UIColor *edge=[UIColor colorWithWhite:dark?1.0:0.0 alpha:0.0];
+    grad.colors=@[(id)edge.CGColor, (id)midTone.CGColor, (id)centerGlow.CGColor, (id)midTone.CGColor, (id)edge.CGColor];
+    grad.locations=@[@0.0, @0.22, @0.5, @0.78, @1.0];
+    [sep.layer addSublayer:grad];
+    return sep;
+}
 // The author's line is a thin hairline. The other is the one from the reference render: a
 // bar about a fifth of the handle wide and a third of its body tall, lit from the top and
 // carrying a halo. bounds is the handle's frame, flares and all; the bar is measured
 // against the straight body so a droplet's neck does not stretch it.
-static UIView *FMOrbLine(CGRect bounds) {
+static UIView *FMOrbLine(CGRect bounds, BOOL docksLeft) {
     BOOL glow=BoolPref(@"glowLine",YES);
     CGFloat scale=FMOrbScale(),height=CGRectGetHeight(bounds);
     FMHandleMetrics handle=FMOrbHandleMetrics(FMOrbHandleIsCapsule());
     CGFloat body=2*handle.half;
-    CGFloat w=glow?MAX(3.8*scale,handle.reach*.23):3*scale;
+    CGFloat beadReach=FMOrbStyleValue(@"orbHandleReach")*scale;
+    CGFloat baseGap=!FMOrbHandleIsCapsule() ? FMOrbStyleValue(@"orbDropletBase")*scale : 0;
+    CGFloat w=glow?MAX(3.8*scale,beadReach*.23):3*scale;
     CGFloat h=glow?MIN(body*.33,height*.44):MIN(18*scale,height*.30);
     UIView *line=[[UIView alloc] initWithFrame:CGRectMake(0,0,w,h)];
-    line.center=CGPointMake(CGRectGetWidth(bounds)*.5,height*.5);
+    CGFloat centerX=docksLeft ? (baseGap + beadReach*.5) : (beadReach*.5);
+    line.center=CGPointMake(centerX,height*.5);
     line.layer.cornerRadius=w*.5;
     line.layer.cornerCurve=kCACornerCurveCircular;
     line.layer.borderWidth=glow?.5:.4;
@@ -1385,64 +1437,80 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 
 static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSString *symbol,UIColor *badgeColor,id target,SEL action) {
     UIControl *row=[UIControl new];
-    row.layer.cornerRadius=16;
+    row.layer.cornerRadius=14;
     row.backgroundColor=FMThemeColor(FMColorSurface);
 
-    UIView *badge=[UIView new];
-    badge.translatesAutoresizingMaskIntoConstraints=NO;
-    badge.layer.cornerRadius=8;
-    badge.layer.masksToBounds=YES;
-    badge.backgroundColor=badgeColor?:[UIColor colorWithRed:0 green:122/255.0 blue:255/255.0 alpha:1.0];
-    [row addSubview:badge];
+    UIView *badge=nil;
+    if(symbol.length) {
+        badge=[UIView new];
+        badge.translatesAutoresizingMaskIntoConstraints=NO;
+        badge.layer.cornerRadius=8;
+        badge.layer.masksToBounds=YES;
+        badge.backgroundColor=badgeColor?:[UIColor colorWithRed:0 green:122/255.0 blue:255/255.0 alpha:1.0];
+        [row addSubview:badge];
 
-    UIImageView *icon=[[UIImageView alloc] initWithImage:
-        [[UIImage systemImageNamed:symbol] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
-    icon.translatesAutoresizingMaskIntoConstraints=NO;
-    icon.tintColor=UIColor.whiteColor;
-    icon.contentMode=UIViewContentModeScaleAspectFit;
-    [badge addSubview:icon];
+        UIImageView *icon=[[UIImageView alloc] initWithImage:
+            [[UIImage systemImageNamed:symbol] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+        icon.translatesAutoresizingMaskIntoConstraints=NO;
+        icon.tintColor=UIColor.whiteColor;
+        icon.contentMode=UIViewContentModeScaleAspectFit;
+        [badge addSubview:icon];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [badge.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+            [badge.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [badge.widthAnchor constraintEqualToConstant:32],
+            [badge.heightAnchor constraintEqualToConstant:32],
+            [icon.centerXAnchor constraintEqualToAnchor:badge.centerXAnchor],
+            [icon.centerYAnchor constraintEqualToAnchor:badge.centerYAnchor],
+            [icon.widthAnchor constraintEqualToConstant:19],
+            [icon.heightAnchor constraintEqualToConstant:19]
+        ]];
+    }
+
+    UIStackView *textStack=[UIStackView new];
+    textStack.translatesAutoresizingMaskIntoConstraints=NO;
+    textStack.axis=UILayoutConstraintAxisVertical;
+    textStack.alignment=UIStackViewAlignmentLeading;
+    textStack.spacing=3;
+    textStack.userInteractionEnabled=NO;
+    [row addSubview:textStack];
 
     UILabel *title=[UILabel new];
-    title.translatesAutoresizingMaskIntoConstraints=NO;
     title.text=name;
     title.textColor=FMThemeColor(FMColorText);
-    title.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    [row addSubview:title];
-    UILabel *detail=[UILabel new];
-    detail.translatesAutoresizingMaskIntoConstraints=NO;
-    detail.text=subtitle;
-    detail.textColor=FMThemeColor(FMColorSecondary);
-    detail.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
-    detail.numberOfLines=1;
-    [row addSubview:detail];
+    title.font=[UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    [textStack addArrangedSubview:title];
+
+    if(subtitle.length) {
+        UILabel *detail=[UILabel new];
+        detail.text=subtitle;
+        detail.textColor=FMThemeColor(FMColorSecondary);
+        detail.font=[UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+        detail.numberOfLines=1;
+        detail.tag=9235;
+        [textStack addArrangedSubview:detail];
+    }
+
     UIImageView *arrow=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"]];
     arrow.tintColor=FMThemeColor(FMColorSecondary);
     arrow.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:arrow];
+
+    NSLayoutXAxisAnchor *leadingAnchor = badge ? badge.trailingAnchor : row.leadingAnchor;
+    CGFloat leadingConst = badge ? 12 : 16;
     [NSLayoutConstraint activateConstraints:@[
-        [badge.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
-        [badge.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [badge.widthAnchor constraintEqualToConstant:32],
-        [badge.heightAnchor constraintEqualToConstant:32],
-        [icon.centerXAnchor constraintEqualToAnchor:badge.centerXAnchor],
-        [icon.centerYAnchor constraintEqualToAnchor:badge.centerYAnchor],
-        [icon.widthAnchor constraintEqualToConstant:19],
-        [icon.heightAnchor constraintEqualToConstant:19],
-        [title.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:13],
-        [title.topAnchor constraintEqualToAnchor:row.topAnchor constant:12],
-        [title.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
-        [detail.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
-        [detail.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2],
-        [detail.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-8],
-        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-17],
+        [textStack.leadingAnchor constraintEqualToAnchor:leadingAnchor constant:leadingConst],
+        [textStack.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [textStack.trailingAnchor constraintLessThanOrEqualToAnchor:arrow.leadingAnchor constant:-10],
+        [arrow.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
         [arrow.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [arrow.heightAnchor constraintEqualToConstant:15],
-        [arrow.widthAnchor constraintEqualToConstant:10]
+        [arrow.heightAnchor constraintEqualToConstant:14],
+        [arrow.widthAnchor constraintEqualToConstant:9]
     ]];
     if(action) [row addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
     else {arrow.hidden=YES;row.userInteractionEnabled=NO;}
-    detail.tag=9235;
-    row.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",name,subtitle];
+    row.accessibilityLabel=subtitle.length?[NSString stringWithFormat:@"%@，%@",name,subtitle]:name;
     row.accessibilityTraits=action?UIAccessibilityTraitButton:UIAccessibilityTraitStaticText;
     return row;
 }
@@ -2033,6 +2101,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     }
 }
 - (void)checkOrbUpdateIfNeeded {
+    if(!BoolPref(@"autoCheckUpdate",YES)) {
+        if(self.orbUpdateAvailable) {
+            self.orbUpdateAvailable=NO;
+            [self applyOrbUpdateIndicator];
+        }
+        return;
+    }
     if(self.orbUpdateChecking || !self.window || UIApplication.sharedApplication.applicationState!=UIApplicationStateActive)
         return;
     NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
@@ -2125,7 +2200,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     bead.userInteractionEnabled=NO;
     bead.tag=9202;
     [button addSubview:bead];
-    UIView *line=FMOrbLine(button.bounds);
+    UIView *line=FMOrbLine(button.bounds, self.left);
     [bead addSubview:line];
     self.orbUpdateLine=line;
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
@@ -2268,9 +2343,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             bead.frame=self.orb.bounds;
             FMApplyOrbOutline(self.orb,FMNotchFamilyPath(FMHandleNotchParams(pill,1,0,0)));
             // Keep the raised fill aligned with the pill.
-            FMLayoutOrbCapsule(bead);
+            FMLayoutOrbCapsule(bead, self.left);
             self.orbUpdateLine.hidden=NO;
-            self.orbUpdateLine.center=CGPointMake(orbW*.5,orbH*.5);
+            CGFloat scale=FMOrbScale();
+            CGFloat beadReach=FMOrbStyleValue(@"orbHandleReach")*scale;
+            CGFloat baseGap=!FMOrbHandleIsCapsule() ? FMOrbStyleValue(@"orbDropletBase")*scale : 0;
+            CGFloat centerX=self.left ? (baseGap + beadReach*.5) : (beadReach*.5);
+            self.orbUpdateLine.center=CGPointMake(centerX,orbH*.5);
             [self.orb viewWithTag:9204].alpha=0;
             [CATransaction commit];
             self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
@@ -3598,10 +3677,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     if(tiles.count) {
         CGFloat y=CGRectGetMaxY(tiles.lastObject.frame)+8;
-        UIView *separator=[[UIView alloc] initWithFrame:
-                           CGRectMake(12,y,inner,1/UIScreen.mainScreen.scale)];
-        separator.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
-        separator.userInteractionEnabled=NO;
+        UIView *separator=FMMakeGlowSeparator(CGRectMake(12,y,inner,1.0));
         [FMGlassContent(glass) addSubview:separator];
         [tiles addObject:separator];
     }
@@ -3656,9 +3732,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(compact) {
         // Keep one continuous drawer shell rather than nesting another
         // pill-shaped control panel inside it.
-        UIView *separator=[[UIView alloc] initWithFrame:CGRectMake(13,0,
-                                               footer.bounds.size.width-26,.8)];
-        separator.backgroundColor=[FMThemeColor(FMColorBorder) colorWithAlphaComponent:.55];
+        UIView *separator=FMMakeGlowSeparator(CGRectMake(13,0,footer.bounds.size.width-26,1.0));
         [footer addSubview:separator];
     }
     CGFloat slot=compact?(height-4)/MAX(1,items.count):footer.bounds.size.width/items.count;
@@ -3856,7 +3930,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMApplySideNotch(glass,body.layer,left,YES,YES);
     FMAddOrbCapsule(glass,left);
     [body addSubview:glass];
-    [glass addSubview:FMOrbLine(body.bounds)];
+    [glass addSubview:FMOrbLine(body.bounds, left)];
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
@@ -3904,7 +3978,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self appearanceModeControl:s];
         [self spacer:s size:14];
         [self section:@"显示方式" sub:nil in:s];
-        [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",@"sidebar.right",UIColor.systemOrangeColor,self,@selector(openDock)) height:65 to:s];
+        [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",nil,nil,self,@selector(openDock)) height:60 to:s];
         [self spacer:s size:16];
         [self diyPage:s];
     } else if([category isEqualToString:@"behavior"]) {
@@ -3933,6 +4007,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                      key:@"recentAppsFirst" defaultValue:NO tag:20];
         [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         [self settingSwitch:s title:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
+        [self spacer:s size:14];
+        [self section:@"插件更新" sub:@"后台每隔 1 小时自动检测一次插件新版本。检测到新版本后，悬浮“微珠”中央将闪烁红色呼吸灯提醒更新。" in:s];
+        [self settingSwitch:s title:@"自动检测更新" key:@"autoCheckUpdate" defaultValue:YES tag:25];
     } else if([category isEqualToString:@"apps"]) {
         [self managePage:s];
         [self spacer:s size:20];
@@ -4066,10 +4143,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)backToSettings { [self openSettings]; }
 - (void)backToApps { [self closeSettings]; }
 - (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
-    UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,280,51)];
+    UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,280,52)];
     row.backgroundColor=FMThemeColor(FMColorSurface);
-    row.layer.cornerRadius=13;
-    UILabel *l=[self label:title size:14 weight:UIFontWeightMedium];
+    row.layer.cornerRadius=14;
+    UILabel *l=[self label:title size:15 weight:UIFontWeightMedium];
     l.translatesAutoresizingMaskIntoConstraints=NO;
     l.adjustsFontSizeToFitWidth=YES;
     l.minimumScaleFactor=.79;
@@ -4081,13 +4158,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     [row addSubview:sw];
     [NSLayoutConstraint activateConstraints:@[
-        [l.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:14],
+        [l.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
         [l.trailingAnchor constraintLessThanOrEqualToAnchor:sw.leadingAnchor constant:-10],
         [l.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [sw.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-13],
+        [sw.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
         [sw.centerYAnchor constraintEqualToAnchor:row.centerYAnchor]
     ]];
-    [self addRow:row height:51 to:s];
+    [self addRow:row height:52 to:s];
 }
 - (void)settingSlider:(UIStackView*)s title:(NSString*)title key:(NSString*)key min:(float)min max:(float)max def:(float)def tag:(NSInteger)tag {
     UILabel *l=[self label:title size:14 weight:UIFontWeightMedium];
@@ -4099,18 +4176,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self addRow:slider height:28 to:s];
 }
 - (void)note:(NSString *)text in:(UIStackView *)stack {
-    UILabel *description=[self label:text size:11 weight:UIFontWeightRegular];
+    UILabel *description=[self label:text size:12 weight:UIFontWeightRegular];
     description.textColor=FMThemeColor(FMColorSecondary);
     [stack addArrangedSubview:description];
 }
 - (void)section:(NSString *)title sub:(NSString *)sub in:(UIStackView *)stack {
-    UILabel *heading=[self label:title size:14 weight:UIFontWeightSemibold];
+    UILabel *heading=[self label:title size:13 weight:UIFontWeightSemibold];
+    heading.textColor=FMThemeColor(FMColorSecondary);
     [stack addArrangedSubview:heading];
     if(sub.length) [self note:sub in:stack];
 }
 - (void)settingsPage:(UIStackView*)s {
     [self section:@"显示布局" sub:nil in:s];
-    [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",@"sidebar.right",UIColor.systemOrangeColor,self,@selector(openDock)) height:65 to:s];
+    [self addRow:FMSettingsNavigationRow(@"侧边栏",@"微珠、展开菜单、透明度与动画",nil,nil,self,@selector(openDock)) height:60 to:s];
     [self spacer:s size:8];
     [self section:@"基础交互" sub:nil in:s];
     [self settingSwitch:s title:@"最近打开的 App 置顶"
@@ -4593,10 +4671,20 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         case 20:key=@"recentAppsFirst";break;
         case 22:key=@"unlockOrientation";break;
         case 23:key=@"keepScreenAwake";break;
+        case 25:key=@"autoCheckUpdate";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
+    if(sw.tag==25) {
+        if(sw.isOn) {
+            [self checkOrbUpdateIfNeeded];
+        } else {
+            self.orbUpdateAvailable=NO;
+            [self applyOrbUpdateIndicator];
+        }
+        FMLog(@"auto-check-update",sw.isOn?@"on":@"off");
+    }
     if(sw.tag==23) {
         [self syncScreenAwakeState];
         FMLog(@"keep-screen-awake",sw.isOn?@"on":@"off");
@@ -4662,7 +4750,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)appendResetRow:(UIStackView *)stack title:(NSString *)title action:(SEL)action {
     UIView *row=[UIView new];
     row.backgroundColor=FMThemeColor(FMColorSurface);
-    row.layer.cornerRadius=16;
+    row.layer.cornerRadius=14;
     UIControl *button=[UIControl new];
     button.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:button];
@@ -4681,7 +4769,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     symbol.contentMode=UIViewContentModeScaleAspectFit;
     [badge addSubview:symbol];
     
-    UILabel *label=[self label:title size:16 weight:UIFontWeightMedium];
+    UILabel *label=[self label:title size:15 weight:UIFontWeightMedium];
     label.translatesAutoresizingMaskIntoConstraints=NO;
     [button addSubview:label];
     
@@ -4698,12 +4786,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [symbol.centerYAnchor constraintEqualToAnchor:badge.centerYAnchor],
         [symbol.widthAnchor constraintEqualToConstant:19],
         [symbol.heightAnchor constraintEqualToConstant:19],
-        [label.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:13],
+        [label.leadingAnchor constraintEqualToAnchor:badge.trailingAnchor constant:12],
         [label.centerYAnchor constraintEqualToAnchor:button.centerYAnchor]
     ]];
     button.accessibilityLabel=title;
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
-    [self addRow:row height:65 to:stack];
+    [self addRow:row height:60 to:stack];
 }
 - (void)resetStyle {
     [self resetDockSettings];
@@ -4869,10 +4957,16 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)goHome {
     if([LCOrbitMultitask isEnabled]) {
-        [LCOrbitMultitask showHome];self.isOpen=NO;[self draw];return;
+        [LCOrbitMultitask showHome];self.isOpen=NO;[self draw];
+        return;
     }
-    if(FMHostUI()) { [self toggle]; return; }
-    [self confirmTitle:@"返回 LiveContainer？" action:^{[self launchPath:@"ui" uuid:nil];}];
+    if(FMHostUI()) {
+        [self toggle];
+        return;
+    }
+    [self confirmTitle:@"返回 LiveContainer？" action:^{
+        [self launchPath:@"ui" uuid:nil];
+    }];
 }
 - (void)closeApp:(NSDictionary *)app sender:(UIControl *)sender collapse:(BOOL)collapse {
     NSDictionary *target=[app copy];
@@ -5181,63 +5275,55 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIView *secondGap=[UIView new];
     [secondGap.heightAnchor constraintEqualToConstant:12].active=YES;
     [stack addArrangedSubview:secondGap];
-    UILabel *section=[UILabel new];
-    section.text=@"管理与支持";
-    section.textColor=FMThemeColor(FMColorSecondary);
-    section.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
-    [stack addArrangedSubview:section];
+    [manager section:@"管理与支持" sub:nil in:stack];
     UIControl *apps=[self navigationRow:@"应用管理" subtitle:FMHostUI()?@"收藏、排序、自动画中画与独立设置":@"收藏、排序与独立设置"
                                symbol:@"square.stack.3d.up"
                            badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
                                action:@selector(openApps)];
-    [apps.heightAnchor constraintEqualToConstant:65].active=YES;
+    [apps.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:apps];
     if(FMHostUI()) {
         UIControl *shared=[self navigationRow:@"插件管理中心" subtitle:@"按 App 分配、启停和批量共享"
                                    symbol:@"square.stack.3d.up.fill"
                                badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
                                    action:@selector(openSharedTweaks)];
-        [shared.heightAnchor constraintEqualToConstant:65].active=YES;
+        [shared.heightAnchor constraintEqualToConstant:60].active=YES;
         [stack addArrangedSubview:shared];
     }
     UIControl *logs=[self navigationRow:@"诊断与日志" subtitle:@"查看、导出和清除日志"
                                symbol:@"waveform.path.ecg"
                            badgeColor:[UIColor colorWithRed:175/255.0 green:82/255.0 blue:222/255.0 alpha:1.0]
                                action:@selector(openDiagnostics)];
-    [logs.heightAnchor constraintEqualToConstant:65].active=YES;
+    [logs.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:logs];
-    UIView *space=[UIView new];[space.heightAnchor constraintEqualToConstant:18].active=YES;
+    UIView *space=[UIView new];[space.heightAnchor constraintEqualToConstant:14].active=YES;
     [stack addArrangedSubview:space];
     [manager appendResetStyleRow:stack];
     // Keep About/Updates at the very bottom, below Reset as requested.
     UIView *aboutGap=[UIView new];
-    [aboutGap.heightAnchor constraintEqualToConstant:20].active=YES;
+    [aboutGap.heightAnchor constraintEqualToConstant:14].active=YES;
     [stack addArrangedSubview:aboutGap];
-    UILabel *aboutTitle=[UILabel new];
-    aboutTitle.text=@"版本与更新";
-    aboutTitle.textColor=FMThemeColor(FMColorSecondary);
-    aboutTitle.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
-    [stack addArrangedSubview:aboutTitle];
+    [manager section:@"版本与更新" sub:nil in:stack];
     NSString *version=[NSString stringWithFormat:@"v%@ · %@",FM_MENU_VERSION,FMCommitSummary()];
     UIControl *versionRow=[self navigationRow:@"当前版本" subtitle:version
         symbol:@"number.circle"
         badgeColor:[UIColor colorWithRed:142/255.0 green:142/255.0 blue:147/255.0 alpha:1.0]
         action:NULL];
-    [versionRow.heightAnchor constraintEqualToConstant:65].active=YES;
+    [versionRow.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
         subtitle:self.checkingUpdate?@"正在检查最新发布版…":@"检查微珠最新发布版"
         symbol:@"arrow.clockwise.circle"
         badgeColor:[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0]
         action:@selector(checkForUpdates)];
-    [checkRow.heightAnchor constraintEqualToConstant:65].active=YES;
+    [checkRow.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:checkRow];
     if(FMHostUI()) {
         UIControl *access=[self navigationRow:@"GitHub 访问" subtitle:@"账号、Token 与连接验证"
             symbol:@"key.fill"
             badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
             action:@selector(openGitHub)];
-        [access.heightAnchor constraintEqualToConstant:65].active=YES;
+        [access.heightAnchor constraintEqualToConstant:60].active=YES;
         [stack addArrangedSubview:access];
     }
     UIControl *repository=[self navigationRow:@"GitHub 仓库"
@@ -5245,7 +5331,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         symbol:@"link"
         badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
         action:@selector(openRepository)];
-    [repository.heightAnchor constraintEqualToConstant:65].active=YES;
+    [repository.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:repository];
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.contentScroll!=scroll || !scroll.window) return;
@@ -5480,7 +5566,7 @@ typedef NS_ENUM(NSInteger, FMDockGroup) {
 };
 // When a row shows inside its open group.
 typedef NS_ENUM(NSInteger, FMDockWhen) {
-    FMDockWhenAlways,FMDockWhenCapsule,FMDockWhenFade,FMDockWhenCompact,FMDockWhenList
+    FMDockWhenAlways,FMDockWhenCapsule,FMDockWhenDroplet,FMDockWhenFade,FMDockWhenCompact,FMDockWhenList
 };
 
 @interface FMDockSlider : UISlider
@@ -6350,6 +6436,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self add:[self segmentRow:nil items:@[@"胶囊",@"水滴"] key:@"orbHandleStyle" selected:FMOrbHandleIsCapsule()?0:1]
            to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbHandleReach",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbDropletBase",nil) to:rows group:group when:FMDockWhenDroplet];
     [self addSlider:FMDockOption(@"orbHandleLength",nil) to:rows group:group when:FMDockWhenAlways];
     // Only the capsule has a corner setting.
     [self addSlider:FMDockOption(@"orbCapsuleCorner",nil) to:rows group:group when:FMDockWhenCapsule];
@@ -6426,6 +6513,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (BOOL)whenHolds:(FMDockWhen)when {
     switch(when) {
         case FMDockWhenCapsule: return FMOrbHandleIsCapsule();
+        case FMDockWhenDroplet: return !FMOrbHandleIsCapsule();
         case FMDockWhenFade: return BoolPref(@"idleFade",YES);
         case FMDockWhenCompact: return BoolPref(@"compactMode",NO);
         case FMDockWhenList: return !BoolPref(@"compactMode",NO);

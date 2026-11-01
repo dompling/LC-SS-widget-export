@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.17 formal release request
+
+Version: 1.0.17
+Source: droplet base gap adjustment, auto check update toggle, sidebar row icon cleanup, typography and margins symmetry refinement
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.17.md
+Publish: compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.17 tag, GitHub Release, and refresh fm-latest.
