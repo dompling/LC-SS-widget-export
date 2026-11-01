@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.15"
+#define FM_MENU_VERSION @"1.0.16"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -1478,6 +1478,9 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
 
 static id FMOrientationObserver=nil;
 static id FMLayoutChangeObserver=nil;
+static id FMScreenAwakeActiveObserver=nil;
+static id FMScreenAwakeBackgroundObserver=nil;
+static id FMScreenAwakeResignObserver=nil;
 
 // One element of the drawer popping in like the wloc dock icons: it starts
 // small, transparent and pushed toward the wall, then springs into place
@@ -1647,6 +1650,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
 - (void)openSettingsInScene:(UIWindowScene *)scene;
+- (void)syncScreenAwakeState;
 @end
 @implementation FMManager {
     CGPoint _panStartPoint;
@@ -1764,6 +1768,27 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             [weakSelf handleOrientationOrLayoutChange];
         }];
     }
+    if(!FMScreenAwakeActiveObserver) {
+        __weak typeof(self) weakSelf=self;
+        FMScreenAwakeActiveObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            [weakSelf syncScreenAwakeState];
+        }];
+    }
+    if(!FMScreenAwakeBackgroundObserver) {
+        FMScreenAwakeBackgroundObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            if(UIApplication.sharedApplication.isIdleTimerDisabled) {
+                UIApplication.sharedApplication.idleTimerDisabled=NO;
+            }
+        }];
+    }
+    if(!FMScreenAwakeResignObserver) {
+        FMScreenAwakeResignObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
+            if(UIApplication.sharedApplication.isIdleTimerDisabled) {
+                UIApplication.sharedApplication.idleTimerDisabled=NO;
+            }
+        }];
+    }
+    [self syncScreenAwakeState];
     FMLog(@"overlay-ready",[NSString stringWithFormat:@"available=%lu context=%@",
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
@@ -1775,6 +1800,16 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         }];
     }
     [self checkOrbUpdateIfNeeded];
+}
+- (void)syncScreenAwakeState {
+    BOOL enabled=BoolPref(@"keepScreenAwake",NO);
+    BOOL inForeground=(UIApplication.sharedApplication.applicationState==UIApplicationStateActive);
+    BOOL shouldDisable=enabled && inForeground;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(UIApplication.sharedApplication.isIdleTimerDisabled!=shouldDisable) {
+            UIApplication.sharedApplication.idleTimerDisabled=shouldDisable;
+        }
+    });
 }
 - (void)handleOrientationOrLayoutChange {
     if(_isPanning) return;
@@ -2245,7 +2280,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             [self applyMorphProgress:FMRubberProgress(inwardDist/_morphTravel)];
             if(inwardDist>=_morphCommit) {
                 if(!_morphCommitHaptic && BoolPref(@"haptic",YES))
-                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
                 _morphCommitHaptic=YES;
             } else if(inwardDist<_morphCommit*.8) _morphCommitHaptic=NO;
         } else if(_panUsesMorph && !_panIsInwardPull) {
@@ -2258,7 +2293,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             CGFloat commit=FMQuietPullDistance(FMOrbScale());
             if(inwardDist>=commit) {
                 if(!_morphCommitHaptic && BoolPref(@"haptic",YES))
-                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
                 _morphCommitHaptic=YES;
             } else if(inwardDist<commit*.8) _morphCommitHaptic=NO;
         }
@@ -2336,7 +2371,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
     if(BoolPref(@"haptic",YES)) {
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        if(@available(iOS 13.0,*)) {
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleRigid] impactOccurredWithIntensity:.65];
+        } else {
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        }
     }
 }
 // A pull that was let go far enough: the state flips now, the spring finishes.
@@ -3668,6 +3707,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
                     forControlEvents:UIControlEventTouchUpInside];
+        if([spec[0] isEqualToString:@"house.fill"]) {
+            UILongPressGestureRecognizer *homeHold=[[UILongPressGestureRecognizer alloc]
+                initWithTarget:self action:@selector(holdHomeButton:)];
+            homeHold.minimumPressDuration=0.38;
+            [button addGestureRecognizer:homeHold];
+        }
         [footer addSubview:button];
     }
 }
@@ -3713,6 +3758,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
            [LCOrbitMultitask shouldShowFloatingMenu]) [self refreshAppsContent];
         else if(![LCOrbitMultitask shouldShowFloatingMenu]) [self draw];
     });
+}
+- (void)holdHomeButton:(UILongPressGestureRecognizer *)gesture {
+    if(gesture.state!=UIGestureRecognizerStateBegan) return;
+    if(BoolPref(@"haptic",YES)) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    }
+    FMLog(@"settings-gesture",@"home-button-long-press");
+    [self openSettings];
 }
 - (void)openSettings {
     [self openSettingsInScene:self.window.windowScene?:[self foregroundScene]];
@@ -3868,8 +3921,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [self addRow:mode height:38 to:s];
             [self spacer:s size:14];
         }
-        [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，畅享短视频全屏播放。" in:s];
-        [self settingSwitch:s title:@"开启向左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
+        [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，播放视频时可保持屏幕常亮防息屏。" in:s];
+        [self settingSwitch:s title:@"左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
+        [self settingSwitch:s title:@"保持屏幕常亮" key:@"keepScreenAwake" defaultValue:NO tag:23];
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
@@ -4538,10 +4592,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         case 8:key=[@"doubleTap." stringByAppendingString:GuestID()];break;
         case 20:key=@"recentAppsFirst";break;
         case 22:key=@"unlockOrientation";break;
+        case 23:key=@"keepScreenAwake";break;
         case 4:key=AppPref();break;
         default:return;
     }
     SetPref(key,@(sw.isOn));
+    if(sw.tag==23) {
+        [self syncScreenAwakeState];
+        FMLog(@"keep-screen-awake",sw.isOn?@"on":@"off");
+    }
     if(sw.tag==20) {
         if(sw.isOn) { self.appsScrollOffset=0; [self rememberCurrentApp]; }
         FMLog(@"recent-apps-first",sw.isOn?@"on":@"off");
@@ -6548,6 +6607,9 @@ static UIView *FMDockCard(UIStackView *rows) {
     if([event isEqualToString:UIApplicationDidEnterBackgroundNotification] ||
        [event isEqualToString:UIApplicationWillResignActiveNotification] ||
        [event isEqualToString:UISceneWillDeactivateNotification]) {
+        if(UIApplication.sharedApplication.isIdleTimerDisabled) {
+            UIApplication.sharedApplication.idleTimerDisabled=NO;
+        }
         if(!scene || scene==manager.window.windowScene || scene==manager.settingsWindow.windowScene) {
             [manager invalidatePendingLaunch];
             if(manager.appsScroll) [manager persistAppsScroll];

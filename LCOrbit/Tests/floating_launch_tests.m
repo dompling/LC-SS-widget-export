@@ -35,6 +35,7 @@ static NSString *const LCOrbitMultitaskConfigurationChangedNotification=@"config
 @end
 @interface UIApplication : NSObject
 @property NSInteger applicationState;
+@property(getter=isIdleTimerDisabled) BOOL idleTimerDisabled;
 + (instancetype)sharedApplication;
 @end
 @implementation UIApplication

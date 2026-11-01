@@ -30,5 +30,6 @@ FOUNDATION_EXPORT NSString *const UIWindowDidBecomeVisibleNotification;
 @end
 @interface UIApplication : NSObject
 @property(nonatomic) UIApplicationState applicationState;
+@property(nonatomic,getter=isIdleTimerDisabled) BOOL idleTimerDisabled;
 + (instancetype)sharedApplication;
 @end
