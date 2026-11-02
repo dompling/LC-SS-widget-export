@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.24"
+#define FM_MENU_VERSION @"1.0.25"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -3313,9 +3313,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         // 原生 lock.circle.fill 红底白锁角标
         CGFloat side=MIN(16,MAX(14,size*.34));
         UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
-        mark.backgroundColor=UIColor.whiteColor;
-        mark.layer.cornerRadius=side*.5;
-        mark.clipsToBounds=YES;
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.userInteractionEnabled=NO;
 
@@ -3918,10 +3915,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         icon.layer.borderWidth=.55;
         icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
                                 FMMenuDark()?.54:.36].CGColor;
-        icon.layer.shadowColor=UIColor.blackColor.CGColor;
-        icon.layer.shadowOpacity=FMMenuDark()?.30:.16;
-        icon.layer.shadowRadius=4;
-        icon.layer.shadowOffset=CGSizeMake(0, -2);
         [stackControl addSubview:icon];
 
         [NSLayoutConstraint activateConstraints:@[
@@ -3931,6 +3924,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [icon.heightAnchor constraintEqualToConstant:iconSize]
         ]];
     }
+    stackControl.layer.shouldRasterize=YES;
+    stackControl.layer.rasterizationScale=[UIScreen mainScreen].scale;
     [stackControl addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
     return stackControl;
 }
@@ -3969,10 +3964,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIView *card=[self appRow:app];
         card.translatesAutoresizingMaskIntoConstraints=NO;
         card.userInteractionEnabled=NO;
-        card.layer.shadowColor=UIColor.blackColor.CGColor;
-        card.layer.shadowOpacity=FMMenuDark()?.35:.16;
-        card.layer.shadowRadius=4;
-        card.layer.shadowOffset=CGSizeMake(0, -2);
         card.layer.borderWidth=0.5;
         card.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
                                 FMMenuDark()?.20:.35].CGColor;
@@ -3985,6 +3976,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [card.heightAnchor constraintEqualToConstant:rowHeight]
         ]];
     }
+    stackControl.layer.shouldRasterize=YES;
+    stackControl.layer.rasterizationScale=[UIScreen mainScreen].scale;
     [stackControl addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
     return stackControl;
 }
