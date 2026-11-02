@@ -1009,20 +1009,18 @@ static void FMApplyOrbLineTint(UIView *line,UIColor *color) {
 static void FMApplyOrbLineRest(UIView *line) {
     FMApplyOrbLineTint(line,FMOrbLineColor());
 }
-static void FMApplyOrbLineAnimation(UIView *line, BOOL redBreathing, BOOL blueBreathing, BOOL hasUpdate) {
+static void FMApplyOrbLineAnimation(UIView *line, BOOL redBreathing, BOOL blueBreathing) {
     if(!line) return;
     [line.layer removeAnimationForKey:@"fm.update.red-breath"];
-    BOOL red = redBreathing || hasUpdate;
-    BOOL blue = blueBreathing && !red;
-    if(red) {
+    if(redBreathing) {
         FMApplyOrbLineTint(line,[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1]);
-    } else if(blue) {
+    } else if(blueBreathing) {
         FMApplyOrbLineTint(line,FMOrbLineColor());
     } else {
         FMApplyOrbLineRest(line);
     }
     line.alpha = 1;
-    if((red || blue) && !UIAccessibilityIsReduceMotionEnabled()) {
+    if((redBreathing || blueBreathing) && !UIAccessibilityIsReduceMotionEnabled()) {
         CABasicAnimation *pulse=[CABasicAnimation animationWithKeyPath:@"opacity"];
         pulse.fromValue=@.38;
         pulse.toValue=@1;
@@ -2116,20 +2114,24 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)applyOrbUpdateIndicator {
     UIView *line=self.orbUpdateLine;
     if(!line) return;
-    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
-    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
-    BOOL activeBreath=redBreath || blueBreath || self.orbUpdateAvailable;
-    if(!activeBreath) {
-        [line.layer removeAnimationForKey:@"fm.update.red-breath"];
+    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL blueEnabled=BoolPref(@"blueBreathingLight",NO);
+    BOOL redPulse = redEnabled && self.orbUpdateAvailable;
+    BOOL bluePulse = blueEnabled && !redPulse;
+
+    [line.layer removeAnimationForKey:@"fm.update.red-breath"];
+    if(redPulse) {
+        [self cancelOrbFade];
+        self.orbFaded=NO;
+        if(self.orb && !self.isOpen) self.orb.alpha=1;
+        FMApplyOrbLineAnimation(line, YES, NO);
+    } else if(bluePulse) {
+        FMApplyOrbLineAnimation(line, NO, YES);
+    } else {
         FMApplyOrbLineRest(line);
         line.alpha=1;
         if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
-        return;
     }
-    [self cancelOrbFade];
-    self.orbFaded=NO;
-    if(self.orb && !self.isOpen) self.orb.alpha=1;
-    FMApplyOrbLineAnimation(line, redBreath, blueBreath, self.orbUpdateAvailable);
 }
 - (void)checkOrbUpdateIfNeeded {
     if(!BoolPref(@"autoCheckUpdate",YES)) {
@@ -2173,9 +2175,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 
 - (void)scheduleOrbFade {
     [self.orbFadeTimer invalidate];
-    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
-    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
-    if(!BoolPref(@"idleFade",YES) || self.orbUpdateAvailable || redBreath || blueBreath) return;
+    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL redPulse=redEnabled && self.orbUpdateAvailable;
+    if(!BoolPref(@"idleFade",YES) || redPulse) return;
     if(self.isOpen || !self.orb) return;
     __weak typeof(self) weakSelf=self;
     self.orbFadeTimer=[NSTimer scheduledTimerWithTimeInterval:FMOrbStyleValue(@"fadeDelay") repeats:NO block:^(NSTimer * _Nonnull timer) {
@@ -2187,9 +2189,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     self.orbFadeTimer=nil;
 }
 - (void)fadeOrb {
-    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
-    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
-    if(_morphActive || self.isOpen || !self.orb || self.orbFaded || self.orbUpdateAvailable || redBreath || blueBreath) return;
+    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL redPulse=redEnabled && self.orbUpdateAvailable;
+    if(_morphActive || self.isOpen || !self.orb || self.orbFaded || redPulse) return;
     self.orbFaded=YES;
     [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
         self.orb.alpha=FMOrbStyleValue(@"fadedOpacity");
@@ -2238,17 +2240,19 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     UIView *line=FMOrbLine(button.bounds, self.left);
     [bead addSubview:line];
     self.orbUpdateLine=line;
-    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
-    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
-    if(redBreath || blueBreath || self.orbUpdateAvailable) {
-        FMApplyOrbLineAnimation(line, redBreath, blueBreath, self.orbUpdateAvailable);
+    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL blueEnabled=BoolPref(@"blueBreathingLight",NO);
+    BOOL redPulse = redEnabled && self.orbUpdateAvailable;
+    BOOL bluePulse = blueEnabled && !redPulse;
+    if(redPulse || bluePulse) {
+        FMApplyOrbLineAnimation(line, redPulse, bluePulse);
     }
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
     self.orbNormalAlpha=Clamp(alpha,.25,1);
     self.orbFaded=NO;
-    button.alpha=self.isOpen?0:((self.orbUpdateAvailable||redBreath||blueBreath)?1:self.orbNormalAlpha);
+    button.alpha=self.isOpen?0:(redPulse?1:self.orbNormalAlpha);
     button.userInteractionEnabled=!self.isOpen;
     button.accessibilityElementsHidden=self.isOpen;
     button.accessibilityLabel=@"LC 悬浮菜单";
@@ -3972,10 +3976,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [body addSubview:glass];
     UIView *line=FMOrbLine(body.bounds, left);
     [glass addSubview:line];
-    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
-    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
-    if(redBreath || blueBreath || self.orbUpdateAvailable) {
-        FMApplyOrbLineAnimation(line, redBreath, blueBreath, self.orbUpdateAvailable);
+    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL blueEnabled=BoolPref(@"blueBreathingLight",NO);
+    BOOL redPulse = redEnabled && self.orbUpdateAvailable;
+    BOOL bluePulse = blueEnabled && !redPulse;
+    if(redPulse || bluePulse) {
+        FMApplyOrbLineAnimation(line, redPulse, bluePulse);
     }
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
@@ -4365,7 +4371,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);SetPref(@"glowLine",@YES);
-    SetPref(@"redBreathingLight",@NO);SetPref(@"blueBreathingLight",@NO);
+    SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"roundedTop",@YES);SetPref(@"previewFollowsMode",@YES);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
 }
@@ -6522,7 +6528,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addSlider:FMDockOption(@"orbGlowLength",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbGlowBrightness",nil) to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"发光光条" key:@"glowLine" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
-    [self add:[self switchRow:@"红色呼吸灯" key:@"redBreathingLight" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"红色呼吸灯" key:@"redBreathingLight" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"蓝色呼吸灯" key:@"blueBreathingLight" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
     UILabel *note=FMDockLabelWithWeight(nil,12,UIFontWeightRegular,FMThemeColor(FMColorSecondary));
     self.handleNote=note;
@@ -6533,7 +6539,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSString *shape=FMOrbHandleIsCapsule()?
         @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
         @"凹角弧度与上下延长度控制水滴微珠两端与屏幕贴合的弧度与延展；柔和度越大，微珠和屏幕边缘连得越平缓。";
-    NSString *lightNote=@"\n发光光条是中间线条的发光光晕效果。\n红色呼吸灯：微珠把手线条立即变为鲜红色，以 1.15 秒为周期进行 0.38 ~ 1.0 透明度呼吸闪烁。\n蓝色呼吸灯：纯装饰好看，微珠把手线条呈现蓝色呼吸动效，无更新提示功能。";
+    NSString *lightNote=@"\n发光光条是中间线条的发光光晕效果。\n红色呼吸灯：开启时检测到新版本会红灯呼吸闪烁提醒，关闭后哪怕有新版本也不闪烁（默认开启）。\n蓝色呼吸灯：开启后微珠把手线条会一直保持蓝色呼吸动效，纯装饰美观（默认关闭）。";
     self.handleNote.text=[shape stringByAppendingString:lightNote];
 }
 - (void)addOpacityRows:(UIStackView *)rows {
@@ -6686,13 +6692,6 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)switchChanged:(FMDockSwitch *)toggle {
     SetPref(toggle.key,@(toggle.isOn));
     if([toggle.key isEqualToString:@"compactMode"]) FMLog(@"display-mode",toggle.isOn?@"icons":@"list");
-    if([toggle.key isEqualToString:@"redBreathingLight"] && toggle.isOn) {
-        SetPref(@"blueBreathingLight",@NO);
-        [self rebuild];
-    } else if([toggle.key isEqualToString:@"blueBreathingLight"] && toggle.isOn) {
-        SetPref(@"redBreathingLight",@NO);
-        [self rebuild];
-    }
     // The fade settings and the icon size follow these switches.
     [self applyVisibilityAnimated:YES];
     [self.preview reload];
