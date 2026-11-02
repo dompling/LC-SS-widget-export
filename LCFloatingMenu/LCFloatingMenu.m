@@ -3333,18 +3333,19 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         }
         [box addSubview:mark];
     } else if(locked) {
-        // 单独在 LiveContainer 设置锁定：原生 lock.circle.fill 黄底白锁角标（与红底白锁同尺寸）
+        // 单独在 LiveContainer 设置锁定：原生 lock.circle.fill 暖橙黄底白锁角标（与红底白锁同尺寸）
         CGFloat side=MIN(16,MAX(14,size*.34));
         UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.userInteractionEnabled=NO;
 
+        UIColor *warmYellow=[UIColor colorWithRed:226.0/255.0 green:154.0/255.0 blue:46.0/255.0 alpha:1.0];
         UIImageSymbolConfiguration *sym=[UIImageSymbolConfiguration configurationWithPointSize:side*0.95 weight:UIImageSymbolWeightSemibold];
         if(@available(iOS 15.0, *)) {
-            sym=[sym configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:@[UIColor.whiteColor, UIColor.systemYellowColor]]];
+            sym=[sym configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:@[UIColor.whiteColor, warmYellow]]];
             mark.image=[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym];
         } else {
-            mark.tintColor=UIColor.systemYellowColor;
+            mark.tintColor=warmYellow;
             mark.image=[[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         }
         [box addSubview:mark];
@@ -5413,7 +5414,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     NSDictionary *app=objc_getAssociatedObject(sender,@selector(switchFromRow:));
     if(!app || [LCOrbitGuestService isCurrentGuest:app]) return;
     if(![app[@"builtin"] boolValue] && ![app[@"launchable"] boolValue]) {
-        [self showMessage:@"暂不可切换" details:app[@"status"] ?: @"请从 LC 启动。"];
+        NSString *detail=app[@"status"] ?: @"请从 LC 启动。";
+        if([app[@"hidden"] boolValue]) {
+            detail=@"App 已隐藏无法开启，请解除隐藏状态或去 LiveContainer 验证启用";
+        } else if([app[@"locked"] boolValue]) {
+            detail=@"App 已上锁，请在 LiveContainer 解除锁定状态";
+        }
+        [self showMessage:@"暂不可切换" details:detail];
         return;
     }
     if([app[@"builtin"] boolValue]) {
