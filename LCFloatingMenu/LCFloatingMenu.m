@@ -4088,7 +4088,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，播放视频时可保持屏幕常亮防息屏。" in:s];
         [self settingSwitch:s title:@"左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
         [self settingSwitch:s title:@"锁定禁右横屏" key:@"lockBanRightLandscape" defaultValue:YES tag:24];
-        [self note:@"LC 右横屏有 Bug，默认锁定禁止右横屏。" in:s];
+        [self note:@"LiveContainer 右横屏有 BUG，默认禁止向右横屏，按需启用。" in:s];
         [self settingSwitch:s title:@"保持屏幕常亮" key:@"keepScreenAwake" defaultValue:NO tag:23];
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
