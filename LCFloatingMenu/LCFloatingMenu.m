@@ -975,10 +975,10 @@ static CGFloat FMReadableRowAlpha(void) {
 }
 // The line down the middle of the handle, at rest. Its colour is the view's own fill, so
 // the red it turns while an update waits works the same on both styles.
-// The glow line colour: always a clean bright blue, independent of the user's
-// custom accent theme, so it matches the reference render (screenshot 3).
+// The glow line colour: defaults to clean bright blue (#3899FF), or user custom color from orbGlowColor.
 static UIColor *FMOrbLineColor(void) {
-    return [UIColor colorWithRed:0.22 green:0.60 blue:1.0 alpha:1.0]; // #3899FF
+    NSString *hex=StringPref(@"orbGlowColor",@"#3899FF");
+    return FMFromHex(hex, 0x3899FF);
 }
 // Applies the one colour the line is allowed to have. With the glow setting on, the bar is
 // solid and a soft halo bleeds out of it; with it off, the bar keeps its colour and the halo
@@ -2126,7 +2126,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         if(self.orb && !self.isOpen) self.orb.alpha=1;
         FMApplyOrbLineAnimation(line, YES, NO);
     } else if(bluePulse) {
-        FMApplyOrbLineAnimation(line, NO, YES);
+        if(self.orbFaded) {
+            FMApplyOrbLineRest(line);
+            line.alpha=1;
+        } else {
+            FMApplyOrbLineAnimation(line, NO, YES);
+            if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
+        }
     } else {
         FMApplyOrbLineRest(line);
         line.alpha=1;
@@ -2193,6 +2199,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     BOOL redPulse=redEnabled && self.orbUpdateAvailable;
     if(_morphActive || self.isOpen || !self.orb || self.orbFaded || redPulse) return;
     self.orbFaded=YES;
+    if(self.orbUpdateLine) {
+        [self.orbUpdateLine.layer removeAnimationForKey:@"fm.update.red-breath"];
+        FMApplyOrbLineRest(self.orbUpdateLine);
+        self.orbUpdateLine.alpha=1;
+    }
     [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
         self.orb.alpha=FMOrbStyleValue(@"fadedOpacity");
     } completion:nil];
@@ -2200,11 +2211,13 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)wakeOrb {
     if(!self.orb || self.isOpen || _morphActive) return;
     [self cancelOrbFade];
-    if(self.orbFaded || self.orb.alpha < (self.orbNormalAlpha?:0.72) - 0.05) {
+    BOOL wasFaded = self.orbFaded || self.orb.alpha < (self.orbNormalAlpha?:0.72) - 0.05;
+    if(wasFaded) {
         self.orbFaded=NO;
         [UIView animateWithDuration:0.20 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
             self.orb.alpha=self.orbNormalAlpha?:0.72;
         } completion:nil];
+        [self applyOrbUpdateIndicator];
     }
     if(BoolPref(@"idleFade",YES)) {
         [self scheduleOrbFade];
@@ -4372,6 +4385,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
+    SetPref(@"orbGlowColor",@"#3899FF");
     SetPref(@"roundedTop",@YES);SetPref(@"previewFollowsMode",@YES);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
 }
@@ -6466,6 +6480,30 @@ static UIView *FMDockCard(UIStackView *rows) {
     line.spacing=12;
     return FMDockRow(line,10,YES,52);
 }
+- (UIView *)colorRow:(NSString *)title key:(NSString *)key defaultHex:(NSString *)defaultHex {
+    UILabel *label=FMDockLabelWithWeight(title,14.5,UIFontWeightMedium,FMThemeColor(FMColorText));
+    UIColorWell *well=[UIColorWell new];
+    well.title=title;
+    well.supportsAlpha=NO;
+    NSString *hex=StringPref(key,defaultHex);
+    well.selectedColor=FMFromHex(hex,0x3899FF);
+    objc_setAssociatedObject(well,"FMColorKey",key,OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [well addTarget:self action:@selector(colorWellChanged:) forControlEvents:UIControlEventValueChanged];
+    [well setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    UIStackView *line=[[UIStackView alloc] initWithArrangedSubviews:@[label,well]];
+    line.axis=UILayoutConstraintAxisHorizontal;
+    line.alignment=UIStackViewAlignmentCenter;
+    line.spacing=12;
+    return FMDockRow(line,10,YES,52);
+}
+- (void)colorWellChanged:(UIColorWell *)well {
+    NSString *key=objc_getAssociatedObject(well,"FMColorKey");
+    if(!key) return;
+    NSString *hex=FMHex(well.selectedColor);
+    if(hex) SetPref(key,hex);
+    [self.preview reload];
+    if(self.dockSettingsChanged) self.dockSettingsChanged();
+}
 // A segmented choice under an optional title; the stored number is the chosen index.
 - (UIView *)segmentRow:(NSString *)title items:(NSArray<NSString *> *)items key:(NSString *)key selected:(NSInteger)selected {
     FMDockSegments *control=[[FMDockSegments alloc] initWithItems:items];
@@ -6527,9 +6565,10 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addSlider:FMDockOption(@"orbScale",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbGlowLength",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbGlowBrightness",nil) to:rows group:group when:FMDockWhenAlways];
-    [self add:[self switchRow:@"发光光条" key:@"glowLine" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"发光呼吸灯" key:@"glowLine" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"红色呼吸灯" key:@"redBreathingLight" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
-    [self add:[self switchRow:@"蓝色呼吸灯" key:@"blueBreathingLight" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"装饰呼吸灯" key:@"blueBreathingLight" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self colorRow:@"呼吸灯颜色" key:@"orbGlowColor" defaultHex:@"#3899FF"] to:rows group:group when:FMDockWhenAlways];
     UILabel *note=FMDockLabelWithWeight(nil,12,UIFontWeightRegular,FMThemeColor(FMColorSecondary));
     self.handleNote=note;
     [self applyHandleNote];
@@ -6539,7 +6578,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSString *shape=FMOrbHandleIsCapsule()?
         @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
         @"凹角弧度与上下延长度控制水滴微珠两端与屏幕贴合的弧度与延展；柔和度越大，微珠和屏幕边缘连得越平缓。";
-    NSString *lightNote=@"\n发光光条是中间线条的发光光晕效果。\n红色呼吸灯：开启时检测到新版本会红灯呼吸闪烁提醒，关闭后哪怕有新版本也不闪烁（默认开启）。\n蓝色呼吸灯：开启后微珠把手线条会一直保持蓝色呼吸动效，纯装饰美观（默认关闭）。";
+    NSString *lightNote=@"\n发光呼吸灯：开启后线条带有发光光晕效果，关闭不影响呼吸灯闪烁。\n红色呼吸灯：开启时检测到新版本会红灯呼吸闪烁提醒，关闭后哪怕有新版本也不闪烁（默认开启）。\n装饰呼吸灯：开启后微珠把手线条会一直呼吸闪烁，纯装饰美观（默认关闭）。\n呼吸灯颜色：自定义呼吸灯与光条线条的颜色，支持网格、光谱、滑块自由选取。";
     self.handleNote.text=[shape stringByAppendingString:lightNote];
 }
 - (void)addOpacityRows:(UIStackView *)rows {
