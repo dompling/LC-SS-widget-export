@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.18"
+#define FM_MENU_VERSION @"1.0.19"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -391,6 +391,8 @@ static NSArray<NSDictionary *> *FMOrbStyleOptions(void) {
     dispatch_once(&once, ^{ options=@[
         // The first four shape the handle, with the wloc dock's ranges and steps.
         @{@"key":@"orbHandleReach",@"title":@"凸出宽度",@"min":@(14),@"max":@(34),@"default":@(22),@"unit":@"点",@"step":@(1)},
+        @{@"key":@"orbDropletCurve",@"title":@"凹角弧度",@"min":@(0.4),@"max":@(2.0),@"default":@(1.0),@"unit":@"%",@"step":@(0.05)},
+        @{@"key":@"orbDropletExtend",@"title":@"上下延长度",@"min":@(0.4),@"max":@(2.5),@"default":@(1.0),@"unit":@"%",@"step":@(0.05)},
         @{@"key":@"orbDropletBase",@"title":@"底座厚度",@"min":@(0),@"max":@(16),@"default":@(0),@"unit":@"点",@"step":@(1)},
         @{@"key":@"orbHandleLength",@"title":@"长度",@"min":@(56),@"max":@(140),@"default":@(80),@"unit":@"点",@"step":@(2)},
         @{@"key":@"orbCapsuleCorner",@"title":@"圆角",@"min":@(0.55),@"max":@(1),@"default":@(0.83),@"unit":@"%",@"step":@(0.01)},
@@ -550,12 +552,16 @@ static FMHandleMetrics FMOrbHandleMetrics(BOOL capsule) {
     CGFloat length=FMOrbStyleValue(@"orbHandleLength")*scale;
     CGFloat softness=FMOrbStyleValue(@"orbSoftness");
     CGFloat baseGap=!capsule ? FMOrbStyleValue(@"orbDropletBase")*scale : 0;
-    if(baseGap <= 0.001) {
+    CGFloat curveFactor=!capsule ? FMOrbStyleValue(@"orbDropletCurve") : 1.0;
+    CGFloat extendFactor=!capsule ? FMOrbStyleValue(@"orbDropletExtend") : 1.0;
+    if(curveFactor<=0.01) curveFactor=1.0;
+    if(extendFactor<=0.01) extendFactor=1.0;
+    if(baseGap <= 0.001 && fabs(curveFactor-1.0)<1e-6 && fabs(extendFactor-1.0)<1e-6) {
         return FMHandleMetricsFor(reach,length,softness,capsule,FMOrbStyleValue(@"orbCapsuleCorner"));
     }
     CGFloat totalReach=reach + baseGap;
-    CGFloat depth=baseGap + MIN(.586*reach*softness,.8*reach);
-    CGFloat tail=depth*(.675/.586);
+    CGFloat depth=(baseGap + MIN(.586*reach*softness,.8*reach))*curveFactor;
+    CGFloat tail=depth*(.675/.586)*extendFactor;
     // cornerX 与 cornerY 严格由微珠本体 reach 决定，保持外侧圆头尺寸固定
     CGFloat cornerX=.413*reach, cornerY=.525*reach;
     FMHandleMetrics m={totalReach,length/2,tail,depth,tail,depth,cornerX,cornerY,.575};
@@ -1002,6 +1008,30 @@ static void FMApplyOrbLineTint(UIView *line,UIColor *color) {
 }
 static void FMApplyOrbLineRest(UIView *line) {
     FMApplyOrbLineTint(line,FMOrbLineColor());
+}
+static void FMApplyOrbLineAnimation(UIView *line, BOOL redBreathing, BOOL blueBreathing, BOOL hasUpdate) {
+    if(!line) return;
+    [line.layer removeAnimationForKey:@"fm.update.red-breath"];
+    BOOL red = redBreathing || hasUpdate;
+    BOOL blue = blueBreathing && !red;
+    if(red) {
+        FMApplyOrbLineTint(line,[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1]);
+    } else if(blue) {
+        FMApplyOrbLineTint(line,FMOrbLineColor());
+    } else {
+        FMApplyOrbLineRest(line);
+    }
+    line.alpha = 1;
+    if((red || blue) && !UIAccessibilityIsReduceMotionEnabled()) {
+        CABasicAnimation *pulse=[CABasicAnimation animationWithKeyPath:@"opacity"];
+        pulse.fromValue=@.38;
+        pulse.toValue=@1;
+        pulse.duration=1.15;
+        pulse.autoreverses=YES;
+        pulse.repeatCount=HUGE_VALF;
+        pulse.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [line.layer addAnimation:pulse forKey:@"fm.update.red-breath"];
+    }
 }
 // Separator color that adapts smoothly between light and dark modes with clear contrast.
 static UIColor *FMSeparatorColor(void) {
@@ -2086,8 +2116,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)applyOrbUpdateIndicator {
     UIView *line=self.orbUpdateLine;
     if(!line) return;
-    [line.layer removeAnimationForKey:@"fm.update.red-breath"];
-    if(!self.orbUpdateAvailable) {
+    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
+    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
+    BOOL activeBreath=redBreath || blueBreath || self.orbUpdateAvailable;
+    if(!activeBreath) {
+        [line.layer removeAnimationForKey:@"fm.update.red-breath"];
         FMApplyOrbLineRest(line);
         line.alpha=1;
         if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
@@ -2096,19 +2129,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self cancelOrbFade];
     self.orbFaded=NO;
     if(self.orb && !self.isOpen) self.orb.alpha=1;
-    // The second and only other colour: the same bar in red, with the same halo.
-    FMApplyOrbLineTint(line,[UIColor colorWithRed:1 green:.17 blue:.23 alpha:1]);
-    line.alpha=1;
-    if(!UIAccessibilityIsReduceMotionEnabled()) {
-        CABasicAnimation *pulse=[CABasicAnimation animationWithKeyPath:@"opacity"];
-        pulse.fromValue=@.38;
-        pulse.toValue=@1;
-        pulse.duration=1.15;
-        pulse.autoreverses=YES;
-        pulse.repeatCount=HUGE_VALF;
-        pulse.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [line.layer addAnimation:pulse forKey:@"fm.update.red-breath"];
-    }
+    FMApplyOrbLineAnimation(line, redBreath, blueBreath, self.orbUpdateAvailable);
 }
 - (void)checkOrbUpdateIfNeeded {
     if(!BoolPref(@"autoCheckUpdate",YES)) {
@@ -2152,7 +2173,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 
 - (void)scheduleOrbFade {
     [self.orbFadeTimer invalidate];
-    if(!BoolPref(@"idleFade",YES) || self.orbUpdateAvailable) return;
+    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
+    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
+    if(!BoolPref(@"idleFade",YES) || self.orbUpdateAvailable || redBreath || blueBreath) return;
     if(self.isOpen || !self.orb) return;
     __weak typeof(self) weakSelf=self;
     self.orbFadeTimer=[NSTimer scheduledTimerWithTimeInterval:FMOrbStyleValue(@"fadeDelay") repeats:NO block:^(NSTimer * _Nonnull timer) {
@@ -2164,7 +2187,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     self.orbFadeTimer=nil;
 }
 - (void)fadeOrb {
-    if(_morphActive || self.isOpen || !self.orb || self.orbFaded || self.orbUpdateAvailable) return;
+    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
+    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
+    if(_morphActive || self.isOpen || !self.orb || self.orbFaded || self.orbUpdateAvailable || redBreath || blueBreath) return;
     self.orbFaded=YES;
     [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionCurveEaseInOut|UIViewAnimationOptionAllowUserInteraction animations:^{
         self.orb.alpha=FMOrbStyleValue(@"fadedOpacity");
@@ -2213,12 +2238,17 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     UIView *line=FMOrbLine(button.bounds, self.left);
     [bead addSubview:line];
     self.orbUpdateLine=line;
+    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
+    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
+    if(redBreath || blueBreath || self.orbUpdateAvailable) {
+        FMApplyOrbLineAnimation(line, redBreath, blueBreath, self.orbUpdateAvailable);
+    }
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
     self.orbNormalAlpha=Clamp(alpha,.25,1);
     self.orbFaded=NO;
-    button.alpha=self.isOpen?0:(self.orbUpdateAvailable?1:self.orbNormalAlpha);
+    button.alpha=self.isOpen?0:((self.orbUpdateAvailable||redBreath||blueBreath)?1:self.orbNormalAlpha);
     button.userInteractionEnabled=!self.isOpen;
     button.accessibilityElementsHidden=self.isOpen;
     button.accessibilityLabel=@"LC 悬浮菜单";
@@ -3940,7 +3970,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     FMApplySideNotch(glass,body.layer,left,YES,YES);
     FMAddOrbCapsule(glass,left);
     [body addSubview:glass];
-    [glass addSubview:FMOrbLine(body.bounds, left)];
+    UIView *line=FMOrbLine(body.bounds, left);
+    [glass addSubview:line];
+    BOOL redBreath=BoolPref(@"redBreathingLight",NO);
+    BOOL blueBreath=BoolPref(@"blueBreathingLight",NO);
+    if(redBreath || blueBreath || self.orbUpdateAvailable) {
+        FMApplyOrbLineAnimation(line, redBreath, blueBreath, self.orbUpdateAvailable);
+    }
     CGFloat alpha=BoolPref([@"override." stringByAppendingString:GuestID()],NO)?
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
@@ -4329,6 +4365,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);SetPref(@"glowLine",@YES);
+    SetPref(@"redBreathingLight",@NO);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"roundedTop",@YES);SetPref(@"previewFollowsMode",@YES);
     SetPref(@"glassTint",@(0));SetPref(@"clearGlass",@NO);
 }
@@ -6474,6 +6511,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self add:[self segmentRow:nil items:@[@"胶囊",@"水滴"] key:@"orbHandleStyle" selected:FMOrbHandleIsCapsule()?0:1]
            to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbHandleReach",nil) to:rows group:group when:FMDockWhenAlways];
+    [self addSlider:FMDockOption(@"orbDropletCurve",nil) to:rows group:group when:FMDockWhenDroplet];
+    [self addSlider:FMDockOption(@"orbDropletExtend",nil) to:rows group:group when:FMDockWhenDroplet];
     [self addSlider:FMDockOption(@"orbDropletBase",nil) to:rows group:group when:FMDockWhenDroplet];
     [self addSlider:FMDockOption(@"orbHandleLength",nil) to:rows group:group when:FMDockWhenAlways];
     // Only the capsule has a corner setting.
@@ -6483,6 +6522,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addSlider:FMDockOption(@"orbGlowLength",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbGlowBrightness",nil) to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"发光光条" key:@"glowLine" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"红色呼吸灯" key:@"redBreathingLight" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
+    [self add:[self switchRow:@"蓝色呼吸灯" key:@"blueBreathingLight" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
     UILabel *note=FMDockLabelWithWeight(nil,12,UIFontWeightRegular,FMThemeColor(FMColorSecondary));
     self.handleNote=note;
     [self applyHandleNote];
@@ -6491,9 +6532,9 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)applyHandleNote {
     NSString *shape=FMOrbHandleIsCapsule()?
         @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
-        @"柔和度越大，微珠和屏幕边缘连得越平缓。";
-    self.handleNote.text=[shape stringByAppendingString:
-        @"\n发光光条是中间那条线的另一种画法：更粗、顶亮底深、带一圈光晕；关掉就回到原来那条细线。有新版本时两种都会变红呼吸。"];
+        @"凹角弧度与上下延长度控制水滴微珠两端与屏幕贴合的弧度与延展；柔和度越大，微珠和屏幕边缘连得越平缓。";
+    NSString *lightNote=@"\n发光光条是中间线条的发光光晕效果。\n红色呼吸灯：微珠把手线条立即变为鲜红色，以 1.15 秒为周期进行 0.38 ~ 1.0 透明度呼吸闪烁。\n蓝色呼吸灯：纯装饰好看，微珠把手线条呈现蓝色呼吸动效，无更新提示功能。";
+    self.handleNote.text=[shape stringByAppendingString:lightNote];
 }
 - (void)addOpacityRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupOpacity;
@@ -6645,6 +6686,13 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)switchChanged:(FMDockSwitch *)toggle {
     SetPref(toggle.key,@(toggle.isOn));
     if([toggle.key isEqualToString:@"compactMode"]) FMLog(@"display-mode",toggle.isOn?@"icons":@"list");
+    if([toggle.key isEqualToString:@"redBreathingLight"] && toggle.isOn) {
+        SetPref(@"blueBreathingLight",@NO);
+        [self rebuild];
+    } else if([toggle.key isEqualToString:@"blueBreathingLight"] && toggle.isOn) {
+        SetPref(@"redBreathingLight",@NO);
+        [self rebuild];
+    }
     // The fade settings and the icon size follow these switches.
     [self applyVisibilityAnimated:YES];
     [self.preview reload];
