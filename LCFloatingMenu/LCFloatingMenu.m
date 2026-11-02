@@ -191,6 +191,10 @@ static CGFloat FloatPref(NSString *key,CGFloat def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v doubleValue]:def;
 }
+static NSString *StringPref(NSString *key,NSString *def) {
+    id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
+    return [v isKindOfClass:NSString.class]?v:def;
+}
 static void SetPref(NSString *key,id value) {
     [HostDefaults() setObject:value forKey:Pref(key)];
     NSError *error=[LCOrbitStorage lastError];
