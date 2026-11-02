@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.22"
+#define FM_MENU_VERSION @"1.0.23"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -1837,6 +1837,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     NSInteger _scrubIndex;
     BOOL _scrubActive,_scrubCancelling;
     UISelectionFeedbackGenerator *_scrubTick;
+    BOOL _hiddenAppsExpanded;
 }
 + (instancetype)shared {
     static FMManager *m;
@@ -2149,6 +2150,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     self.appsHeaderTiles=nil;
     self.appsScroll=nil;
     self.appsScrollRestorePending=NO;
+    _hiddenAppsExpanded=NO;
     [self.panel removeFromSuperview]; self.panel=nil;
     [self.dismissLayer removeFromSuperview]; self.dismissLayer=nil;
 }
@@ -3725,8 +3727,22 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)appPage:(UIStackView *)stack {
     NSArray<NSDictionary*> *apps=[self orderedAppsForMenu];
+    NSMutableArray<NSDictionary *> *normalApps=[NSMutableArray array];
+    NSMutableArray<NSDictionary *> *hiddenApps=[NSMutableArray array];
+    for(NSDictionary *app in apps) {
+        if([app[@"hidden"] boolValue]) [hiddenApps addObject:app];
+        else [normalApps addObject:app];
+    }
+    NSArray<NSDictionary *> *displayApps = apps;
+    if(hiddenApps.count > 1 && !_hiddenAppsExpanded) {
+        displayApps = normalApps;
+    }
+
     if(BoolPref(@"compactMode",NO)) {
-        for(NSDictionary *app in apps) {
+        if(hiddenApps.count >= 2 && _hiddenAppsExpanded) {
+            [self addRow:[self compactHiddenCollapseBarWithCount:hiddenApps.count] height:22 to:stack];
+        }
+        for(NSDictionary *app in displayApps) {
             // Preserve the 63pt full-width hit area, independent of the
             // smaller 46pt icon and its painted backing.
             UIControl *row=[[UIControl alloc] initWithFrame:CGRectMake(0,0,88,63)];
@@ -3776,7 +3792,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                                      app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [row addTarget:self action:@selector(switchFromRow:)
                 forControlEvents:UIControlEventTouchUpInside];
-                        if([LCOrbitMultitask isRunningGuest:app]) {
+            if([LCOrbitMultitask isRunningGuest:app]) {
                 CGFloat closeSize=MIN(32,24/MAX(.70,self.panelContentScale?:1));
                 UIView *container=[[UIView alloc] initWithFrame:CGRectMake(0,0,70,63)];
                 // A bounded corner target preserves the icon's center for
@@ -3809,9 +3825,25 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [self addRow:container height:63 to:stack];
             } else [self addRow:row height:63 to:stack];
         }
+        if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
+            CGFloat iconSize=FMMenuStyleValue(@"menuCompactIconSize");
+            CGFloat totalHeight=(hiddenApps.count - 1) * 14.0 + iconSize;
+            UIView *deck=[self compactHiddenAppsStackView:hiddenApps];
+            [self addRow:deck height:totalHeight to:stack];
+        }
     } else {
-        for(NSDictionary *app in apps)
+        if(hiddenApps.count >= 2 && _hiddenAppsExpanded) {
+            [self addRow:[self standardHiddenCollapseBarWithCount:hiddenApps.count] height:26 to:stack];
+        }
+        for(NSDictionary *app in displayApps) {
             [self addRow:[self appRow:app] height:[self appRowHeight] to:stack];
+        }
+        if(hiddenApps.count >= 2 && !_hiddenAppsExpanded) {
+            CGFloat rowHeight=[self appRowHeight];
+            CGFloat totalHeight=(hiddenApps.count - 1) * 22.0 + rowHeight;
+            UIView *deck=[self standardHiddenAppsStackView:hiddenApps];
+            [self addRow:deck height:totalHeight to:stack];
+        }
     }
     if(!apps.count) {
         UILabel *empty=[self label:@"暂无应用" size:13 weight:UIFontWeightMedium];
@@ -3857,6 +3889,138 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     self.appsHeaderTiles=tiles;
 }
+
+- (void)toggleHiddenAppsExpansion {
+    _hiddenAppsExpanded = !_hiddenAppsExpanded;
+    if(BoolPref(@"haptic", YES)) {
+        if(@available(iOS 13.0, *)) {
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        }
+    }
+    [UIView transitionWithView:self.appsScroll duration:0.32 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+        [self refreshAppsContent];
+    } completion:nil];
+}
+
+- (UIView *)compactHiddenAppsStackView:(NSArray<NSDictionary *> *)hiddenApps {
+    CGFloat iconSize=FMMenuStyleValue(@"menuCompactIconSize");
+    CGFloat step=14.0;
+    CGFloat totalHeight=(hiddenApps.count - 1) * step + iconSize;
+    UIControl *stackControl=[UIControl new];
+    stackControl.translatesAutoresizingMaskIntoConstraints=NO;
+    stackControl.backgroundColor=UIColor.clearColor;
+
+    for(NSInteger i=0; i<hiddenApps.count; i++) {
+        NSDictionary *app=hiddenApps[i];
+        UIView *icon=[self iconViewForApp:app size:iconSize];
+        icon.translatesAutoresizingMaskIntoConstraints=NO;
+        icon.userInteractionEnabled=NO;
+        icon.layer.borderWidth=.55;
+        icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
+                                FMMenuDark()?.54:.36].CGColor;
+        icon.layer.shadowColor=UIColor.blackColor.CGColor;
+        icon.layer.shadowOpacity=FMMenuDark()?.30:.16;
+        icon.layer.shadowRadius=4;
+        icon.layer.shadowOffset=CGSizeMake(0, -2);
+        [stackControl addSubview:icon];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [icon.centerXAnchor constraintEqualToAnchor:stackControl.centerXAnchor],
+            [icon.topAnchor constraintEqualToAnchor:stackControl.topAnchor constant:i * step],
+            [icon.widthAnchor constraintEqualToConstant:iconSize],
+            [icon.heightAnchor constraintEqualToConstant:iconSize]
+        ]];
+    }
+    [stackControl addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
+    return stackControl;
+}
+
+- (UIView *)compactHiddenCollapseBarWithCount:(NSUInteger)count {
+    UIControl *bar=[UIControl new];
+    bar.translatesAutoresizingMaskIntoConstraints=NO;
+    bar.backgroundColor=UIColor.clearColor;
+    UIImageView *chevron=[[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"chevron.compact.up"]];
+    chevron.translatesAutoresizingMaskIntoConstraints=NO;
+    chevron.tintColor=FMThemeColor(FMColorSecondary);
+    chevron.contentMode=UIViewContentModeScaleAspectFit;
+    chevron.userInteractionEnabled=NO;
+    [bar addSubview:chevron];
+    [NSLayoutConstraint activateConstraints:@[
+        [chevron.centerXAnchor constraintEqualToAnchor:bar.centerXAnchor],
+        [chevron.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [chevron.widthAnchor constraintEqualToConstant:24],
+        [chevron.heightAnchor constraintEqualToConstant:20]
+    ]];
+    [bar addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
+    return bar;
+}
+
+- (UIView *)standardHiddenAppsStackView:(NSArray<NSDictionary *> *)hiddenApps {
+    CGFloat rowHeight=[self appRowHeight];
+    CGFloat step=22.0;
+    CGFloat totalHeight=(hiddenApps.count - 1) * step + rowHeight;
+    UIControl *stackControl=[UIControl new];
+    stackControl.translatesAutoresizingMaskIntoConstraints=NO;
+    stackControl.backgroundColor=UIColor.clearColor;
+
+    for(NSInteger i=0; i<hiddenApps.count; i++) {
+        NSDictionary *app=hiddenApps[i];
+        UIView *card=[self appRow:app];
+        card.translatesAutoresizingMaskIntoConstraints=NO;
+        card.userInteractionEnabled=NO;
+        card.layer.shadowColor=UIColor.blackColor.CGColor;
+        card.layer.shadowOpacity=FMMenuDark()?.35:.16;
+        card.layer.shadowRadius=4;
+        card.layer.shadowOffset=CGSizeMake(0, -2);
+        card.layer.borderWidth=0.5;
+        card.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
+                                FMMenuDark()?.20:.35].CGColor;
+        [stackControl addSubview:card];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [card.leadingAnchor constraintEqualToAnchor:stackControl.leadingAnchor],
+            [card.trailingAnchor constraintEqualToAnchor:stackControl.trailingAnchor],
+            [card.topAnchor constraintEqualToAnchor:stackControl.topAnchor constant:i * step],
+            [card.heightAnchor constraintEqualToConstant:rowHeight]
+        ]];
+    }
+    [stackControl addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
+    return stackControl;
+}
+
+- (UIView *)standardHiddenCollapseBarWithCount:(NSUInteger)count {
+    UIControl *bar=[UIControl new];
+    bar.translatesAutoresizingMaskIntoConstraints=NO;
+    bar.backgroundColor=UIColor.clearColor;
+
+    UILabel *title=[self label:[NSString stringWithFormat:@"已隐藏应用 (%lu)", (unsigned long)count] size:11 weight:UIFontWeightMedium];
+    title.translatesAutoresizingMaskIntoConstraints=NO;
+    title.textColor=FMThemeColor(FMColorSecondary);
+    title.userInteractionEnabled=NO;
+    [bar addSubview:title];
+
+    UIImageView *chevron=[[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"chevron.up"]];
+    chevron.translatesAutoresizingMaskIntoConstraints=NO;
+    chevron.tintColor=FMThemeColor(FMColorSecondary);
+    chevron.contentMode=UIViewContentModeScaleAspectFit;
+    chevron.userInteractionEnabled=NO;
+    [bar addSubview:chevron];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [title.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor constant:14],
+        [title.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [chevron.trailingAnchor constraintEqualToAnchor:bar.trailingAnchor constant:-14],
+        [chevron.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [chevron.widthAnchor constraintEqualToConstant:16],
+        [chevron.heightAnchor constraintEqualToConstant:16]
+    ]];
+
+    [bar addTarget:self action:@selector(toggleHiddenAppsExpansion) forControlEvents:UIControlEventTouchUpInside];
+    return bar;
+}
+
 // The apps pinned as favorites, in the order they were pinned, at most four. Empty when
 // every app is pinned: the strip is a shortcut into a longer list, and repeating the whole
 // list above the rows would only say the same thing twice.
