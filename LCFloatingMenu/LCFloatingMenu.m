@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.26"
+#define FM_MENU_VERSION @"1.0.27"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -1600,7 +1600,7 @@ static UIControl *FMSettingsNavigationRowCustom(NSString *name,NSString *subtitl
     return FMSettingsNavigationRow(name,subtitle,symbol,badgeColor,target,action);
 }
 
-@interface FMSettingsRootController : UIViewController
+@interface FMSettingsRootController : UIViewController <UIDocumentPickerDelegate>
 @property(nonatomic,strong) UIScrollView *contentScroll;
 @property(nonatomic,weak) UILabel *updateStatusLabel;
 @property(nonatomic,assign) BOOL checkingUpdate;
@@ -1608,6 +1608,7 @@ static UIControl *FMSettingsNavigationRowCustom(NSString *name,NSString *subtitl
 @property(nonatomic,strong) NSMutableSet<NSString *> *automaticallyOfferedVersions;
 @property(nonatomic,strong) id updateReleaseObserver;
 @property(nonatomic,strong) id updateActivationObserver;
+@property(nonatomic,assign) BOOL isImportingConfig;
 - (void)tryAutomaticUpdatePrompt;
 - (void)rebuild;
 @end
@@ -5496,6 +5497,141 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [super viewDidAppear:animated];
     [self tryAutomaticUpdatePrompt];
 }
+- (void)presentAlertTitle:(NSString *)title message:(NSString *)message {
+    if(![self isSettingsRootVisible]) return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:title
+        message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)backupConfigToiCloud {
+    if(self.presentedViewController) return;
+    NSDictionary *prefs=[[LCOrbitStorage preferences] dictionaryRepresentation];
+    NSMutableDictionary *doc=[NSMutableDictionary dictionary];
+    doc[@"name"]=@"LCFloatingMenu";
+    doc[@"version"]=FM_MENU_VERSION;
+    doc[@"exportTime"]=[NSDateFormatter localizedStringFromDate:[NSDate date]
+                                                    dateStyle:NSDateFormatterMediumStyle
+                                                    timeStyle:NSDateFormatterMediumStyle];
+    doc[@"preferences"]=prefs?:@{};
+
+    NSError *error=nil;
+    NSData *data=[NSJSONSerialization dataWithJSONObject:doc
+        options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:&error];
+    if(!data || error) {
+        [self presentAlertTitle:@"备份失败" message:error.localizedDescription?:@"JSON 序列化失败。"];
+        return;
+    }
+    NSString *tempDir=NSTemporaryDirectory();
+    NSString *file=[tempDir stringByAppendingPathComponent:@"LCFloatingMenu.json"];
+    if(![data writeToFile:file options:NSDataWritingAtomic error:&error]) {
+        [self presentAlertTitle:@"备份失败" message:error.localizedDescription?:@"写入临时文件失败。"];
+        return;
+    }
+    self.isImportingConfig=NO;
+    NSURL *fileURL=[NSURL fileURLWithPath:file];
+    UIDocumentPickerViewController *picker=nil;
+    if(@available(iOS 14.0, *)) {
+        picker=[[UIDocumentPickerViewController alloc] initForExportingURLs:@[fileURL] asCopy:YES];
+    } else {
+        picker=[[UIDocumentPickerViewController alloc] initWithURL:fileURL inMode:UIDocumentPickerModeExportToService];
+    }
+    picker.delegate=self;
+    picker.modalPresentationStyle=UIModalPresentationFormSheet;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+- (void)restoreConfigFromiCloud {
+    if(self.presentedViewController) return;
+    self.isImportingConfig=YES;
+    UIDocumentPickerViewController *picker=nil;
+    if(@available(iOS 14.0, *)) {
+        id jsonType=[NSClassFromString(@"UTType") performSelector:@selector(typeWithIdentifier:) withObject:@"public.json"];
+        if(jsonType) {
+            picker=[[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[jsonType] asCopy:YES];
+        } else {
+            picker=[[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.json"] inMode:UIDocumentPickerModeImport];
+        }
+    } else {
+        picker=[[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.json"] inMode:UIDocumentPickerModeImport];
+    }
+    picker.delegate=self;
+    picker.modalPresentationStyle=UIModalPresentationFormSheet;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    if(!self.isImportingConfig) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            [self presentAlertTitle:@"备份完成" message:@"配置已成功导出并保存到云端文件（覆盖为最新备份）。"];
+        });
+        return;
+    }
+    self.isImportingConfig=NO;
+    NSURL *url=urls.firstObject;
+    if(!url) return;
+    BOOL security=[url startAccessingSecurityScopedResource];
+    NSError *readError=nil;
+    NSData *data=[NSData dataWithContentsOfURL:url options:0 error:&readError];
+    if(security) [url stopAccessingSecurityScopedResource];
+
+    if(!data || readError) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            [self presentAlertTitle:@"恢复失败" message:readError.localizedDescription?:@"无法读取所选备份文件。"];
+        });
+        return;
+    }
+
+    NSError *jsonError=nil;
+    id parsed=[NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+    if(![parsed isKindOfClass:NSDictionary.class] || jsonError) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            [self presentAlertTitle:@"恢复失败" message:@"备份文件内容损坏或不是有效的 JSON 配置。"];
+        });
+        return;
+    }
+
+    NSDictionary *doc=(NSDictionary *)parsed;
+    NSDictionary *prefs=[doc[@"preferences"] isKindOfClass:NSDictionary.class]?doc[@"preferences"]:doc;
+    BOOL hasValidKey=NO;
+    for(id k in prefs) {
+        if([k isKindOfClass:NSString.class] &&
+           ([(NSString *)k hasPrefix:@"LCFloatingMenu."] || [(NSString *)k hasPrefix:@"LCOrbit."])) {
+            hasValidKey=YES;break;
+        }
+    }
+    if(!hasValidKey) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            [self presentAlertTitle:@"恢复失败" message:@"备份文件中未发现有效的 LCFloatingMenu 配置项。"];
+        });
+        return;
+    }
+
+    LCOrbitPreferences *storage=[LCOrbitStorage preferences];
+    NSUInteger importedCount=0;
+    for(id key in prefs) {
+        if(![key isKindOfClass:NSString.class]) continue;
+        id val=prefs[key];
+        [storage setObject:val forKey:(NSString *)key];
+        importedCount++;
+    }
+    [storage synchronize];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        UIUserInterfaceStyle skin=FMMenuOverride();
+        FMManager *mgr=[FMManager shared];
+        mgr.overlayView.overrideUserInterfaceStyle=skin;
+        if(mgr.settingsWindow) mgr.settingsWindow.overrideUserInterfaceStyle=skin;
+        [mgr refreshUI];
+        [self rebuild];
+        [self presentAlertTitle:@"配置恢复成功"
+            message:[NSString stringWithFormat:@"已成功从云端备份恢复 %lu 项自定义设置，并已即时生效！",(unsigned long)importedCount]];
+    });
+}
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentAtURL:(NSURL *)url {
+    if(url) [self documentPicker:controller didPickDocumentsAtURLs:@[url]];
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    self.isImportingConfig=NO;
+}
 - (void)presentUpdateResult:(NSString *)title message:(NSString *)message showRepository:(BOOL)showRepository {
     if(![self isSettingsRootVisible] || self.presentedViewController) return;
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:title
@@ -5706,7 +5842,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIView *aboutGap=[UIView new];
     [aboutGap.heightAnchor constraintEqualToConstant:14].active=YES;
     [stack addArrangedSubview:aboutGap];
-    [manager section:@"版本与更新" sub:nil in:stack];
+    [manager section:@"配置与更新" sub:nil in:stack];
     NSString *version=[NSString stringWithFormat:@"v%@ · %@",FM_MENU_VERSION,FMCommitSummary()];
     UIControl *versionRow=[self navigationRow:@"当前版本" subtitle:version
         symbol:@"number.circle"
@@ -5721,6 +5857,20 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:checkRow];
+    UIControl *backupRow=[self navigationRow:@"备份配置到 iCloud"
+        subtitle:@"导出并覆盖保存到 iCloud 云盘 (JSON)"
+        symbol:@"icloud.and.arrow.up"
+        badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
+        action:@selector(backupConfigToiCloud)];
+    [backupRow.heightAnchor constraintEqualToConstant:60].active=YES;
+    [stack addArrangedSubview:backupRow];
+    UIControl *restoreRow=[self navigationRow:@"从 iCloud 恢复配置"
+        subtitle:@"选择 iCloud 云盘备份恢复设置"
+        symbol:@"icloud.and.arrow.down"
+        badgeColor:[UIColor colorWithRed:255/255.0 green:149/255.0 blue:0/255.0 alpha:1.0]
+        action:@selector(restoreConfigFromiCloud)];
+    [restoreRow.heightAnchor constraintEqualToConstant:60].active=YES;
+    [stack addArrangedSubview:restoreRow];
     if(FMHostUI()) {
         UIControl *access=[self navigationRow:@"GitHub 访问" subtitle:@"账号、Token 与连接验证"
             symbol:@"key.fill"

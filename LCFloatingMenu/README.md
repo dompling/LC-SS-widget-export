@@ -245,7 +245,7 @@ LCOrbit/Build/build.sh dist/LCFloatingMenu.dylib
 
 ### GitHub 访问配置
 
-LC 主界面中进入 **微珠设置 → 版本与更新 → GitHub 访问**。填写个人访问 Token，账号可选用于核对 Token 的实际用户；保存后可“验证连接”。Token 输入不回显，留空保留原 Token；“清除凭据”恢复匿名请求。后台更新提示和手动检测更新共用配置，公开插件文件下载及 SHA-256 校验流程保持不变。
+LC 主界面中进入 **微珠设置 → 配置与更新 → GitHub 访问**。填写个人访问 Token，账号可选用于核对 Token 的实际用户；保存后可“验证连接”。Token 输入不回显，留空保留原 Token；“清除凭据”恢复匿名请求。后台更新提示和手动检测更新共用配置，公开插件文件下载及 SHA-256 校验流程保持不变。
 
 账号和 Token 保存在 LC 签名的 application-identifier 私有 Keychain 组，不写入 Documents/LCOrbit/config.json 或日志，不随普通 JSON 导出。Keychain 权限或签名异常会明确失败，不回退到共享组或明文文件。Guest 中的请求仍匿名，配置入口只在 LC 宿主出现。同进程注入代码共享宿主权限，不能把插件视作针对任意同进程代码的安全沙箱。重新签名若更换 App ID 或签名团队，可能需要重新填写凭据。
 
