@@ -269,6 +269,12 @@ static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
     NSString *file=[folder stringByAppendingPathComponent:@"LCAppInfo.plist"];
     NSMutableDictionary *info=[NSMutableDictionary dictionaryWithContentsOfFile:file] ?: [NSMutableDictionary dictionary];
     info[@"isHidden"]=@(hidden);
+    if(!hidden) {
+        // 取消隐藏时连带解除锁定，恢复干净正常状态
+        info[@"isLocked"]=@NO;
+    } else {
+        info[@"isLocked"]=@YES;
+    }
     NSError *error=nil;
     NSData *data=[NSPropertyListSerialization dataWithPropertyList:info
         format:NSPropertyListBinaryFormat_v1_0 options:0 error:&error];
@@ -3296,6 +3302,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
     BOOL hidden=[app[@"hidden"] boolValue];
+    BOOL locked=[app[@"locked"] boolValue];
     if(current) {
         CGFloat side=MIN(13,MAX(10,size*.30));
         UIView *light=FMRunningBreathingLight(side);
@@ -3322,6 +3329,22 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             mark.image=[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym];
         } else {
             mark.tintColor=UIColor.systemRedColor;
+            mark.image=[[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        }
+        [box addSubview:mark];
+    } else if(locked) {
+        // 单独在 LiveContainer 设置锁定：原生 lock.circle.fill 黄底白锁角标（与红底白锁同尺寸）
+        CGFloat side=MIN(16,MAX(14,size*.34));
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        mark.contentMode=UIViewContentModeScaleAspectFit;
+        mark.userInteractionEnabled=NO;
+
+        UIImageSymbolConfiguration *sym=[UIImageSymbolConfiguration configurationWithPointSize:side*0.95 weight:UIImageSymbolWeightSemibold];
+        if(@available(iOS 15.0, *)) {
+            sym=[sym configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:@[UIColor.whiteColor, UIColor.systemYellowColor]]];
+            mark.image=[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym];
+        } else {
+            mark.tintColor=UIColor.systemYellowColor;
             mark.image=[[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         }
         [box addSubview:mark];
