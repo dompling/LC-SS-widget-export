@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.20"
+#define FM_MENU_VERSION @"1.0.22"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -262,6 +262,22 @@ static void FMLog(NSString *event, NSString *detail) {
 
 // Public Guest APIs are implemented in LCOrbitGuestService for all future modules.
 static NSArray<NSDictionary*> *InstalledApps(void) { return [LCOrbitGuestService installedApps]; }
+
+static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
+    NSString *folder=app[@"folder"];
+    if(![folder isKindOfClass:NSString.class] || !folder.length) return NO;
+    NSString *file=[folder stringByAppendingPathComponent:@"LCAppInfo.plist"];
+    NSMutableDictionary *info=[NSMutableDictionary dictionaryWithContentsOfFile:file] ?: [NSMutableDictionary dictionary];
+    info[@"isHidden"]=@(hidden);
+    NSError *error=nil;
+    NSData *data=[NSPropertyListSerialization dataWithPropertyList:info
+        format:NSPropertyListBinaryFormat_v1_0 options:0 error:&error];
+    BOOL ok=data && [data writeToFile:file options:NSDataWritingAtomic error:&error];
+    if(ok) {
+        FMLog(@"app-hide-toggle",[NSString stringWithFormat:@"app=%@ hidden=%d",FMAppKey(app),hidden]);
+    }
+    return ok;
+}
 
 // UIScreen describes the display's base appearance; a Guest's UIWindowScene
 // can report its own forced Light/Dark appearance instead of the device choice.
@@ -1403,8 +1419,8 @@ static void FMInstallOrientationHooks(void) {
 static void FMApplyNavigationTheme(UINavigationController *nav) {
     if(!nav) return;
     UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
-    [appearance configureWithDefaultBackground];
-    appearance.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:.92];
+    [appearance configureWithOpaqueBackground];
+    appearance.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:.96];
     appearance.titleTextAttributes=@{
         NSForegroundColorAttributeName:FMThemeColor(FMColorText),
         NSFontAttributeName:[UIFont systemFontOfSize:17 weight:UIFontWeightBold]
@@ -3251,8 +3267,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     return light;
 }
+// The icon is a full interactive control: tapping it switches immediately,
+// and long pressing it toggles hidden state. Since it is a UIButton, the
+// scroll view's scrub lens recognizer naturally yields (![hit isKindOfClass:UIButton.class]).
 - (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
-    UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    UIButton *box=[UIButton buttonWithType:UIButtonTypeCustom];
+    box.frame=CGRectMake(0,0,size,size);
     box.tag=9233; // The long-press scrub enlarges the icon under its lens.
     box.layer.cornerRadius=size*.22;box.clipsToBounds=YES;
     box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
@@ -3262,20 +3282,50 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                          [real imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]];
         iv.frame=box.bounds;iv.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         iv.contentMode=UIViewContentModeScaleAspectFill;
+        iv.userInteractionEnabled=NO;
         [box addSubview:iv];
     } else {
         UIImageView *fallback=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"app.fill"]];
         fallback.tintColor=FMAccent();fallback.contentMode=UIViewContentModeScaleAspectFit;
         fallback.frame=CGRectInset(box.bounds,size*.26,size*.26);
+        fallback.userInteractionEnabled=NO;
         [box addSubview:fallback];
     }
     BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
+    BOOL hidden=[app[@"hidden"] boolValue];
     if(current) {
         CGFloat side=MIN(13,MAX(10,size*.30));
         UIView *light=FMRunningBreathingLight(side);
         light.frame=CGRectMake(size-side,size-side,side,side);
+        light.userInteractionEnabled=NO;
         [box addSubview:light];
+    } else if(hidden) {
+        // App 被隐藏时：整体覆盖一层加深的暗色半透明蒙版
+        UIView *darkMask=[[UIView alloc] initWithFrame:box.bounds];
+        darkMask.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        darkMask.backgroundColor=[UIColor colorWithWhite:0.0 alpha:0.52];
+        darkMask.userInteractionEnabled=NO;
+        [box addSubview:darkMask];
+
+        // 原生 xmark.circle.fill，与任务关闭按钮同源的饱满红底白叉
+        CGFloat side=MIN(16,MAX(14,size*.34));
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        mark.backgroundColor=UIColor.whiteColor;
+        mark.layer.cornerRadius=side*.5;
+        mark.clipsToBounds=YES;
+        mark.contentMode=UIViewContentModeScaleAspectFit;
+        mark.userInteractionEnabled=NO;
+
+        UIImageSymbolConfiguration *sym=[UIImageSymbolConfiguration configurationWithPointSize:side*0.95 weight:UIImageSymbolWeightSemibold];
+        if(@available(iOS 15.0, *)) {
+            sym=[sym configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:@[UIColor.whiteColor, UIColor.systemRedColor]]];
+            mark.image=[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:sym];
+        } else {
+            mark.tintColor=UIColor.systemRedColor;
+            mark.image=[[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:sym] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        }
+        [box addSubview:mark];
     } else if(blocked) {
         CGFloat side=MIN(size*.45,MAX(13,MIN(18,size*.36)));
         UIImageView *mark=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"exclamationmark.circle.fill"]];
@@ -3286,7 +3336,37 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         mark.userInteractionEnabled=NO;
         [box addSubview:mark];
     }
+
+    objc_setAssociatedObject(box,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [box addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
+
+    if(![app[@"builtin"] boolValue] && !current) {
+        UILongPressGestureRecognizer *hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(appIconHold:)];
+        hold.minimumPressDuration=0.45;
+        objc_setAssociatedObject(hold,@selector(appIconHold:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [box addGestureRecognizer:hold];
+    }
     return box;
+}
+- (void)toggleAppHide:(NSDictionary *)app {
+    if(!app || [app[@"builtin"] boolValue] || [LCOrbitGuestService isCurrentGuest:app]) return;
+    BOOL current=[app[@"hidden"] boolValue];
+    BOOL target=!current;
+    if(FMSetAppHidden(app, target)) {
+        if(BoolPref(@"haptic", YES)) {
+            if(@available(iOS 13.0, *)) {
+                [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+            }
+        }
+        self.apps=InstalledApps();
+        [self draw];
+    }
+}
+- (void)appIconHold:(UILongPressGestureRecognizer *)g {
+    if(g.state==UIGestureRecognizerStateBegan) {
+        NSDictionary *app=objc_getAssociatedObject(g, @selector(appIconHold:));
+        [self toggleAppHide:app];
+    }
 }
 - (CGFloat)taskCloseSize {
     return 48/MAX(.50,self.panelContentScale?:1);
@@ -3305,9 +3385,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         FMHostUI()?(FMClearGlassEnabled()?.79:.88):FMReadableRowAlpha()];
     CGFloat iconSize=FMMenuStyleValue(@"menuListIconSize");
     UIView *icon=[self iconViewForApp:app size:iconSize];
-    icon.frame=CGRectMake(12,(height-iconSize)*.5,iconSize,iconSize);icon.userInteractionEnabled=NO;
+    icon.frame=CGRectMake(12,(height-iconSize)*.5,iconSize,iconSize);
     [row addSubview:icon];
-    UILabel *title=[self label:FMAppRowTitle(app) size:13 weight:UIFontWeightSemibold];
+        UILabel *title=[self label:FMAppRowTitle(app) size:13 weight:UIFontWeightSemibold];
     title.translatesAutoresizingMaskIntoConstraints=NO;
     title.numberOfLines=1;
     title.lineBreakMode=NSLineBreakByTruncatingTail;
@@ -3570,12 +3650,22 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     NSArray *order=[HostDefaults() arrayForKey:Pref(@"menuOrder")];
     if([order isKindOfClass:NSArray.class] && order.count) {
         [found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
+            BOOL hiddenA=[a[@"hidden"] boolValue];
+            BOOL hiddenB=[b[@"hidden"] boolValue];
+            if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
             NSUInteger ai=[order indexOfObject:a[@"identity"] ?: a[@"path"]];
             NSUInteger bi=[order indexOfObject:b[@"identity"] ?: b[@"path"]];
             // Read pre-fix preferences without merging new private/shared keys.
             if(ai==NSNotFound) ai=[order indexOfObject:a[@"path"]];
             if(bi==NSNotFound) bi=[order indexOfObject:b[@"path"]];
             if(ai!=bi) return ai<bi?NSOrderedAscending:NSOrderedDescending;
+            return [a[@"title"] localizedStandardCompare:b[@"title"]];
+        }];
+    } else {
+        [found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
+            BOOL hiddenA=[a[@"hidden"] boolValue];
+            BOOL hiddenB=[b[@"hidden"] boolValue];
+            if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
             return [a[@"title"] localizedStandardCompare:b[@"title"]];
         }];
     }
@@ -3599,6 +3689,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     NSArray *recent=[preference isKindOfClass:NSArray.class]?preference:@[];
     NSMutableArray<NSDictionary *> *sorted=[apps mutableCopy];
     [sorted sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
+        BOOL hiddenA=[a[@"hidden"] boolValue];
+        BOOL hiddenB=[b[@"hidden"] boolValue];
+        if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
         BOOL currentA=[LCOrbitGuestService isCurrentGuest:a];
         BOOL currentB=[LCOrbitGuestService isCurrentGuest:b];
         if(currentA!=currentB) return currentA?NSOrderedAscending:NSOrderedDescending;
@@ -3666,7 +3759,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             CGFloat iconSize=FMMenuStyleValue(@"menuCompactIconSize");
             UIView *icon=[self iconViewForApp:app size:iconSize];
             icon.translatesAutoresizingMaskIntoConstraints=NO;
-            icon.userInteractionEnabled=NO;
             icon.layer.borderWidth=.55;
             icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
                                     FMMenuDark()?.54:.36].CGColor;
@@ -3684,7 +3776,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                                      app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [row addTarget:self action:@selector(switchFromRow:)
                 forControlEvents:UIControlEventTouchUpInside];
-            if([LCOrbitMultitask isRunningGuest:app]) {
+                        if([LCOrbitMultitask isRunningGuest:app]) {
                 CGFloat closeSize=MIN(32,24/MAX(.70,self.panelContentScale?:1));
                 UIView *container=[[UIView alloc] initWithFrame:CGRectMake(0,0,70,63)];
                 // A bounded corner target preserves the icon's center for
@@ -3751,7 +3843,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [tile addSubview:icon];
         objc_setAssociatedObject(tile,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [tile addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
-        tile.accessibilityLabel=FMAppCaption(app);
+                tile.accessibilityLabel=FMAppCaption(app);
         tile.accessibilityTraits=UIAccessibilityTraitButton;
         tile.enabled=![LCOrbitGuestService isCurrentGuest:app];
         [FMGlassContent(glass) addSubview:tile];
@@ -5407,14 +5499,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [apps.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:apps];
     if(FMHostUI()) {
-        UIControl *shared=[self navigationRow:@"插件管理中心" subtitle:@"按 App 分配、启停和批量共享"
+        UIControl *shared=[self navigationRow:@"插件管理" subtitle:@"按 App 分配、启停和批量共享"
                                    symbol:@"square.stack.3d.up.fill"
                                badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
                                    action:@selector(openSharedTweaks)];
         [shared.heightAnchor constraintEqualToConstant:60].active=YES;
         [stack addArrangedSubview:shared];
     }
-    UIControl *logs=[self navigationRow:@"诊断与日志" subtitle:@"查看、导出和清除日志"
+    UIControl *logs=[self navigationRow:@"诊断日志" subtitle:@"查看、导出和清除日志"
                                symbol:@"waveform.path.ecg"
                            badgeColor:[UIColor colorWithRed:175/255.0 green:82/255.0 blue:222/255.0 alpha:1.0]
                                action:@selector(openDiagnostics)];
@@ -5473,8 +5565,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
+    if(@available(iOS 11.0, *)) {
+        self.navigationItem.largeTitleDisplayMode=UINavigationItemLargeTitleDisplayModeNever;
+    }
     NSDictionary *titles=@{@"appearance":@"显示与外观",@"behavior":@"交互与切换",
-                           @"apps":@"应用管理",@"diagnostics":@"诊断与日志",@"github":@"GitHub 访问"};
+                           @"apps":@"应用管理",@"diagnostics":@"诊断日志",@"github":@"GitHub 访问"};
     self.title=titles[self.sectionKey]?:@"设置";
     self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=[UIScrollView new];

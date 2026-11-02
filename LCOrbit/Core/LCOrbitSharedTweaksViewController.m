@@ -34,6 +34,39 @@
     }
     return self;
 }
+- (void)updateNavigationTheme {
+    self.title=@"插件管理";
+    self.navigationItem.title=@"插件管理";
+    self.navigationItem.titleView=nil;
+    if(@available(iOS 11.0, *)) {
+        self.navigationItem.largeTitleDisplayMode=UINavigationItemLargeTitleDisplayModeNever;
+    }
+
+    if(@available(iOS 13.0, *)) {
+        UIColor *textColor=self.textColor;
+        if(!textColor) {
+            textColor=[UIColor colorWithDynamicProvider:^UIColor * _Nonnull(UITraitCollection * _Nonnull traitCollection) {
+                return traitCollection.userInterfaceStyle==UIUserInterfaceStyleDark ?
+                    [UIColor colorWithRed:243/255.0 green:247/255.0 blue:255/255.0 alpha:1.0] :
+                    [UIColor colorWithRed:24/255.0 green:38/255.0 blue:56/255.0 alpha:1.0];
+            }];
+        }
+        UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
+        [appearance configureWithOpaqueBackground];
+        appearance.backgroundColor=[(self.surfaceColor ?: self.backgroundColor ?: [UIColor systemBackgroundColor]) colorWithAlphaComponent:.96];
+        appearance.titleTextAttributes=@{
+            NSForegroundColorAttributeName:textColor,
+            NSFontAttributeName:[UIFont systemFontOfSize:17 weight:UIFontWeightBold]
+        };
+        appearance.largeTitleTextAttributes=@{
+            NSForegroundColorAttributeName:textColor,
+            NSFontAttributeName:[UIFont systemFontOfSize:34 weight:UIFontWeightBold]
+        };
+        self.navigationItem.standardAppearance=appearance;
+        self.navigationItem.scrollEdgeAppearance=appearance;
+        self.navigationItem.compactAppearance=appearance;
+    }
+}
 - (void)updateBackground:(UIColor *)background surface:(UIColor *)surface
                     text:(UIColor *)text secondary:(UIColor *)secondary accent:(UIColor *)accent {
     self.backgroundColor=background;
@@ -46,12 +79,18 @@
     self.table.backgroundColor=background;
     self.summaryLabel.textColor=secondary;
     self.navigationController.navigationBar.tintColor=accent;
+    [self updateNavigationTheme];
     [self.table reloadData];
     [self updateActions];
 }
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self updateNavigationTheme];
+    if([LCOrbitHost isHostUI]) [self reloadInventory];
+}
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"插件管理中心";
+    [self updateNavigationTheme];
     self.view.backgroundColor=self.backgroundColor;
     UITableView *table=[[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
     table.translatesAutoresizingMaskIntoConstraints=NO;
@@ -83,10 +122,6 @@
         return;
     }
     [self reloadInventory];
-}
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    if([LCOrbitHost isHostUI]) [self reloadInventory];
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
