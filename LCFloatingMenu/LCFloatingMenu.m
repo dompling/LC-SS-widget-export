@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.23"
+#define FM_MENU_VERSION @"1.0.24"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -3303,14 +3303,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         light.userInteractionEnabled=NO;
         [box addSubview:light];
     } else if(hidden) {
-        // App 被隐藏时：整体覆盖一层加深的暗色半透明蒙版
+        // App 被隐藏时：整体覆盖一层加重的暗色半透明蒙版
         UIView *darkMask=[[UIView alloc] initWithFrame:box.bounds];
         darkMask.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-        darkMask.backgroundColor=[UIColor colorWithWhite:0.0 alpha:0.52];
+        darkMask.backgroundColor=[UIColor colorWithWhite:0.0 alpha:0.70];
         darkMask.userInteractionEnabled=NO;
         [box addSubview:darkMask];
 
-        // 原生 xmark.circle.fill，与任务关闭按钮同源的饱满红底白叉
+        // 原生 lock.circle.fill 红底白锁角标
         CGFloat side=MIN(16,MAX(14,size*.34));
         UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
         mark.backgroundColor=UIColor.whiteColor;
@@ -3322,10 +3322,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIImageSymbolConfiguration *sym=[UIImageSymbolConfiguration configurationWithPointSize:side*0.95 weight:UIImageSymbolWeightSemibold];
         if(@available(iOS 15.0, *)) {
             sym=[sym configurationByApplyingConfiguration:[UIImageSymbolConfiguration configurationWithPaletteColors:@[UIColor.whiteColor, UIColor.systemRedColor]]];
-            mark.image=[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:sym];
+            mark.image=[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym];
         } else {
             mark.tintColor=UIColor.systemRedColor;
-            mark.image=[[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:sym] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            mark.image=[[UIImage systemImageNamed:@"lock.circle.fill" withConfiguration:sym] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         }
         [box addSubview:mark];
     } else if(blocked) {
