@@ -4650,40 +4650,45 @@ static UIImage *FMCreateConfettiImage(UIColor *color, CGSize size) {
 }
 
 static UIImage *FMCreateSnowflakeImage(void) {
-    if(@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightLight];
-        UIImage *sym = [UIImage systemImageNamed:@"snowflake" withConfiguration:config];
-        if(sym) return [sym imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-    }
-    CGSize size = CGSizeMake(24, 24);
+    CGSize size = CGSizeMake(32, 32);
     UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
     CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if(@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:26 weight:UIImageSymbolWeightLight];
+        UIImage *sym = [[UIImage systemImageNamed:@"snowflake" withConfiguration:config] imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+        if(sym) {
+            [sym drawInRect:CGRectMake(2, 2, 28, 28)];
+            UIImage *whiteImg = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+            return whiteImg;
+        }
+    }
     CGContextSetStrokeColorWithColor(ctx, [UIColor whiteColor].CGColor);
-    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineWidth(ctx, 1.8);
     CGContextSetLineCap(ctx, kCGLineCapRound);
-    CGPoint center = CGPointMake(12, 12);
-    CGFloat radius = 10;
+    CGPoint center = CGPointMake(16, 16);
+    CGFloat radius = 13;
     for(int i = 0; i < 6; i++) {
         CGFloat angle = i * M_PI / 3.0;
         CGFloat x = center.x + radius * cos(angle);
         CGFloat y = center.y + radius * sin(angle);
         CGContextMoveToPoint(ctx, center.x, center.y);
         CGContextAddLineToPoint(ctx, x, y);
-        CGFloat branchDist = 6.0;
+        CGFloat branchDist = 8.0;
         CGFloat bx = center.x + branchDist * cos(angle);
         CGFloat by = center.y + branchDist * sin(angle);
         CGFloat branchAngle1 = angle + M_PI / 4.0;
         CGFloat branchAngle2 = angle - M_PI / 4.0;
-        CGFloat branchLen = 3.5;
+        CGFloat branchLen = 4.0;
         CGContextMoveToPoint(ctx, bx, by);
         CGContextAddLineToPoint(ctx, bx + branchLen * cos(branchAngle1), by + branchLen * sin(branchAngle1));
         CGContextMoveToPoint(ctx, bx, by);
         CGContextAddLineToPoint(ctx, bx + branchLen * cos(branchAngle2), by + branchLen * sin(branchAngle2));
     }
     CGContextStrokePath(ctx);
-    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIImage *whiteImg = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
-    return img;
+    return whiteImg;
 }
 
 - (void)triggerEasterEggConfetti {
@@ -4738,38 +4743,57 @@ static UIImage *FMCreateSnowflakeImage(void) {
         return;
     }
     BOOL dark = FMMenuDark();
-    UIColor *snowColor = dark ? [UIColor colorWithWhite:1.0 alpha:0.65] : [UIColor colorWithWhite:0.55 alpha:0.40];
+    CGFloat alpha = dark ? 0.80 : 0.65;
+    NSArray<UIColor *> *snowColors = @[
+        [UIColor colorWithRed:90/255.0  green:200/255.0 blue:250/255.0 alpha:alpha], // 冰蓝 (Sky Blue)
+        [UIColor colorWithRed:255/255.0 green:105/255.0 blue:180/255.0 alpha:alpha], // 浪漫粉 (Pink)
+        [UIColor colorWithRed:191/255.0 green:90/255.0  blue:242/255.0 alpha:alpha], // 梦幻紫 (Violet)
+        [UIColor colorWithRed:255/255.0 green:214/255.0 blue:10/255.0  alpha:alpha], // 暖阳金 (Gold)
+        [UIColor colorWithRed:48/255.0  green:209/255.0 blue:88/255.0  alpha:alpha], // 薄荷绿 (Mint)
+        [UIColor colorWithRed:10/255.0  green:132/255.0 blue:255/255.0 alpha:alpha], // 灵动蓝 (Royal Blue)
+        [UIColor colorWithWhite:1.0 alpha:dark ? 0.90 : 0.75]                         // 晶莹白 (Pure White)
+    ];
+
     if(!self.snowEmitterLayer && self.settingsWindow) {
         CAEmitterLayer *snow = [CAEmitterLayer layer];
         CGRect b = self.settingsWindow.bounds;
         snow.emitterPosition = CGPointMake(b.size.width * 0.5, -20);
         snow.emitterShape = kCAEmitterLayerLine;
-        snow.emitterSize = CGSizeMake(b.size.width * 1.2, 1);
-        CAEmitterCell *cell = [CAEmitterCell emitterCell];
-        cell.contents = (id)FMCreateSnowflakeImage().CGImage;
-        cell.birthRate = 7;
-        cell.lifetime = 14.0;
-        cell.velocity = 45;
-        cell.velocityRange = 25;
-        cell.yAcceleration = 18;
-        cell.xAcceleration = 3;
-        cell.emissionLongitude = (CGFloat)M_PI_2;
-        cell.emissionRange = (CGFloat)(M_PI / 8.0);
-        cell.spin = 0.8;
-        cell.spinRange = 1.6;
-        cell.scale = 0.55;
-        cell.scaleRange = 0.30;
-        cell.color = snowColor.CGColor;
-        snow.emitterCells = @[cell];
+        snow.emitterSize = CGSizeMake(b.size.width * 1.3, 1);
+        
+        CGImageRef snowImg = FMCreateSnowflakeImage().CGImage;
+        NSMutableArray<CAEmitterCell *> *cells = [NSMutableArray array];
+        
+        for(NSUInteger i = 0; i < snowColors.count; i++) {
+            UIColor *c = snowColors[i];
+            CAEmitterCell *cell = [CAEmitterCell emitterCell];
+            cell.contents = (id)snowImg;
+            cell.color = c.CGColor;
+            cell.birthRate = 2.0;
+            cell.lifetime = 14.0;
+            cell.velocity = 40 + (i % 3) * 12;
+            cell.velocityRange = 25;
+            cell.yAcceleration = 16;
+            cell.xAcceleration = ((i % 2 == 0) ? 1 : -1) * 3;
+            cell.emissionLongitude = (CGFloat)M_PI_2;
+            cell.emissionRange = (CGFloat)(M_PI / 8.0);
+            cell.spin = 0.6 + (i % 3) * 0.4;
+            cell.spinRange = 1.8;
+            cell.scale = 0.38 + (i % 3) * 0.10;
+            cell.scaleRange = 0.18;
+            [cells addObject:cell];
+        }
+        
+        snow.emitterCells = cells;
         snow.zPosition = 998;
         [self.settingsWindow.layer addSublayer:snow];
         self.snowEmitterLayer = snow;
     } else if(self.snowEmitterLayer && self.settingsWindow) {
         CGRect b = self.settingsWindow.bounds;
         self.snowEmitterLayer.emitterPosition = CGPointMake(b.size.width * 0.5, -20);
-        self.snowEmitterLayer.emitterSize = CGSizeMake(b.size.width * 1.2, 1);
-        for(CAEmitterCell *c in self.snowEmitterLayer.emitterCells) {
-            c.color = snowColor.CGColor;
+        self.snowEmitterLayer.emitterSize = CGSizeMake(b.size.width * 1.3, 1);
+        for(NSUInteger i = 0; i < self.snowEmitterLayer.emitterCells.count && i < snowColors.count; i++) {
+            self.snowEmitterLayer.emitterCells[i].color = snowColors[i].CGColor;
         }
     }
 }
