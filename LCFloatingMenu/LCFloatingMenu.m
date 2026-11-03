@@ -1818,6 +1818,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,weak) UIView *dimensionsPreview;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
+@property(nonatomic,strong) CAEmitterLayer *snowEmitterLayer;
 @property(nonatomic,weak) UIWindow *previousKeyWindow;
 @property(nonatomic,assign) UIUserInterfaceStyle lastSystemStyle;
 @property(nonatomic,assign) UIUserInterfaceStyle lastMenuStyle;
@@ -1869,6 +1870,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
 - (void)openSettingsInScene:(UIWindowScene *)scene;
 - (void)syncScreenAwakeState;
+- (void)updateEasterEggSnowEffect;
+- (void)stopEasterEggSnowEffect;
+- (void)triggerEasterEggConfetti;
 @end
 @implementation FMManager {
     CGPoint _panStartPoint;
@@ -4302,10 +4306,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     self.orbPreviewHost.accessibilityElementsHidden=YES;
     [settings addSubview:self.orbPreviewHost];
     [self refreshOrbPreview];
+    [self updateEasterEggSnowEffect];
     FMLog(@"settings-open",@"navigation-window");
 }
 - (void)closeSettings {
     if(!self.settingsWindow) return;
+    [self stopEasterEggSnowEffect];
     UIWindow *prior=self.previousKeyWindow;
     UIWindow *old=self.settingsWindow;
     UIWindowScene *scene=old.windowScene;
@@ -4376,6 +4382,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 }
 - (void)updateSettingsContent {
     [self refreshOrbPreview];
+    [self updateEasterEggSnowEffect];
     self.settingsWindow.backgroundColor=FMThemeColor(FMColorBackground);
     FMApplyNavigationTheme(self.settingsNavigation);
     // Refresh all loaded pages so Back never reveals the previous palette.
@@ -4414,7 +4421,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"系统（LC）",@"微珠"]];
             mode.selectedSegmentIndex=[LCOrbitMultitask usesSystemMenu]?0:1;
             mode.enabled=[LCOrbitMultitask isEnabled];
-            mode.selectedSegmentTintColor=[FMAccent() colorWithAlphaComponent:.25];
             mode.accessibilityLabel=@"多任务切换菜单";
             [mode addTarget:self action:@selector(multitaskModeChanged:) forControlEvents:UIControlEventValueChanged];
             [self addRow:mode height:38 to:s];
@@ -4633,8 +4639,125 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [self addRow:[self rowForTitle:@"导出诊断日志" icon:@"square.and.arrow.up" height:44 action:@selector(exportLogs)] height:44 to:s];
     [self addRow:[self rowForTitle:@"清空日志" icon:@"trash" height:44 action:@selector(clearLogs)] height:44 to:s];
 }
-- (void)appearanceModeTapped:(UIControl *)sender {
-    NSInteger mode=sender.tag-70;
+static UIImage *FMCreateConfettiImage(UIColor *color, CGSize size) {
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size.width, size.height) cornerRadius:2.0];
+    [color setFill];
+    [path fill];
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+static UIImage *FMCreateSnowflakeImage(void) {
+    CGSize size = CGSizeMake(10, 10);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    UIBezierPath *path = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(1, 1, 8, 8)];
+    [[UIColor whiteColor] setFill];
+    [path fill];
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+- (void)triggerEasterEggConfetti {
+    UIWindow *window = self.settingsWindow;
+    if(!window) return;
+    CAEmitterLayer *confetti = [CAEmitterLayer layer];
+    confetti.emitterPosition = CGPointMake(window.bounds.size.width * 0.5, -20);
+    confetti.emitterShape = kCAEmitterLayerLine;
+    confetti.emitterSize = CGSizeMake(window.bounds.size.width, 1);
+    NSArray<UIColor *> *colors = @[
+        [UIColor colorWithRed:255/255.0 green:45/255.0 blue:85/255.0 alpha:1.0],
+        [UIColor colorWithRed:175/255.0 green:82/255.0 blue:222/255.0 alpha:1.0],
+        [UIColor colorWithRed:10/255.0 green:132/255.0 blue:255/255.0 alpha:1.0],
+        [UIColor colorWithRed:255/255.0 green:204/255.0 blue:0/255.0 alpha:1.0],
+        [UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0],
+        [UIColor colorWithRed:255/255.0 green:149/255.0 blue:0/255.0 alpha:1.0],
+        [UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
+    ];
+    NSMutableArray<CAEmitterCell *> *cells = [NSMutableArray array];
+    for(UIColor *color in colors) {
+        CAEmitterCell *cell = [CAEmitterCell emitterCell];
+        cell.contents = (id)FMCreateConfettiImage(color, CGSizeMake(12, 6)).CGImage;
+        cell.birthRate = 20;
+        cell.lifetime = 4.5;
+        cell.lifetimeRange = 1.0;
+        cell.velocity = 220;
+        cell.velocityRange = 80;
+        cell.yAcceleration = 260;
+        cell.emissionLongitude = (CGFloat)M_PI_2;
+        cell.emissionRange = (CGFloat)M_PI_4;
+        cell.spin = 3.5;
+        cell.spinRange = 6.0;
+        cell.scale = 0.85;
+        cell.scaleRange = 0.35;
+        [cells addObject:cell];
+    }
+    confetti.emitterCells = cells;
+    confetti.zPosition = 1000;
+    [window.layer addSublayer:confetti];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        confetti.birthRate = 0;
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [confetti removeFromSuperlayer];
+    });
+}
+
+- (void)updateEasterEggSnowEffect {
+    BOOL enabled = BoolPref(@"easterEggIOSTheme", NO) && self.settingsWindow != nil;
+    if(!enabled) {
+        [self stopEasterEggSnowEffect];
+        return;
+    }
+    if(!self.snowEmitterLayer && self.settingsWindow) {
+        CAEmitterLayer *snow = [CAEmitterLayer layer];
+        CGRect b = self.settingsWindow.bounds;
+        snow.emitterPosition = CGPointMake(b.size.width * 0.5, -10);
+        snow.emitterShape = kCAEmitterLayerLine;
+        snow.emitterSize = CGSizeMake(b.size.width * 1.2, 1);
+        CAEmitterCell *cell = [CAEmitterCell emitterCell];
+        cell.contents = (id)FMCreateSnowflakeImage().CGImage;
+        cell.birthRate = 18;
+        cell.lifetime = 12.0;
+        cell.velocity = 50;
+        cell.velocityRange = 30;
+        cell.yAcceleration = 22;
+        cell.emissionLongitude = (CGFloat)M_PI_2;
+        cell.emissionRange = (CGFloat)(M_PI / 6.0);
+        cell.spin = 1.2;
+        cell.spinRange = 2.0;
+        cell.scale = 0.5;
+        cell.scaleRange = 0.35;
+        BOOL dark = FMMenuDark();
+        UIColor *snowColor = dark ? [UIColor colorWithWhite:1.0 alpha:0.85] : [UIColor colorWithRed:120/255.0 green:160/255.0 blue:215/255.0 alpha:0.75];
+        cell.color = snowColor.CGColor;
+        snow.emitterCells = @[cell];
+        snow.zPosition = 998;
+        [self.settingsWindow.layer addSublayer:snow];
+        self.snowEmitterLayer = snow;
+    } else if(self.snowEmitterLayer && self.settingsWindow) {
+        CGRect b = self.settingsWindow.bounds;
+        self.snowEmitterLayer.emitterPosition = CGPointMake(b.size.width * 0.5, -10);
+        self.snowEmitterLayer.emitterSize = CGSizeMake(b.size.width * 1.2, 1);
+        BOOL dark = FMMenuDark();
+        UIColor *snowColor = dark ? [UIColor colorWithWhite:1.0 alpha:0.85] : [UIColor colorWithRed:120/255.0 green:160/255.0 blue:215/255.0 alpha:0.75];
+        for(CAEmitterCell *c in self.snowEmitterLayer.emitterCells) {
+            c.color = snowColor.CGColor;
+        }
+    }
+}
+
+- (void)stopEasterEggSnowEffect {
+    if(self.snowEmitterLayer) {
+        [self.snowEmitterLayer removeFromSuperlayer];
+        self.snowEmitterLayer = nil;
+    }
+}
+
+- (void)appearanceModeSegmentChanged:(UISegmentedControl *)control {
+    NSInteger mode=control.selectedSegmentIndex;
     if(mode<0 || mode>2) return;
     SetPref(@"appearanceMode",@(mode));
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -4646,27 +4769,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     });
 }
 - (void)appearanceModeControl:(UIStackView *)stack {
-    UIStackView *row=[UIStackView new];
-    row.axis=UILayoutConstraintAxisHorizontal;
-    row.distribution=UIStackViewDistributionFillEqually;
-    row.spacing=8;
     NSArray *titles=@[@"跟随系统",@"日间模式",@"夜间模式"];
+    UISegmentedControl *control=[[UISegmentedControl alloc] initWithItems:titles];
     NSInteger selected=[HostDefaults() integerForKey:Pref(@"appearanceMode")];
-    for(NSInteger i=0;i<3;i++) {
-        UIButton *button=[UIButton buttonWithType:UIButtonTypeSystem];
-        button.tag=70+i;
-        [button setTitle:titles[i] forState:UIControlStateNormal];
-        button.titleLabel.font=[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-        button.layer.cornerRadius=12;
-        button.layer.borderWidth=selected==i?1.5:.5;
-        button.layer.borderColor=selected==i?FMAccent().CGColor:FMThemeColor(FMColorBorder).CGColor;
-        button.backgroundColor=selected==i?[FMAccent() colorWithAlphaComponent:.20]:FMThemeColor(FMColorSurface);
-        [button setTitleColor:FMThemeColor(FMColorText) forState:UIControlStateNormal];
-        button.accessibilityTraits=UIAccessibilityTraitButton|(selected==i?UIAccessibilityTraitSelected:0);
-        [button addTarget:self action:@selector(appearanceModeTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [row addArrangedSubview:button];
-    }
-    [self addRow:row height:44 to:stack];
+    control.selectedSegmentIndex=(selected>=0 && selected<=2)?selected:0;
+    control.accessibilityLabel=@"日间与夜间外观模式";
+    [control addTarget:self action:@selector(appearanceModeSegmentChanged:) forControlEvents:UIControlEventValueChanged];
+    [self addRow:control height:38 to:stack];
 }
 - (void)themeColorChanged:(UIColorWell *)well {
     BOOL dark=well.tag==201;
@@ -5590,10 +5699,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     
     [[FMManager shared] refreshUI];
+    [[FMManager shared] updateEasterEggSnowEffect];
     [self rebuild];
     
-    NSString *msg=newState ? @"已启用 iOS 系统设置风格主题！" : @"已恢复用户自定义主题配色！";
-    [self presentAlertTitle:@"隐藏彩蛋" message:msg];
+    if(newState) {
+        [[FMManager shared] triggerEasterEggConfetti];
+    }
+    
+    NSString *msg=newState ? @"🎉 恭喜解锁隐藏彩蛋！\n已启用 iOS 原生系统设置风格主题，并开启漫天飘雪～" : @"已恢复用户自定义主题配色！";
+    [self presentAlertTitle:newState ? @"彩蛋已开启 🎉" : @"彩蛋已关闭" message:msg];
 }
 - (void)presentAlertTitle:(NSString *)title message:(NSString *)message {
     if(![self isSettingsRootVisible]) return;
