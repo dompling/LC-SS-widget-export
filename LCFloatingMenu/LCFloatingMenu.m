@@ -349,11 +349,36 @@ static UIColor *FMMix(UIColor *a,UIColor *b,CGFloat ratio) {
     return RGBA(ar+(br-ar)*ratio,ag+(bg-ag)*ratio,ab+(bb-ab)*ratio,1);
 }
 static UIColor *FMAccentFor(BOOL dark) {
+    if(BoolPref(@"easterEggIOSTheme", NO)) {
+        return FMFromHex(dark?@"#0A84FF":@"#007AFF", dark?0x0A84FF:0x007AFF);
+    }
     return FMFromHex([HostDefaults() stringForKey:Pref(dark?@"accentDark":@"accentLight")],
                      dark?0x8AC9FF:0x245DAB);
 }
 static UIColor *FMThemeColor(FMColorRole role) {
     BOOL dark=FMMenuDark();
+    if(BoolPref(@"easterEggIOSTheme", NO)) {
+        switch(role) {
+            case FMColorAccent:
+                return FMFromHex(dark?@"#0A84FF":@"#007AFF", dark?0x0A84FF:0x007AFF);
+            case FMColorText:
+                return FMFromHex(dark?@"#FFFFFF":@"#000000", dark?0xFFFFFF:0x000000);
+            case FMColorSecondary:
+                return FMFromHex(@"#8E8E93", 0x8E8E93);
+            case FMColorBackground:
+                return FMFromHex(dark?@"#000000":@"#F2F2F7", dark?0x000000:0xF2F2F7);
+            case FMColorSurface:
+                return FMFromHex(dark?@"#1C1C1E":@"#FFFFFF", dark?0x1C1C1E:0xFFFFFF);
+            case FMColorGlass:
+                return FMFromHex(dark?@"#2C2C2E":@"#E5E5EA", dark?0x2C2C2E:0xE5E5EA);
+            case FMColorRow:
+                return FMFromHex(dark?@"#1C1C1E":@"#FFFFFF", dark?0x1C1C1E:0xFFFFFF);
+            case FMColorTool:
+                return FMFromHex(dark?@"#2C2C2E":@"#E5E5EA", dark?0x2C2C2E:0xE5E5EA);
+            case FMColorBorder:
+                return FMFromHex(dark?@"#38383A":@"#D1D1D6", dark?0x38383A:0xD1D1D6);
+        }
+    }
     UIColor *accent=FMAccentFor(dark);
     UIColor *surface=FMFromHex(nil,dark?0x1A2537:0xFFFFFF);
     switch(role) {
@@ -1456,7 +1481,12 @@ static void FMApplyNavigationTheme(UINavigationController *nav) {
     if(!nav) return;
     UINavigationBarAppearance *appearance=[UINavigationBarAppearance new];
     [appearance configureWithOpaqueBackground];
-    appearance.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:.96];
+    BOOL iosTheme = BoolPref(@"easterEggIOSTheme", NO);
+    UIColor *navBg = iosTheme ? FMThemeColor(FMColorBackground) : [FMThemeColor(FMColorSurface) colorWithAlphaComponent:.96];
+    appearance.backgroundColor=navBg;
+    if(iosTheme) {
+        appearance.shadowColor=[UIColor clearColor];
+    }
     appearance.titleTextAttributes=@{
         NSForegroundColorAttributeName:FMThemeColor(FMColorText),
         NSFontAttributeName:[UIFont systemFontOfSize:17 weight:UIFontWeightBold]
@@ -1641,6 +1671,8 @@ static UIControl *FMSettingsNavigationRowCustom(NSString *name,NSString *subtitl
 @property(nonatomic,strong) id updateReleaseObserver;
 @property(nonatomic,strong) id updateActivationObserver;
 @property(nonatomic,assign) BOOL isImportingConfig;
+@property(nonatomic,assign) NSInteger easterEggTapCount;
+@property(nonatomic,assign) NSTimeInterval lastEasterEggTapTime;
 - (void)tryAutomaticUpdatePrompt;
 - (void)rebuild;
 @end
@@ -5221,7 +5253,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     SetPref(@"appearanceMode",@(0));
     SetPref(@"unlockOrientation",@YES);
     SetPref(@"lockBanRightLandscape",@YES);
-    for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth"]) {
+    for(NSString *key in @[@"accentLight",@"accentDark",@"theme",@"preferDarkIcons",@"orbWidth",@"easterEggIOSTheme"]) {
         [HostDefaults() removeObjectForKey:Pref(key)];
     }
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -5527,6 +5559,41 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     [self tryAutomaticUpdatePrompt];
+}
+- (void)versionRowTapped:(id)sender {
+    NSTimeInterval now=[NSDate timeIntervalSinceReferenceDate];
+    if(now - self.lastEasterEggTapTime > 1.2) {
+        self.easterEggTapCount=0;
+    }
+    self.lastEasterEggTapTime=now;
+    self.easterEggTapCount++;
+    if(self.easterEggTapCount >= 5) {
+        self.easterEggTapCount=0;
+        [self toggleEasterEggIOSTheme];
+    }
+}
+- (void)handleEasterEggPress:(UILongPressGestureRecognizer *)gesture {
+    if(gesture.state == UIGestureRecognizerStateBegan) {
+        self.easterEggTapCount=0;
+        [self toggleEasterEggIOSTheme];
+    }
+}
+- (void)toggleEasterEggIOSTheme {
+    BOOL current=BoolPref(@"easterEggIOSTheme", NO);
+    BOOL newState=!current;
+    SetPref(@"easterEggIOSTheme", @(newState));
+    
+    if(@available(iOS 10.0, *)) {
+        UINotificationFeedbackGenerator *feedback=[UINotificationFeedbackGenerator new];
+        [feedback prepare];
+        [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
+    }
+    
+    [[FMManager shared] refreshUI];
+    [self rebuild];
+    
+    NSString *msg=newState ? @"已启用 iOS 系统设置风格主题！" : @"已恢复用户自定义主题配色！";
+    [self presentAlertTitle:@"隐藏彩蛋" message:msg];
 }
 - (void)presentAlertTitle:(NSString *)title message:(NSString *)message {
     if(![self isSettingsRootVisible]) return;
@@ -5879,6 +5946,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         symbol:@"info.circle.fill"
         badgeColor:[UIColor colorWithRed:142/255.0 green:142/255.0 blue:147/255.0 alpha:1.0]
         action:NULL];
+    versionRow.userInteractionEnabled=YES;
+    [versionRow addTarget:self action:@selector(versionRowTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UILongPressGestureRecognizer *press=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleEasterEggPress:)];
+    press.minimumPressDuration=0.55;
+    [versionRow addGestureRecognizer:press];
     [versionRow.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
