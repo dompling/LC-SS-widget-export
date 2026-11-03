@@ -4915,6 +4915,8 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 
     if(!self.snowEmitterLayer && self.settingsWindow) {
         CAEmitterLayer *snow = [CAEmitterLayer layer];
+        // 关键：将时间轴向前预热 3.5 秒，让粒子在图层刚展示的第 0 毫秒就已经铺满整个屏幕上方与空中，进门即见漫天飘雪，无需等待下落
+        snow.beginTime = CACurrentMediaTime() - 3.5;
         CGRect b = self.settingsWindow.bounds;
         snow.emitterPosition = CGPointMake(b.size.width * 0.5, -20);
         snow.emitterShape = kCAEmitterLayerLine;
