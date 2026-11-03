@@ -1142,6 +1142,35 @@ static void FMSwizzle(Class cls, SEL orig, SEL swiz) {
     }
 }
 
+static BOOL FMShouldEnforceScreenAwake(void) {
+    if(!BoolPref(@"keepScreenAwake", NO)) return NO;
+    if(UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return NO;
+    if(@available(iOS 13.0, *)) {
+        for(UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if([s isKindOfClass:UIWindowScene.class] &&
+               s.activationState == UISceneActivationStateForegroundActive) {
+                return YES;
+            }
+        }
+        return NO;
+    }
+    return YES;
+}
+
+@interface UIApplication (FMScreenAwakeGuard)
+- (void)fm_setIdleTimerDisabled:(BOOL)disabled;
+@end
+
+@implementation UIApplication (FMScreenAwakeGuard)
+- (void)fm_setIdleTimerDisabled:(BOOL)disabled {
+    if(FMShouldEnforceScreenAwake()) {
+        [self fm_setIdleTimerDisabled:YES];
+        return;
+    }
+    [self fm_setIdleTimerDisabled:disabled];
+}
+@end
+
 static void FMEnsureWindowOrientationLayout(void);
 
 static UIInterfaceOrientationMask FMCurrentSupportedOrientations(UIViewController *vc) {
@@ -1406,6 +1435,7 @@ static void FMInstallOrientationHooks(void) {
         
         FMSwizzle(UIApplication.class, @selector(setDelegate:), @selector(fm_setDelegate:));
         FMSwizzle(UIApplication.class, @selector(supportedInterfaceOrientationsForWindow:), @selector(fm_supportedInterfaceOrientationsForWindow:));
+        FMSwizzle(UIApplication.class, @selector(setIdleTimerDisabled:), @selector(fm_setIdleTimerDisabled:));
         if(UIApplication.sharedApplication.delegate) {
             FMHookAppDelegate(UIApplication.sharedApplication.delegate);
         }
@@ -1927,20 +1957,19 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         __weak typeof(self) weakSelf=self;
         FMScreenAwakeActiveObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
             [weakSelf syncScreenAwakeState];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.25*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+                [weakSelf syncScreenAwakeState];
+            });
         }];
     }
     if(!FMScreenAwakeBackgroundObserver) {
         FMScreenAwakeBackgroundObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
-            if(UIApplication.sharedApplication.isIdleTimerDisabled) {
-                UIApplication.sharedApplication.idleTimerDisabled=NO;
-            }
+            UIApplication.sharedApplication.idleTimerDisabled=NO;
         }];
     }
     if(!FMScreenAwakeResignObserver) {
         FMScreenAwakeResignObserver=[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification * _Nonnull note) {
-            if(UIApplication.sharedApplication.isIdleTimerDisabled) {
-                UIApplication.sharedApplication.idleTimerDisabled=NO;
-            }
+            UIApplication.sharedApplication.idleTimerDisabled=NO;
         }];
     }
     [self syncScreenAwakeState];
@@ -1957,9 +1986,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self checkOrbUpdateIfNeeded];
 }
 - (void)syncScreenAwakeState {
-    BOOL enabled=BoolPref(@"keepScreenAwake",NO);
-    BOOL inForeground=(UIApplication.sharedApplication.applicationState==UIApplicationStateActive);
-    BOOL shouldDisable=enabled && inForeground;
+    BOOL shouldDisable=FMShouldEnforceScreenAwake();
     dispatch_async(dispatch_get_main_queue(), ^{
         if(UIApplication.sharedApplication.isIdleTimerDisabled!=shouldDisable) {
             UIApplication.sharedApplication.idleTimerDisabled=shouldDisable;
@@ -7295,9 +7322,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     if([event isEqualToString:UIApplicationDidEnterBackgroundNotification] ||
        [event isEqualToString:UIApplicationWillResignActiveNotification] ||
        [event isEqualToString:UISceneWillDeactivateNotification]) {
-        if(UIApplication.sharedApplication.isIdleTimerDisabled) {
-            UIApplication.sharedApplication.idleTimerDisabled=NO;
-        }
+        UIApplication.sharedApplication.idleTimerDisabled=NO;
         if(!scene || scene==manager.window.windowScene || scene==manager.settingsWindow.windowScene) {
             [manager invalidatePendingLaunch];
             if(manager.appsScroll) [manager persistAppsScroll];
