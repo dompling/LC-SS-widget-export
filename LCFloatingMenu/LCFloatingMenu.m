@@ -6040,6 +6040,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         return;
     }
     self.isImportingConfig=NO;
+    [[FMManager shared] stopEasterEggSnowEffect];
     NSURL *fileURL=[NSURL fileURLWithPath:file];
     UIDocumentPickerViewController *picker=nil;
     if(@available(iOS 14.0, *)) {
@@ -6054,6 +6055,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 - (void)restoreConfigFromiCloud {
     if(self.presentedViewController) return;
     self.isImportingConfig=YES;
+    [[FMManager shared] stopEasterEggSnowEffect];
     UIDocumentPickerViewController *picker=nil;
     if(@available(iOS 14.0, *)) {
         id jsonType=[NSClassFromString(@"UTType") performSelector:@selector(typeWithIdentifier:) withObject:@"public.json"];
@@ -6070,6 +6072,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     [self presentViewController:picker animated:YES completion:nil];
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    [[FMManager shared] updateEasterEggSnowEffect];
     if(!self.isImportingConfig) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
             [self presentAlertTitle:@"备份完成" message:@"配置已成功导出并保存到云端文件（覆盖为最新备份）。"];
@@ -6142,6 +6145,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
     self.isImportingConfig=NO;
+    [[FMManager shared] updateEasterEggSnowEffect];
 }
 - (void)presentUpdateResult:(NSString *)title message:(NSString *)message showRepository:(BOOL)showRepository {
     if(![self isSettingsRootVisible] || self.presentedViewController) return;
