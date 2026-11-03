@@ -5335,13 +5335,38 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         // Selected circular control = favorite. The four-favorite limit and
         // scoped private/shared identity are handled by the existing pinApp:.
         BOOL favored=[pins containsObject:FMAppKey(app)] || [pins containsObject:app[@"path"]];
-        UIButton *selection=[UIButton buttonWithType:UIButtonTypeSystem];
+        UIButton *selection=[UIButton buttonWithType:UIButtonTypeCustom];
         selection.translatesAutoresizingMaskIntoConstraints=NO;
-        UIImageSymbolConfiguration *circleStyle=[UIImageSymbolConfiguration
-            configurationWithPointSize:17 weight:UIImageSymbolWeightLight];
-        [selection setImage:[UIImage systemImageNamed:favored?@"checkmark.circle":@"circle"
-                                   withConfiguration:circleStyle] forState:UIControlStateNormal];
-        selection.tintColor=favored?FMAccent():FMThemeColor(FMColorSecondary);
+        UIImageSymbolConfiguration *symConfig=[UIImageSymbolConfiguration
+            configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+        if(favored) {
+            UIImage *img=nil;
+            if(@available(iOS 15.0, *)) {
+                UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration
+                    configurationWithPaletteColors:@[UIColor.whiteColor, FMAccent()]];
+                img=[UIImage systemImageNamed:@"checkmark.circle.fill"
+                             withConfiguration:[symConfig configurationByApplyingConfiguration:palette]];
+            } else {
+                img=[[UIImage systemImageNamed:@"checkmark.circle.fill"
+                             withConfiguration:symConfig] imageWithTintColor:FMAccent() renderingMode:UIImageRenderingModeAlwaysOriginal];
+            }
+            [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
+                       forState:UIControlStateNormal];
+        } else {
+            UIColor *unselectedColor=[UIColor colorWithWhite:FMMenuDark()?.45:.75 alpha:1.0];
+            UIImage *img=nil;
+            if(@available(iOS 15.0, *)) {
+                UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration
+                    configurationWithPaletteColors:@[unselectedColor]];
+                img=[UIImage systemImageNamed:@"circle"
+                             withConfiguration:[symConfig configurationByApplyingConfiguration:palette]];
+            } else {
+                img=[[UIImage systemImageNamed:@"circle"
+                             withConfiguration:symConfig] imageWithTintColor:unselectedColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+            }
+            [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
+                       forState:UIControlStateNormal];
+        }
         selection.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",
             app[@"title"]?:@"App",favored?@"已收藏，点击取消":@"未收藏，点击收藏"];
         selection.accessibilityTraits=UIAccessibilityTraitButton|
