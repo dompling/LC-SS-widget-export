@@ -4650,11 +4650,37 @@ static UIImage *FMCreateConfettiImage(UIColor *color, CGSize size) {
 }
 
 static UIImage *FMCreateSnowflakeImage(void) {
-    CGSize size = CGSizeMake(10, 10);
+    if(@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightLight];
+        UIImage *sym = [UIImage systemImageNamed:@"snowflake" withConfiguration:config];
+        if(sym) return [sym imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    }
+    CGSize size = CGSizeMake(24, 24);
     UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
-    UIBezierPath *path = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(1, 1, 8, 8)];
-    [[UIColor whiteColor] setFill];
-    [path fill];
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGContextSetStrokeColorWithColor(ctx, [UIColor whiteColor].CGColor);
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGPoint center = CGPointMake(12, 12);
+    CGFloat radius = 10;
+    for(int i = 0; i < 6; i++) {
+        CGFloat angle = i * M_PI / 3.0;
+        CGFloat x = center.x + radius * cos(angle);
+        CGFloat y = center.y + radius * sin(angle);
+        CGContextMoveToPoint(ctx, center.x, center.y);
+        CGContextAddLineToPoint(ctx, x, y);
+        CGFloat branchDist = 6.0;
+        CGFloat bx = center.x + branchDist * cos(angle);
+        CGFloat by = center.y + branchDist * sin(angle);
+        CGFloat branchAngle1 = angle + M_PI / 4.0;
+        CGFloat branchAngle2 = angle - M_PI / 4.0;
+        CGFloat branchLen = 3.5;
+        CGContextMoveToPoint(ctx, bx, by);
+        CGContextAddLineToPoint(ctx, bx + branchLen * cos(branchAngle1), by + branchLen * sin(branchAngle1));
+        CGContextMoveToPoint(ctx, bx, by);
+        CGContextAddLineToPoint(ctx, bx + branchLen * cos(branchAngle2), by + branchLen * sin(branchAngle2));
+    }
+    CGContextStrokePath(ctx);
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return img;
@@ -4711,27 +4737,28 @@ static UIImage *FMCreateSnowflakeImage(void) {
         [self stopEasterEggSnowEffect];
         return;
     }
+    BOOL dark = FMMenuDark();
+    UIColor *snowColor = dark ? [UIColor colorWithWhite:1.0 alpha:0.65] : [UIColor colorWithWhite:0.55 alpha:0.40];
     if(!self.snowEmitterLayer && self.settingsWindow) {
         CAEmitterLayer *snow = [CAEmitterLayer layer];
         CGRect b = self.settingsWindow.bounds;
-        snow.emitterPosition = CGPointMake(b.size.width * 0.5, -10);
+        snow.emitterPosition = CGPointMake(b.size.width * 0.5, -20);
         snow.emitterShape = kCAEmitterLayerLine;
         snow.emitterSize = CGSizeMake(b.size.width * 1.2, 1);
         CAEmitterCell *cell = [CAEmitterCell emitterCell];
         cell.contents = (id)FMCreateSnowflakeImage().CGImage;
-        cell.birthRate = 18;
-        cell.lifetime = 12.0;
-        cell.velocity = 50;
-        cell.velocityRange = 30;
-        cell.yAcceleration = 22;
+        cell.birthRate = 7;
+        cell.lifetime = 14.0;
+        cell.velocity = 45;
+        cell.velocityRange = 25;
+        cell.yAcceleration = 18;
+        cell.xAcceleration = 3;
         cell.emissionLongitude = (CGFloat)M_PI_2;
-        cell.emissionRange = (CGFloat)(M_PI / 6.0);
-        cell.spin = 1.2;
-        cell.spinRange = 2.0;
-        cell.scale = 0.5;
-        cell.scaleRange = 0.35;
-        BOOL dark = FMMenuDark();
-        UIColor *snowColor = dark ? [UIColor colorWithWhite:1.0 alpha:0.85] : [UIColor colorWithRed:120/255.0 green:160/255.0 blue:215/255.0 alpha:0.75];
+        cell.emissionRange = (CGFloat)(M_PI / 8.0);
+        cell.spin = 0.8;
+        cell.spinRange = 1.6;
+        cell.scale = 0.55;
+        cell.scaleRange = 0.30;
         cell.color = snowColor.CGColor;
         snow.emitterCells = @[cell];
         snow.zPosition = 998;
@@ -4739,10 +4766,8 @@ static UIImage *FMCreateSnowflakeImage(void) {
         self.snowEmitterLayer = snow;
     } else if(self.snowEmitterLayer && self.settingsWindow) {
         CGRect b = self.settingsWindow.bounds;
-        self.snowEmitterLayer.emitterPosition = CGPointMake(b.size.width * 0.5, -10);
+        self.snowEmitterLayer.emitterPosition = CGPointMake(b.size.width * 0.5, -20);
         self.snowEmitterLayer.emitterSize = CGSizeMake(b.size.width * 1.2, 1);
-        BOOL dark = FMMenuDark();
-        UIColor *snowColor = dark ? [UIColor colorWithWhite:1.0 alpha:0.85] : [UIColor colorWithRed:120/255.0 green:160/255.0 blue:215/255.0 alpha:0.75];
         for(CAEmitterCell *c in self.snowEmitterLayer.emitterCells) {
             c.color = snowColor.CGColor;
         }
