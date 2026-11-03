@@ -316,21 +316,16 @@
     }
     UIImageSymbolConfiguration *symConfig=[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightRegular];
     if(selected) {
+        cell.imageView.tintColor=iosBlue;
         if(@available(iOS 15.0, *)) {
             UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration configurationWithPaletteColors:@[UIColor.whiteColor, iosBlue]];
             cell.imageView.image=[[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:[symConfig configurationByApplyingConfiguration:palette]] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
         } else {
-            cell.imageView.image=[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:symConfig];
-            cell.imageView.tintColor=iosBlue;
+            cell.imageView.image=[[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:symConfig] imageWithTintColor:iosBlue renderingMode:UIImageRenderingModeAlwaysOriginal];
         }
     } else {
-        if(@available(iOS 15.0, *)) {
-            UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration configurationWithPaletteColors:@[iosGray]];
-            cell.imageView.image=[[UIImage systemImageNamed:@"circle" withConfiguration:[symConfig configurationByApplyingConfiguration:palette]] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-        } else {
-            cell.imageView.image=[UIImage systemImageNamed:@"circle" withConfiguration:symConfig];
-            cell.imageView.tintColor=iosGray;
-        }
+        cell.imageView.tintColor=iosGray;
+        cell.imageView.image=[[UIImage systemImageNamed:@"circle" withConfiguration:symConfig] imageWithTintColor:iosGray renderingMode:UIImageRenderingModeAlwaysOriginal];
     }
     cell.userInteractionEnabled=!self.busy;
     cell.contentView.alpha=[self canSelect:item]?1.0:.56;

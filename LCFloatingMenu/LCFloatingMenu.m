@@ -5364,18 +5364,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
                        forState:UIControlStateNormal];
         } else {
             selection.tintColor=iosGray;
-            UIImage *img=nil;
-            if(@available(iOS 15.0, *)) {
-                UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration
-                    configurationWithPaletteColors:@[iosGray]];
-                img=[UIImage systemImageNamed:@"circle"
-                             withConfiguration:[symConfig configurationByApplyingConfiguration:palette]];
-            } else {
-                img=[[UIImage systemImageNamed:@"circle"
-                             withConfiguration:symConfig] imageWithTintColor:iosGray renderingMode:UIImageRenderingModeAlwaysOriginal];
-            }
-            [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
-                       forState:UIControlStateNormal];
+            UIImage *img=[[UIImage systemImageNamed:@"circle"
+                         withConfiguration:symConfig] imageWithTintColor:iosGray renderingMode:UIImageRenderingModeAlwaysOriginal];
+            [selection setImage:img forState:UIControlStateNormal];
         }
         selection.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",
             app[@"title"]?:@"App",favored?@"已收藏，点击取消":@"未收藏，点击收藏"];
