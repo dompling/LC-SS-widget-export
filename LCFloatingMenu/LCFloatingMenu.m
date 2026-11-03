@@ -4710,7 +4710,7 @@ static UIImage *FMCreateSnowflakeImage(void) {
     NSMutableArray<CAEmitterCell *> *cells = [NSMutableArray array];
     for(UIColor *color in colors) {
         CAEmitterCell *cell = [CAEmitterCell emitterCell];
-        cell.contents = (id)FMCreateConfettiImage(color, CGSizeMake(12, 6)).CGImage;
+        cell.contents = (__bridge id)FMCreateConfettiImage(color, CGSizeMake(12, 6)).CGImage;
         cell.birthRate = 20;
         cell.lifetime = 4.5;
         cell.lifetimeRange = 1.0;
@@ -4767,7 +4767,7 @@ static UIImage *FMCreateSnowflakeImage(void) {
         for(NSUInteger i = 0; i < snowColors.count; i++) {
             UIColor *c = snowColors[i];
             CAEmitterCell *cell = [CAEmitterCell emitterCell];
-            cell.contents = (id)snowImg;
+            cell.contents = (__bridge id)snowImg;
             cell.color = c.CGColor;
             cell.birthRate = 2.0;
             cell.lifetime = 14.0;
