@@ -307,8 +307,31 @@
     cell.backgroundColor=self.surfaceColor;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
     cell.accessoryType=UITableViewCellAccessoryDetailButton;
-    cell.imageView.image=[UIImage systemImageNamed:selected?@"checkmark.circle.fill":@"circle"];
-    cell.imageView.tintColor=selected?self.accentColor:self.secondaryColor;
+    UIColor *iosBlue=[UIColor systemBlueColor];
+    UIColor *iosGray;
+    if(@available(iOS 13.0, *)) {
+        iosGray=[UIColor systemGrayColor];
+    } else {
+        iosGray=[UIColor colorWithRed:142/255.0 green:142/255.0 blue:147/255.0 alpha:1.0];
+    }
+    UIImageSymbolConfiguration *symConfig=[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightRegular];
+    if(selected) {
+        if(@available(iOS 15.0, *)) {
+            UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration configurationWithPaletteColors:@[UIColor.whiteColor, iosBlue]];
+            cell.imageView.image=[[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:[symConfig configurationByApplyingConfiguration:palette]] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        } else {
+            cell.imageView.image=[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:symConfig];
+            cell.imageView.tintColor=iosBlue;
+        }
+    } else {
+        if(@available(iOS 15.0, *)) {
+            UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration configurationWithPaletteColors:@[iosGray]];
+            cell.imageView.image=[[UIImage systemImageNamed:@"circle" withConfiguration:[symConfig configurationByApplyingConfiguration:palette]] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        } else {
+            cell.imageView.image=[UIImage systemImageNamed:@"circle" withConfiguration:symConfig];
+            cell.imageView.tintColor=iosGray;
+        }
+    }
     cell.userInteractionEnabled=!self.busy;
     cell.contentView.alpha=[self canSelect:item]?1.0:.56;
     cell.accessibilityLabel=[NSString stringWithFormat:@"%@，%@，%@",

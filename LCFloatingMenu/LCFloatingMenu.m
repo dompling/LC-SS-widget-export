@@ -5341,24 +5341,40 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         selection.translatesAutoresizingMaskIntoConstraints=NO;
         UIImageSymbolConfiguration *symConfig=[UIImageSymbolConfiguration
             configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+        UIColor *iosBlue=[UIColor systemBlueColor];
+        UIColor *iosGray;
+        if(@available(iOS 13.0, *)) {
+            iosGray=[UIColor systemGrayColor];
+        } else {
+            iosGray=[UIColor colorWithRed:142/255.0 green:142/255.0 blue:147/255.0 alpha:1.0];
+        }
         if(favored) {
-            selection.tintColor=FMAccent();
+            selection.tintColor=iosBlue;
             UIImage *img=nil;
             if(@available(iOS 15.0, *)) {
                 UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration
-                    configurationWithPaletteColors:@[UIColor.whiteColor, FMAccent()]];
+                    configurationWithPaletteColors:@[UIColor.whiteColor, iosBlue]];
                 img=[UIImage systemImageNamed:@"checkmark.circle.fill"
                              withConfiguration:[symConfig configurationByApplyingConfiguration:palette]];
             } else {
                 img=[[UIImage systemImageNamed:@"checkmark.circle.fill"
-                             withConfiguration:symConfig] imageWithTintColor:FMAccent() renderingMode:UIImageRenderingModeAlwaysOriginal];
+                             withConfiguration:symConfig] imageWithTintColor:iosBlue renderingMode:UIImageRenderingModeAlwaysOriginal];
             }
             [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
                        forState:UIControlStateNormal];
         } else {
-            selection.tintColor=FMThemeColor(FMColorSecondary);
-            UIImage *img=[UIImage systemImageNamed:@"circle" withConfiguration:symConfig];
-            [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]
+            selection.tintColor=iosGray;
+            UIImage *img=nil;
+            if(@available(iOS 15.0, *)) {
+                UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration
+                    configurationWithPaletteColors:@[iosGray]];
+                img=[UIImage systemImageNamed:@"circle"
+                             withConfiguration:[symConfig configurationByApplyingConfiguration:palette]];
+            } else {
+                img=[[UIImage systemImageNamed:@"circle"
+                             withConfiguration:symConfig] imageWithTintColor:iosGray renderingMode:UIImageRenderingModeAlwaysOriginal];
+            }
+            [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
                        forState:UIControlStateNormal];
         }
         selection.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",
