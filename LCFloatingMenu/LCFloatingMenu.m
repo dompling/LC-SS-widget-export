@@ -5342,6 +5342,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         UIImageSymbolConfiguration *symConfig=[UIImageSymbolConfiguration
             configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
         if(favored) {
+            selection.tintColor=FMAccent();
             UIImage *img=nil;
             if(@available(iOS 15.0, *)) {
                 UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration
@@ -5355,18 +5356,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
             [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
                        forState:UIControlStateNormal];
         } else {
-            UIColor *unselectedColor=[UIColor colorWithWhite:FMMenuDark()?.45:.75 alpha:1.0];
-            UIImage *img=nil;
-            if(@available(iOS 15.0, *)) {
-                UIImageSymbolConfiguration *palette=[UIImageSymbolConfiguration
-                    configurationWithPaletteColors:@[unselectedColor]];
-                img=[UIImage systemImageNamed:@"circle"
-                             withConfiguration:[symConfig configurationByApplyingConfiguration:palette]];
-            } else {
-                img=[[UIImage systemImageNamed:@"circle"
-                             withConfiguration:symConfig] imageWithTintColor:unselectedColor renderingMode:UIImageRenderingModeAlwaysOriginal];
-            }
-            [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
+            selection.tintColor=FMThemeColor(FMColorSecondary);
+            UIImage *img=[UIImage systemImageNamed:@"circle" withConfiguration:symConfig];
+            [selection setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]
                        forState:UIControlStateNormal];
         }
         selection.accessibilityLabel=[NSString stringWithFormat:@"%@，%@",
