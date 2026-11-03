@@ -1560,8 +1560,10 @@ static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSSt
         badge.backgroundColor=badgeColor?:[UIColor colorWithRed:0 green:122/255.0 blue:255/255.0 alpha:1.0];
         [row addSubview:badge];
 
+        UIImageSymbolConfiguration *config=[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
+        UIImage *baseImg=[UIImage systemImageNamed:symbol withConfiguration:config] ?: [UIImage systemImageNamed:symbol];
         UIImageView *icon=[[UIImageView alloc] initWithImage:
-            [[UIImage systemImageNamed:symbol] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+            [baseImg imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
         icon.translatesAutoresizingMaskIntoConstraints=NO;
         icon.tintColor=UIColor.whiteColor;
         icon.contentMode=UIViewContentModeScaleAspectFit;
@@ -5161,8 +5163,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     badge.backgroundColor=[UIColor colorWithRed:255/255.0 green:59/255.0 blue:48/255.0 alpha:1.0];
     [button addSubview:badge];
     
+    UIImageSymbolConfiguration *config=[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
+    UIImage *baseImg=[UIImage systemImageNamed:@"arrow.counterclockwise" withConfiguration:config] ?: [UIImage systemImageNamed:@"arrow.counterclockwise"];
     UIImageView *symbol=[[UIImageView alloc] initWithImage:
-        [[UIImage systemImageNamed:@"arrow.counterclockwise"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+        [baseImg imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
     symbol.translatesAutoresizingMaskIntoConstraints=NO;
     symbol.tintColor=UIColor.whiteColor;
     symbol.contentMode=UIViewContentModeScaleAspectFit;
@@ -5843,21 +5847,21 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [stack addArrangedSubview:secondGap];
     [manager section:@"管理与支持" sub:nil in:stack];
     UIControl *apps=[self navigationRow:@"应用管理" subtitle:FMHostUI()?@"收藏、排序、自动画中画与独立设置":@"收藏、排序与独立设置"
-                               symbol:@"square.stack.3d.up"
+                               symbol:@"square.stack.3d.up.fill"
                            badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
                                action:@selector(openApps)];
     [apps.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:apps];
     if(FMHostUI()) {
         UIControl *shared=[self navigationRow:@"插件管理" subtitle:@"按 App 分配、启停和批量共享"
-                                   symbol:@"square.stack.3d.up.fill"
+                                   symbol:@"puzzlepiece.extension.fill"
                                badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
                                    action:@selector(openSharedTweaks)];
         [shared.heightAnchor constraintEqualToConstant:60].active=YES;
         [stack addArrangedSubview:shared];
     }
-    UIControl *logs=[self navigationRow:@"诊断日志" subtitle:@"查看、导出和清除日志"
-                               symbol:@"waveform.path.ecg"
+    UIControl *logs=[self navigationRow:@"诊断日志" subtitle:@"查看、导出和清除运行日志"
+                               symbol:@"waveform.path.ecg.rectangle.fill"
                            badgeColor:[UIColor colorWithRed:175/255.0 green:82/255.0 blue:222/255.0 alpha:1.0]
                                action:@selector(openDiagnostics)];
     [logs.heightAnchor constraintEqualToConstant:60].active=YES;
@@ -5872,28 +5876,28 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [manager section:@"配置与更新" sub:nil in:stack];
     NSString *version=[NSString stringWithFormat:@"v%@ · %@",FM_MENU_VERSION,FMCommitSummary()];
     UIControl *versionRow=[self navigationRow:@"当前版本" subtitle:version
-        symbol:@"number.circle"
+        symbol:@"info.circle.fill"
         badgeColor:[UIColor colorWithRed:142/255.0 green:142/255.0 blue:147/255.0 alpha:1.0]
         action:NULL];
     [versionRow.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
         subtitle:self.checkingUpdate?@"正在检查最新发布版…":@"检查微珠最新发布版"
-        symbol:@"arrow.clockwise.circle"
+        symbol:@"arrow.triangle.2.circlepath.circle.fill"
         badgeColor:[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0]
         action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:checkRow];
-    UIControl *backupRow=[self navigationRow:@"备份配置到 iCloud"
+    UIControl *backupRow=[self navigationRow:@"备份配置"
         subtitle:@"导出并覆盖保存到 iCloud 云盘 (JSON)"
-        symbol:@"icloud.and.arrow.up"
+        symbol:@"icloud.and.arrow.up.fill"
         badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
         action:@selector(backupConfigToiCloud)];
     [backupRow.heightAnchor constraintEqualToConstant:60].active=YES;
     [stack addArrangedSubview:backupRow];
-    UIControl *restoreRow=[self navigationRow:@"从 iCloud 恢复配置"
-        subtitle:@"选择 iCloud 云盘备份恢复设置"
-        symbol:@"icloud.and.arrow.down"
+    UIControl *restoreRow=[self navigationRow:@"恢复配置"
+        subtitle:@"从 iCloud 云盘备份中选择并导入设置"
+        symbol:@"icloud.and.arrow.down.fill"
         badgeColor:[UIColor colorWithRed:255/255.0 green:149/255.0 blue:0/255.0 alpha:1.0]
         action:@selector(restoreConfigFromiCloud)];
     [restoreRow.heightAnchor constraintEqualToConstant:60].active=YES;
@@ -5908,7 +5912,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     UIControl *repository=[self navigationRow:@"GitHub 仓库"
         subtitle:@"github.com/dompling/LC-SS-widget-export"
-        symbol:@"link"
+        symbol:@"link.circle.fill"
         badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
         action:@selector(openRepository)];
     [repository.heightAnchor constraintEqualToConstant:60].active=YES;
