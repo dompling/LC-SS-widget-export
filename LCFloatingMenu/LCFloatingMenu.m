@@ -3025,7 +3025,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         BOOL overRow=[self scrubRowIndexAtPoint:point]!=NSNotFound;
         if(gestureRecognizer.view!=self.appsScroll) return !overRow;
         UIView *hit=[self.appsScroll hitTest:point withEvent:nil];
-        return self.isOpen && !_morphActive && overRow && ![hit isKindOfClass:UIButton.class];
+        BOOL isInteractiveButton=[hit isKindOfClass:UIButton.class] || [hit isKindOfClass:UIControl.class] || hit.tag==9233;
+        return self.isOpen && !_morphActive && overRow && !isInteractiveButton;
     }
     if(![gestureRecognizer isKindOfClass:UIPanGestureRecognizer.class]) return YES;
     if(!self.isOpen || _morphActive || UIAccessibilityIsReduceMotionEnabled()) return NO;
@@ -3423,7 +3424,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 // and long pressing it toggles hidden state. Since it is a UIButton, the
 // scroll view's scrub lens recognizer naturally yields (![hit isKindOfClass:UIButton.class]).
 - (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
-    UIControl *box=[[UIControl alloc] initWithFrame:CGRectMake(0,0,size,size)];
+    UIButton *box=[UIButton buttonWithType:UIButtonTypeCustom];
+    box.frame=CGRectMake(0,0,size,size);
     box.tag=9233; // The long-press scrub enlarges the icon under its lens.
     box.layer.cornerRadius=size*.225;
     if (@available(iOS 13.0, *)) {
