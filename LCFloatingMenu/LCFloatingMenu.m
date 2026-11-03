@@ -3426,8 +3426,13 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UIButton *box=[UIButton buttonWithType:UIButtonTypeCustom];
     box.frame=CGRectMake(0,0,size,size);
     box.tag=9233; // The long-press scrub enlarges the icon under its lens.
-    box.layer.cornerRadius=size*.22;box.clipsToBounds=YES;
-    box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
+    box.layer.cornerRadius=size*.225;
+    if (@available(iOS 13.0, *)) {
+        box.layer.cornerCurve=kCACornerCurveContinuous;
+    }
+    box.clipsToBounds=YES;
+    box.layer.masksToBounds=YES;
+    box.backgroundColor=UIColor.clearColor;
     UIImage *real=FMGuestIcon(app);
     if(real) {
         UIImageView *iv=[[UIImageView alloc] initWithImage:
@@ -3435,8 +3440,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         iv.frame=box.bounds;iv.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         iv.contentMode=UIViewContentModeScaleAspectFill;
         iv.userInteractionEnabled=NO;
+        iv.layer.cornerRadius=size*.225;
+        if (@available(iOS 13.0, *)) {
+            iv.layer.cornerCurve=kCACornerCurveContinuous;
+        }
+        iv.clipsToBounds=YES;
+        iv.layer.masksToBounds=YES;
         [box addSubview:iv];
     } else {
+        box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
         UIImageView *fallback=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"app.fill"]];
         fallback.tintColor=FMAccent();fallback.contentMode=UIViewContentModeScaleAspectFit;
         fallback.frame=CGRectInset(box.bounds,size*.26,size*.26);
@@ -3940,12 +3952,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             CGFloat iconSize=FMMenuStyleValue(@"menuCompactIconSize");
             UIView *icon=[self iconViewForApp:app size:iconSize];
             icon.translatesAutoresizingMaskIntoConstraints=NO;
-            icon.layer.borderWidth=.55;
-            icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
-                                    FMMenuDark()?.54:.36].CGColor;
-            icon.layer.shadowColor=UIColor.blackColor.CGColor;
-            icon.layer.shadowOpacity=FMMenuDark()?.22:.13;
-            icon.layer.shadowRadius=4;
             [row addSubview:icon];
             [NSLayoutConstraint activateConstraints:@[
                 [icon.centerXAnchor constraintEqualToAnchor:row.centerXAnchor],
@@ -4080,9 +4086,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIView *icon=[self iconViewForApp:app size:iconSize];
         icon.translatesAutoresizingMaskIntoConstraints=NO;
         icon.userInteractionEnabled=NO;
-        icon.layer.borderWidth=.55;
-        icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
-                                FMMenuDark()?.54:.36].CGColor;
         [stackControl addSubview:icon];
 
         [NSLayoutConstraint activateConstraints:@[
@@ -5982,7 +5985,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         [[FMManager shared] triggerEasterEggConfetti];
     }
     
-    NSString *msg=newState ? @"🎉 恭喜解锁隐藏彩蛋！\n已启用 iOS 原生系统设置风格主题，并开启漫天飘雪～" : @"已恢复用户自定义主题配色！";
+    NSString *msg=newState ? @"已启用 iOS 原生风格主题，并开启动态屏保。\n\n一缕烟花，赠君欢喜；\n一场飞雪，为君而来。" : @"已恢复用户自定义主题配色！";
     [self presentAlertTitle:newState ? @"彩蛋已开启 🎉" : @"彩蛋已关闭" message:msg];
 }
 - (void)presentAlertTitle:(NSString *)title message:(NSString *)message {
@@ -6901,8 +6904,12 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (UIView *)iconForSlot:(NSUInteger)slot size:(CGFloat)size apps:(NSArray<NSDictionary *> *)apps {
     if(slot<apps.count) return [[FMManager shared] iconViewForApp:apps[slot] size:size];
     UIView *box=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
-    box.layer.cornerRadius=size*.22;
+    box.layer.cornerRadius=size*.225;
+    if (@available(iOS 13.0, *)) {
+        box.layer.cornerCurve=kCACornerCurveContinuous;
+    }
     box.clipsToBounds=YES;
+    box.layer.masksToBounds=YES;
     box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
     UIImageView *glyph=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"app.fill"]];
     glyph.tintColor=FMAccent();
@@ -6962,8 +6969,6 @@ static UIView *FMDockCard(UIStackView *rows) {
             }
             UIView *icon=[self iconForSlot:index size:size apps:apps];
             icon.center=CGPointMake(width*.5,63*.5);
-            icon.layer.borderWidth=.55;
-            icon.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:dark?.54:.36].CGColor;
             [row addSubview:icon];
             [_content addSubview:row];
             [items addObject:row];
