@@ -1576,10 +1576,87 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
 }
 @end
 
+@interface FMGroupedRowControl : UIControl
+@property(nonatomic,strong) UIColor *idleBackgroundColor;
+@end
+
+@implementation FMGroupedRowControl
+- (void)setHighlighted:(BOOL)highlighted {
+    [super setHighlighted:highlighted];
+    if(!self.userInteractionEnabled) return;
+    if(highlighted) {
+        BOOL dark = FMMenuDark();
+        self.backgroundColor = dark ? [UIColor colorWithWhite:1.0 alpha:0.12] : [UIColor colorWithWhite:0.0 alpha:0.08];
+    } else {
+        self.backgroundColor = self.idleBackgroundColor ?: [UIColor clearColor];
+    }
+}
+@end
+
+static UIView *FMCreateGroupedCard(NSArray<UIView *> *rows, CGFloat indent) {
+    if(!rows.count) return nil;
+    UIView *card=[UIView new];
+    card.translatesAutoresizingMaskIntoConstraints=NO;
+    card.backgroundColor=FMThemeColor(FMColorSurface);
+    card.layer.cornerRadius=12;
+    card.layer.masksToBounds=YES;
+    card.clipsToBounds=YES;
+    
+    UIStackView *stack=[UIStackView new];
+    stack.translatesAutoresizingMaskIntoConstraints=NO;
+    stack.axis=UILayoutConstraintAxisVertical;
+    stack.alignment=UIStackViewAlignmentFill;
+    stack.spacing=0;
+    [card addSubview:stack];
+    
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
+        [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:card.topAnchor],
+        [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor]
+    ]];
+    
+    BOOL dark=FMMenuDark();
+    UIColor *sepColor=dark ? [UIColor colorWithWhite:1.0 alpha:0.12] : [UIColor colorWithWhite:0.0 alpha:0.09];
+    
+    for(NSUInteger i=0; i<rows.count; i++) {
+        UIView *row=rows[i];
+        if([row isKindOfClass:[FMGroupedRowControl class]]) {
+            ((FMGroupedRowControl *)row).idleBackgroundColor=[UIColor clearColor];
+        }
+        row.backgroundColor=[UIColor clearColor];
+        row.layer.cornerRadius=0;
+        [stack addArrangedSubview:row];
+        
+        if(i < rows.count - 1) {
+            UIView *sepContainer=[UIView new];
+            sepContainer.translatesAutoresizingMaskIntoConstraints=NO;
+            sepContainer.backgroundColor=[UIColor clearColor];
+            [sepContainer.heightAnchor constraintEqualToConstant:1.0 / [UIScreen mainScreen].scale].active=YES;
+            
+            UIView *sepLine=[UIView new];
+            sepLine.translatesAutoresizingMaskIntoConstraints=NO;
+            sepLine.backgroundColor=sepColor;
+            [sepContainer addSubview:sepLine];
+            
+            [NSLayoutConstraint activateConstraints:@[
+                [sepLine.topAnchor constraintEqualToAnchor:sepContainer.topAnchor],
+                [sepLine.bottomAnchor constraintEqualToAnchor:sepContainer.bottomAnchor],
+                [sepLine.leadingAnchor constraintEqualToAnchor:sepContainer.leadingAnchor constant:indent],
+                [sepLine.trailingAnchor constraintEqualToAnchor:sepContainer.trailingAnchor]
+            ]];
+            [stack addArrangedSubview:sepContainer];
+        }
+    }
+    return card;
+}
+
 static UIControl *FMSettingsNavigationRow(NSString *name,NSString *subtitle,NSString *symbol,UIColor *badgeColor,id target,SEL action) {
-    UIControl *row=[UIControl new];
-    row.layer.cornerRadius=14;
+    FMGroupedRowControl *row=[FMGroupedRowControl new];
+    row.translatesAutoresizingMaskIntoConstraints=NO;
+    row.layer.cornerRadius=12;
     row.backgroundColor=FMThemeColor(FMColorSurface);
+    row.idleBackgroundColor=FMThemeColor(FMColorSurface);
 
     UIView *badge=nil;
     if(symbol.length) {
@@ -1870,6 +1947,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
 - (void)openSettingsInScene:(UIWindowScene *)scene;
 - (void)syncScreenAwakeState;
+- (UIView *)switchRowWithTitle:(NSString *)title key:(NSString *)key defaultValue:(BOOL)def tag:(NSInteger)tag;
 - (void)updateEasterEggSnowEffect;
 - (void)stopEasterEggSnowEffect;
 - (void)triggerEasterEggConfetti;
@@ -4427,19 +4505,22 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             [self spacer:s size:14];
         }
         [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，播放视频时可保持屏幕常亮防息屏。" in:s];
-        [self settingSwitch:s title:@"左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
-        [self settingSwitch:s title:@"锁定禁右横屏" key:@"lockBanRightLandscape" defaultValue:YES tag:24];
+        UIView *sw1=[self switchRowWithTitle:@"左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
+        UIView *sw2=[self switchRowWithTitle:@"锁定禁右横屏" key:@"lockBanRightLandscape" defaultValue:YES tag:24];
+        UIView *sw3=[self switchRowWithTitle:@"保持屏幕常亮" key:@"keepScreenAwake" defaultValue:NO tag:23];
+        UIView *rotCard=FMCreateGroupedCard(@[sw1,sw2,sw3],16);
+        if(rotCard) [s addArrangedSubview:rotCard];
         [self note:@"LiveContainer 右横屏有 BUG，默认禁止向右横屏，按需启用。" in:s];
-        [self settingSwitch:s title:@"保持屏幕常亮" key:@"keepScreenAwake" defaultValue:NO tag:23];
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
         [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
-        [self settingSwitch:s title:@"最近打开的 App 置顶"
-                     key:@"recentAppsFirst" defaultValue:NO tag:20];
-        [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
-        [self settingSwitch:s title:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
+        UIView *sw4=[self switchRowWithTitle:@"最近打开的 App 置顶" key:@"recentAppsFirst" defaultValue:NO tag:20];
+        UIView *sw5=[self switchRowWithTitle:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
+        UIView *sw6=[self switchRowWithTitle:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
+        UIView *appCard=FMCreateGroupedCard(@[sw4,sw5,sw6],16);
+        if(appCard) [s addArrangedSubview:appCard];
         [self spacer:s size:14];
         [self section:@"插件更新" sub:@"后台每隔 1 小时自动检测一次插件新版本。检测到新版本后，悬浮“微珠”中央将闪烁红色呼吸灯提醒更新。" in:s];
         [self settingSwitch:s title:@"自动检测更新" key:@"autoCheckUpdate" defaultValue:YES tag:25];
@@ -4575,10 +4656,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)openManage { [self openSettings]; }
 - (void)backToSettings { [self openSettings]; }
 - (void)backToApps { [self closeSettings]; }
-- (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
-    UIView *row=[[UIView alloc] initWithFrame:CGRectMake(0,0,280,52)];
-    row.backgroundColor=FMThemeColor(FMColorSurface);
-    row.layer.cornerRadius=14;
+- (UIView *)switchRowWithTitle:(NSString *)title key:(NSString *)key defaultValue:(BOOL)def tag:(NSInteger)tag {
+    UIView *row=[UIView new];
+    row.translatesAutoresizingMaskIntoConstraints=NO;
+    [row.heightAnchor constraintEqualToConstant:52].active=YES;
     UILabel *l=[self label:title size:15 weight:UIFontWeightMedium];
     l.translatesAutoresizingMaskIntoConstraints=NO;
     l.adjustsFontSizeToFitWidth=YES;
@@ -4597,7 +4678,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [sw.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
         [sw.centerYAnchor constraintEqualToAnchor:row.centerYAnchor]
     ]];
-    [self addRow:row height:52 to:s];
+    return row;
+}
+- (void)settingSwitch:(UIStackView*)s title:(NSString*)title key:(NSString*)key defaultValue:(BOOL)def tag:(NSInteger)tag {
+    UIView *row=[self switchRowWithTitle:title key:key defaultValue:def tag:tag];
+    UIView *card=FMCreateGroupedCard(@[row],16);
+    if(card) [s addArrangedSubview:card];
 }
 - (void)settingSlider:(UIStackView*)s title:(NSString*)title key:(NSString*)key min:(float)min max:(float)max def:(float)def tag:(NSInteger)tag {
     UILabel *l=[self label:title size:14 weight:UIFontWeightMedium];
@@ -6081,21 +6167,25 @@ static UIImage *FMCreateSnowflakeImage(void) {
                            badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
                                action:@selector(openApps)];
     [apps.heightAnchor constraintEqualToConstant:60].active=YES;
-    [stack addArrangedSubview:apps];
+    UIControl *shared=nil;
     if(FMHostUI()) {
-        UIControl *shared=[self navigationRow:@"插件管理" subtitle:@"按 App 分配、启停和批量共享"
+        shared=[self navigationRow:@"插件管理" subtitle:@"按 App 分配、启停和批量共享"
                                    symbol:@"puzzlepiece.extension.fill"
                                badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
                                    action:@selector(openSharedTweaks)];
         [shared.heightAnchor constraintEqualToConstant:60].active=YES;
-        [stack addArrangedSubview:shared];
     }
     UIControl *logs=[self navigationRow:@"诊断日志" subtitle:@"查看、导出和清除运行日志"
                                symbol:@"waveform.path.ecg.rectangle.fill"
                            badgeColor:[UIColor colorWithRed:175/255.0 green:82/255.0 blue:222/255.0 alpha:1.0]
                                action:@selector(openDiagnostics)];
     [logs.heightAnchor constraintEqualToConstant:60].active=YES;
-    [stack addArrangedSubview:logs];
+    NSMutableArray<UIView *> *mgmtRows=[NSMutableArray array];
+    if(apps) [mgmtRows addObject:apps];
+    if(shared) [mgmtRows addObject:shared];
+    if(logs) [mgmtRows addObject:logs];
+    UIView *mgmtCard=FMCreateGroupedCard(mgmtRows,58);
+    if(mgmtCard) [stack addArrangedSubview:mgmtCard];
     UIView *space=[UIView new];[space.heightAnchor constraintEqualToConstant:14].active=YES;
     [stack addArrangedSubview:space];
     [manager appendResetStyleRow:stack];
@@ -6115,35 +6205,31 @@ static UIImage *FMCreateSnowflakeImage(void) {
     press.minimumPressDuration=0.55;
     [versionRow addGestureRecognizer:press];
     [versionRow.heightAnchor constraintEqualToConstant:60].active=YES;
-    [stack addArrangedSubview:versionRow];
     UIControl *checkRow=[self navigationRow:@"检测更新"
         subtitle:self.checkingUpdate?@"正在检查最新发布版…":@"检查微珠最新发布版"
         symbol:@"arrow.triangle.2.circlepath.circle.fill"
         badgeColor:[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0]
         action:@selector(checkForUpdates)];
     [checkRow.heightAnchor constraintEqualToConstant:60].active=YES;
-    [stack addArrangedSubview:checkRow];
     UIControl *backupRow=[self navigationRow:@"备份配置"
         subtitle:@"导出并覆盖保存到 iCloud 云盘 (JSON)"
         symbol:@"icloud.and.arrow.up.fill"
         badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
         action:@selector(backupConfigToiCloud)];
     [backupRow.heightAnchor constraintEqualToConstant:60].active=YES;
-    [stack addArrangedSubview:backupRow];
     UIControl *restoreRow=[self navigationRow:@"恢复配置"
         subtitle:@"从 iCloud 云盘备份中选择并导入设置"
         symbol:@"icloud.and.arrow.down.fill"
         badgeColor:[UIColor colorWithRed:255/255.0 green:149/255.0 blue:0/255.0 alpha:1.0]
         action:@selector(restoreConfigFromiCloud)];
     [restoreRow.heightAnchor constraintEqualToConstant:60].active=YES;
-    [stack addArrangedSubview:restoreRow];
+    UIControl *access=nil;
     if(FMHostUI()) {
-        UIControl *access=[self navigationRow:@"GitHub 访问" subtitle:@"账号、Token 与连接验证"
+        access=[self navigationRow:@"GitHub 访问" subtitle:@"账号、Token 与连接验证"
             symbol:@"key.fill"
             badgeColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0]
             action:@selector(openGitHub)];
         [access.heightAnchor constraintEqualToConstant:60].active=YES;
-        [stack addArrangedSubview:access];
     }
     UIControl *repository=[self navigationRow:@"GitHub 仓库"
         subtitle:@"github.com/dompling/LC-SS-widget-export"
@@ -6151,7 +6237,15 @@ static UIImage *FMCreateSnowflakeImage(void) {
         badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
         action:@selector(openRepository)];
     [repository.heightAnchor constraintEqualToConstant:60].active=YES;
-    [stack addArrangedSubview:repository];
+    NSMutableArray<UIView *> *configRows=[NSMutableArray array];
+    if(versionRow) [configRows addObject:versionRow];
+    if(checkRow) [configRows addObject:checkRow];
+    if(backupRow) [configRows addObject:backupRow];
+    if(restoreRow) [configRows addObject:restoreRow];
+    if(access) [configRows addObject:access];
+    if(repository) [configRows addObject:repository];
+    UIView *configCard=FMCreateGroupedCard(configRows,58);
+    if(configCard) [stack addArrangedSubview:configCard];
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.contentScroll!=scroll || !scroll.window) return;
         [scroll layoutIfNeeded];
