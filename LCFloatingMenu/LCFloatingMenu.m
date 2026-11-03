@@ -1643,7 +1643,7 @@ static UIView *FMCreateGroupedCard(NSArray<UIView *> *rows, CGFloat indent) {
                 [sepLine.topAnchor constraintEqualToAnchor:sepContainer.topAnchor],
                 [sepLine.bottomAnchor constraintEqualToAnchor:sepContainer.bottomAnchor],
                 [sepLine.leadingAnchor constraintEqualToAnchor:sepContainer.leadingAnchor constant:indent],
-                [sepLine.trailingAnchor constraintEqualToAnchor:sepContainer.trailingAnchor]
+                [sepLine.trailingAnchor constraintEqualToAnchor:sepContainer.trailingAnchor constant:-16]
             ]];
             [stack addArrangedSubview:sepContainer];
         }
@@ -4744,14 +4744,14 @@ typedef NS_ENUM(NSInteger, FMSnowflakeStyle) {
 
 static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(style == FMSnowflakeStyleDendritic) {
-        CGSize size = CGSizeMake(64, 64);
+        CGSize size = CGSizeMake(44, 44);
         UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
         CGContextRef ctx = UIGraphicsGetCurrentContext();
         CGContextSetStrokeColorWithColor(ctx, [UIColor whiteColor].CGColor);
-        CGContextSetLineWidth(ctx, 2.2);
+        CGContextSetLineWidth(ctx, 1.2);
         CGContextSetLineCap(ctx, kCGLineCapRound);
-        CGPoint center = CGPointMake(32, 32);
-        CGFloat radius = 28;
+        CGPoint center = CGPointMake(22, 22);
+        CGFloat radius = 19;
         for(int i = 0; i < 6; i++) {
             CGFloat angle = i * M_PI / 3.0;
             CGFloat cosA = cos(angle), sinA = sin(angle);
@@ -4760,105 +4760,86 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
             CGContextMoveToPoint(ctx, center.x, center.y);
             CGContextAddLineToPoint(ctx, endX, endY);
             
-            // 外侧分支
-            CGFloat d1 = 19.0;
+            // 外分支
+            CGFloat d1 = 12.5;
             CGFloat bx1 = center.x + d1 * cosA, by1 = center.y + d1 * sinA;
             CGFloat a1_1 = angle + M_PI / 3.6, a1_2 = angle - M_PI / 3.6;
-            CGFloat l1 = 8.5;
+            CGFloat l1 = 5.5;
             CGContextMoveToPoint(ctx, bx1, by1);
             CGContextAddLineToPoint(ctx, bx1 + l1 * cos(a1_1), by1 + l1 * sin(a1_1));
             CGContextMoveToPoint(ctx, bx1, by1);
             CGContextAddLineToPoint(ctx, bx1 + l1 * cos(a1_2), by1 + l1 * sin(a1_2));
             
-            // 内侧小分支
-            CGFloat d2 = 11.0;
+            // 内分支
+            CGFloat d2 = 7.0;
             CGFloat bx2 = center.x + d2 * cosA, by2 = center.y + d2 * sinA;
-            CGFloat l2 = 6.0;
+            CGFloat l2 = 3.8;
             CGContextMoveToPoint(ctx, bx2, by2);
             CGContextAddLineToPoint(ctx, bx2 + l2 * cos(a1_1), by2 + l2 * sin(a1_1));
             CGContextMoveToPoint(ctx, bx2, by2);
             CGContextAddLineToPoint(ctx, bx2 + l2 * cos(a1_2), by2 + l2 * sin(a1_2));
-            
-            // 顶端 V 形小叉
-            CGFloat lTip = 5.0;
-            CGFloat aTip1 = angle + M_PI / 4.0, aTip2 = angle - M_PI / 4.0;
-            CGContextMoveToPoint(ctx, endX, endY);
-            CGContextAddLineToPoint(ctx, endX - lTip * cos(aTip1), endY - lTip * sin(aTip1));
-            CGContextMoveToPoint(ctx, endX, endY);
-            CGContextAddLineToPoint(ctx, endX - lTip * cos(aTip2), endY - lTip * sin(aTip2));
         }
-        CGContextAddArc(ctx, center.x, center.y, 4.0, 0, M_PI * 2, 0);
         CGContextStrokePath(ctx);
         UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();
         return img;
     } else if(style == FMSnowflakeStyleStellar) {
-        CGSize size = CGSizeMake(64, 64);
+        CGSize size = CGSizeMake(40, 40);
         UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
         CGContextRef ctx = UIGraphicsGetCurrentContext();
-        CGContextSetFillColorWithColor(ctx, [UIColor whiteColor].CGColor);
-        CGPoint center = CGPointMake(32, 32);
+        CGContextSetStrokeColorWithColor(ctx, [UIColor whiteColor].CGColor);
+        CGContextSetLineWidth(ctx, 1.1);
+        CGContextSetLineCap(ctx, kCGLineCapRound);
+        CGPoint center = CGPointMake(20, 20);
         for(int i = 0; i < 6; i++) {
             CGFloat angle = i * M_PI / 3.0;
-            CGFloat perp = angle + M_PI_2;
-            CGFloat rOuter = 29.0;
-            CGFloat rMid = 13.0;
-            CGFloat width = 5.0;
-            CGPoint pTip = CGPointMake(center.x + rOuter * cos(angle), center.y + rOuter * sin(angle));
-            CGPoint pLeft = CGPointMake(center.x + rMid * cos(angle) + width * cos(perp), center.y + rMid * sin(angle) + width * sin(perp));
-            CGPoint pRight = CGPointMake(center.x + rMid * cos(angle) - width * cos(perp), center.y + rMid * sin(angle) - width * sin(perp));
-            UIBezierPath *diamond = [UIBezierPath bezierPath];
-            [diamond moveToPoint:center];
-            [diamond addLineToPoint:pLeft];
-            [diamond addLineToPoint:pTip];
-            [diamond addLineToPoint:pRight];
-            [diamond closePath];
-            [diamond fill];
-        }
-        [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(27, 27, 10, 10)] fill];
-        UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-        return img;
-    } else if(style == FMSnowflakeStyleSparkle) {
-        CGSize size = CGSizeMake(64, 64);
-        UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
-        CGContextRef ctx = UIGraphicsGetCurrentContext();
-        CGContextSetFillColorWithColor(ctx, [UIColor whiteColor].CGColor);
-        CGPoint center = CGPointMake(32, 32);
-        UIBezierPath *star = [UIBezierPath bezierPath];
-        [star moveToPoint:CGPointMake(center.x, center.y - 28)];
-        [star addQuadCurveToPoint:CGPointMake(center.x + 28, center.y) controlPoint:CGPointMake(center.x + 4, center.y - 4)];
-        [star addQuadCurveToPoint:CGPointMake(center.x, center.y + 28) controlPoint:CGPointMake(center.x + 4, center.y + 4)];
-        [star addQuadCurveToPoint:CGPointMake(center.x - 28, center.y) controlPoint:CGPointMake(center.x - 4, center.y + 4)];
-        [star addQuadCurveToPoint:CGPointMake(center.x, center.y - 28) controlPoint:CGPointMake(center.x - 4, center.y - 4)];
-        [star closePath];
-        [star fill];
-        
-        CGContextSetStrokeColorWithColor(ctx, [UIColor whiteColor].CGColor);
-        CGContextSetLineWidth(ctx, 1.8);
-        for(int i = 0; i < 4; i++) {
-            CGFloat angle = M_PI_4 + i * M_PI_2;
             CGContextMoveToPoint(ctx, center.x, center.y);
-            CGContextAddLineToPoint(ctx, center.x + 11 * cos(angle), center.y + 11 * sin(angle));
+            CGContextAddLineToPoint(ctx, center.x + 18 * cos(angle), center.y + 18 * sin(angle));
+            
+            CGFloat d = 10.0;
+            CGFloat bx = center.x + d * cos(angle), by = center.y + d * sin(angle);
+            CGFloat a1 = angle + M_PI / 3.0, a2 = angle - M_PI / 3.0;
+            CGFloat l = 4.0;
+            CGContextMoveToPoint(ctx, bx, by);
+            CGContextAddLineToPoint(ctx, bx + l * cos(a1), by + l * sin(a1));
+            CGContextMoveToPoint(ctx, bx, by);
+            CGContextAddLineToPoint(ctx, bx + l * cos(a2), by + l * sin(a2));
         }
         CGContextStrokePath(ctx);
         UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();
         return img;
-    } else { // SoftDot
+    } else if(style == FMSnowflakeStyleSparkle) {
         CGSize size = CGSizeMake(32, 32);
         UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
         CGContextRef ctx = UIGraphicsGetCurrentContext();
+        CGContextSetFillColorWithColor(ctx, [UIColor whiteColor].CGColor);
         CGPoint center = CGPointMake(16, 16);
+        UIBezierPath *star = [UIBezierPath bezierPath];
+        [star moveToPoint:CGPointMake(center.x, center.y - 14)];
+        [star addQuadCurveToPoint:CGPointMake(center.x + 14, center.y) controlPoint:CGPointMake(center.x + 2, center.y - 2)];
+        [star addQuadCurveToPoint:CGPointMake(center.x, center.y + 14) controlPoint:CGPointMake(center.x + 2, center.y + 2)];
+        [star addQuadCurveToPoint:CGPointMake(center.x - 14, center.y) controlPoint:CGPointMake(center.x - 2, center.y + 2)];
+        [star addQuadCurveToPoint:CGPointMake(center.x, center.y - 14) controlPoint:CGPointMake(center.x - 2, center.y - 2)];
+        [star closePath];
+        [star fill];
+        UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+        return img;
+    } else { // SoftDot
+        CGSize size = CGSizeMake(20, 20);
+        UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+        CGContextRef ctx = UIGraphicsGetCurrentContext();
+        CGPoint center = CGPointMake(10, 10);
         CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-        CGFloat locations[] = {0.0, 0.50, 1.0};
+        CGFloat locations[] = {0.0, 0.40, 1.0};
         NSArray *colorsArr = @[
             (id)[UIColor colorWithWhite:1.0 alpha:1.0].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.75].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.60].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.0].CGColor
         ];
         CGGradientRef gradient = CGGradientCreateWithColors(colorSpace, (__bridge CFArrayRef)colorsArr, locations);
-        CGContextDrawRadialGradient(ctx, gradient, center, 0, center, 15, kCGGradientDrawsBeforeStartLocation | kCGGradientDrawsAfterEndLocation);
+        CGContextDrawRadialGradient(ctx, gradient, center, 0, center, 9, kCGGradientDrawsBeforeStartLocation | kCGGradientDrawsAfterEndLocation);
         CGGradientRelease(gradient);
         CGColorSpaceRelease(colorSpace);
         UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
@@ -4919,23 +4900,24 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         return;
     }
     BOOL dark = FMMenuDark();
-    CGFloat alpha = dark ? 0.85 : 0.70;
+    // 柔和灵动半透明，绝不遮挡文字，呈现自然通透空气感
+    CGFloat alpha = dark ? 0.60 : 0.45;
     
-    // 梦幻彩虹冬季调色板 (Rainbow / Multicolor)
-    UIColor *cPink   = [UIColor colorWithRed:255/255.0 green:75/255.0  blue:145/255.0 alpha:alpha];
-    UIColor *cViolet = [UIColor colorWithRed:185/255.0 green:85/255.0  blue:245/255.0 alpha:alpha];
-    UIColor *cBlue   = [UIColor colorWithRed:85/255.0  green:195/255.0 blue:255/255.0 alpha:alpha];
-    UIColor *cGold   = [UIColor colorWithRed:255/255.0 green:210/255.0 blue:30/255.0  alpha:alpha];
-    UIColor *cMint   = [UIColor colorWithRed:55/255.0  green:225/255.0 blue:135/255.0 alpha:alpha];
-    UIColor *cCyan   = [UIColor colorWithRed:0/255.0   green:215/255.0 blue:225/255.0 alpha:alpha];
-    UIColor *cWhite  = [UIColor colorWithWhite:1.0 alpha:dark ? 0.95 : 0.80];
+    // 梦幻冬日彩虹调色板 (Rainbow / Multicolor)
+    UIColor *cPink   = [UIColor colorWithRed:255/255.0 green:85/255.0  blue:155/255.0 alpha:alpha];
+    UIColor *cViolet = [UIColor colorWithRed:180/255.0 green:90/255.0  blue:245/255.0 alpha:alpha];
+    UIColor *cBlue   = [UIColor colorWithRed:75/255.0  green:185/255.0 blue:255/255.0 alpha:alpha];
+    UIColor *cGold   = [UIColor colorWithRed:255/255.0 green:205/255.0 blue:40/255.0  alpha:alpha];
+    UIColor *cMint   = [UIColor colorWithRed:60/255.0  green:220/255.0 blue:140/255.0 alpha:alpha];
+    UIColor *cCyan   = [UIColor colorWithRed:30/255.0  green:215/255.0 blue:235/255.0 alpha:alpha];
+    UIColor *cWhite  = [UIColor colorWithWhite:1.0 alpha:dark ? 0.75 : 0.55];
     
     NSArray<UIColor *> *allColors = @[cPink, cViolet, cBlue, cGold, cMint, cCyan, cWhite];
 
     if(!self.snowEmitterLayer && self.settingsWindow) {
         CAEmitterLayer *snow = [CAEmitterLayer layer];
         CGRect b = self.settingsWindow.bounds;
-        snow.emitterPosition = CGPointMake(b.size.width * 0.5, -25);
+        snow.emitterPosition = CGPointMake(b.size.width * 0.5, -20);
         snow.emitterShape = kCAEmitterLayerLine;
         snow.emitterSize = CGSizeMake(b.size.width * 1.35, 1);
         
@@ -4946,85 +4928,85 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         
         NSMutableArray<CAEmitterCell *> *cells = [NSMutableArray array];
         
-        // 1. 特大/大号多枝雪花 (Large Dendritic Snowflakes - 粉、蓝、紫、纯白)
+        // 1. 小巧精致多枝雪花 (Dendritic - 细微精巧六角冰花，直径约 12~18pt)
         NSArray<UIColor *> *dendColors = @[cPink, cBlue, cViolet, cWhite];
         for(NSUInteger i = 0; i < dendColors.count; i++) {
             CAEmitterCell *cell = [CAEmitterCell emitterCell];
             cell.contents = (__bridge id)dendImg;
             cell.color = dendColors[i].CGColor;
-            cell.birthRate = 0.55;
-            cell.lifetime = 15.0;
-            cell.velocity = 36 + i * 5;
-            cell.velocityRange = 18;
-            cell.yAcceleration = 14;
-            cell.xAcceleration = ((i % 2 == 0) ? 1 : -1) * 3.5;
+            cell.birthRate = 0.8;
+            cell.lifetime = 14.0;
+            cell.velocity = 38 + i * 5;
+            cell.velocityRange = 16;
+            cell.yAcceleration = 13;
+            cell.xAcceleration = ((i % 2 == 0) ? 1 : -1) * 2.5;
             cell.emissionLongitude = (CGFloat)M_PI_2;
             cell.emissionRange = (CGFloat)(M_PI / 9.0);
-            cell.spin = 0.4 + i * 0.2;
+            cell.spin = 0.5 + i * 0.2;
             cell.spinRange = 1.0;
-            cell.scale = 0.65;
-            cell.scaleRange = 0.25; // 0.40 ~ 0.90 大雪花震撼飘落
+            cell.scale = 0.32;
+            cell.scaleRange = 0.08; // 0.24 ~ 0.40 精巧细致，绝不巨大
             [cells addObject:cell];
         }
         
-        // 2. 中号六芒星晶体雪花 (Medium Stellar Crystals - 金、青空蓝、薄荷绿、粉)
+        // 2. 六角晶体雪花 (Stellar Crystals - 直径约 10~15pt)
         NSArray<UIColor *> *starColors = @[cGold, cCyan, cMint, cPink];
         for(NSUInteger i = 0; i < starColors.count; i++) {
             CAEmitterCell *cell = [CAEmitterCell emitterCell];
             cell.contents = (__bridge id)starImg;
             cell.color = starColors[i].CGColor;
-            cell.birthRate = 0.9;
-            cell.lifetime = 14.0;
-            cell.velocity = 46 + i * 6;
-            cell.velocityRange = 22;
-            cell.yAcceleration = 16;
-            cell.xAcceleration = ((i % 2 == 0) ? -1 : 1) * 4.0;
+            cell.birthRate = 1.0;
+            cell.lifetime = 13.0;
+            cell.velocity = 44 + i * 5;
+            cell.velocityRange = 18;
+            cell.yAcceleration = 15;
+            cell.xAcceleration = ((i % 2 == 0) ? -1 : 1) * 3.0;
             cell.emissionLongitude = (CGFloat)M_PI_2;
             cell.emissionRange = (CGFloat)(M_PI / 8.0);
-            cell.spin = 0.7 + i * 0.3;
-            cell.spinRange = 1.5;
-            cell.scale = 0.42;
-            cell.scaleRange = 0.15; // 0.27 ~ 0.57 中号冰晶
+            cell.spin = 0.7 + i * 0.2;
+            cell.spinRange = 1.2;
+            cell.scale = 0.28;
+            cell.scaleRange = 0.07; // 0.21 ~ 0.35
             [cells addObject:cell];
         }
         
-        // 3. 四角闪烁星芒冰晶 (Sparkle Stars ✨ - 金、纯白、冰蓝、紫)
+        // 3. 四角闪烁星芒 (Sparkle Stars ✨ - 直径约 8~12pt，轻盈闪动)
         NSArray<UIColor *> *sparkColors = @[cGold, cWhite, cBlue, cViolet];
         for(NSUInteger i = 0; i < sparkColors.count; i++) {
             CAEmitterCell *cell = [CAEmitterCell emitterCell];
             cell.contents = (__bridge id)sparkImg;
             cell.color = sparkColors[i].CGColor;
-            cell.birthRate = 1.1;
-            cell.lifetime = 13.0;
-            cell.velocity = 42 + i * 8;
-            cell.velocityRange = 25;
-            cell.yAcceleration = 15;
-            cell.xAcceleration = ((i % 2 == 0) ? 1 : -1) * 3.0;
+            cell.birthRate = 1.2;
+            cell.lifetime = 12.0;
+            cell.velocity = 40 + i * 6;
+            cell.velocityRange = 20;
+            cell.yAcceleration = 14;
+            cell.xAcceleration = ((i % 2 == 0) ? 1 : -1) * 2.5;
             cell.emissionLongitude = (CGFloat)M_PI_2;
             cell.emissionRange = (CGFloat)(M_PI / 7.0);
-            cell.spin = 1.2;
-            cell.spinRange = 2.0;
-            cell.scale = 0.24;
-            cell.scaleRange = 0.10; // 0.14 ~ 0.34 璀璨星芒
+            cell.spin = 1.0;
+            cell.spinRange = 1.8;
+            cell.scale = 0.22;
+            cell.scaleRange = 0.06; // 0.16 ~ 0.28 璀璨灵动
             [cells addObject:cell];
         }
         
-        // 4. 柔光雪球与发光微尘 (Soft Glowing Snow Dots ⚪ - 纯白、浅粉、浅蓝)
+        // 4. 柔光雪尘点 (Soft Glowing Snow Dots ⚪ - 直径约 4~8pt)
         NSArray<UIColor *> *dotColors = @[cWhite, cPink, cBlue];
         for(NSUInteger i = 0; i < dotColors.count; i++) {
             CAEmitterCell *cell = [CAEmitterCell emitterCell];
             cell.contents = (__bridge id)dotImg;
             cell.color = dotColors[i].CGColor;
-            cell.birthRate = 1.8;
+            cell.birthRate = 2.2;
             cell.lifetime = 11.0;
-            cell.velocity = 32 + i * 6;
-            cell.velocityRange = 20;
-            cell.yAcceleration = 12;
-            cell.xAcceleration = ((i % 2 == 0) ? -1 : 1) * 2.5;
+            cell.velocity = 30 + i * 5;
+            cell.velocityRange = 15;
+            cell.yAcceleration = 11;
+            cell.xAcceleration = ((i % 2 == 0) ? -1 : 1) * 2.0;
             cell.emissionLongitude = (CGFloat)M_PI_2;
             cell.emissionRange = (CGFloat)(M_PI / 6.0);
-            cell.scale = 0.14;
-            cell.scaleRange = 0.08; // 柔和微尘点缀
+            cell.scale = 0.25;
+            cell.scaleRange = 0.10; // 柔和微尘
             [cells addObject:cell];
         }
         
@@ -5034,7 +5016,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         self.snowEmitterLayer = snow;
     } else if(self.snowEmitterLayer && self.settingsWindow) {
         CGRect b = self.settingsWindow.bounds;
-        self.snowEmitterLayer.emitterPosition = CGPointMake(b.size.width * 0.5, -25);
+        self.snowEmitterLayer.emitterPosition = CGPointMake(b.size.width * 0.5, -20);
         self.snowEmitterLayer.emitterSize = CGSizeMake(b.size.width * 1.35, 1);
         for(NSUInteger i = 0; i < self.snowEmitterLayer.emitterCells.count; i++) {
             UIColor *c = allColors[i % allColors.count];
