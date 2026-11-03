@@ -3928,15 +3928,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             // around the app icon so compact/single-task tiles feel lighter. The plate
             // used to be drawn in the LC host only; it is what gives an icon its seat on
             // the glass, so it is a setting now and a Guest gets one too.
-            if(BoolPref(@"iconFrame",YES)) {
+            if(FMHostUI() && BoolPref(@"iconFrame",NO)) {
                 UIView *backing=[UIView new];
                 backing.translatesAutoresizingMaskIntoConstraints=NO;
                 backing.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:
                     FMClearGlassEnabled()?.64:.74];
                 backing.layer.cornerRadius=14;
-                backing.layer.borderWidth=.5;
-                backing.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:
-                    FMMenuDark()?.26:.40].CGColor;
                 backing.userInteractionEnabled=NO;
                 [row addSubview:backing];
                 [NSLayoutConstraint activateConstraints:@[
@@ -5133,7 +5130,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
-    SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@YES);SetPref(@"glowLine",@YES);
+    SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
     SetPref(@"redBreathingLight",@YES);SetPref(@"blueBreathingLight",@NO);
     SetPref(@"orbGlowColor",@"#3899FF");
     SetPref(@"roundedTop",@YES);SetPref(@"previewFollowsMode",@YES);
@@ -6957,14 +6954,12 @@ static UIView *FMDockCard(UIStackView *rows) {
         CGFloat top=_listTop,size=FMMenuStyleValue(@"menuCompactIconSize"),width=pw-6;
         for(NSUInteger index=0;index<3;index++) {
             UIView *row=[[UIView alloc] initWithFrame:CGRectMake(3,top+index*66,width,63)];
-            if(BoolPref(@"iconFrame",YES)) {
+            if(FMHostUI() && BoolPref(@"iconFrame",NO)) {
                 CGFloat backingSize=round(size+8);
                 UIView *backing=[[UIView alloc] initWithFrame:CGRectMake((width-backingSize)*.5,(63-backingSize)*.5,backingSize,backingSize)];
                 backing.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74];
                 backing.layer.cornerRadius=round(backingSize*0.26);
                 backing.layer.cornerCurve=kCACornerCurveContinuous;
-                backing.layer.borderWidth=.5;
-                backing.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:dark?.26:.40].CGColor;
                 [row addSubview:backing];
             }
             UIView *icon=[self iconForSlot:index size:size apps:apps];
@@ -7562,7 +7557,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 - (void)addTrayRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupTray;
     [self add:[self switchRow:@"精简模式（单列图标）" key:@"compactMode" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
-    [self add:[self switchRow:@"图标玻璃底座" key:@"iconFrame" defaultValue:YES] to:rows group:group when:FMDockWhenCompact];
+    [self add:[self switchRow:@"图标玻璃底座" key:@"iconFrame" defaultValue:NO] to:rows group:group when:FMDockWhenCompact];
     [self add:[self switchRow:@"上方常规圆角" key:@"roundedTop" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self add:[self switchRow:@"预览底色跟随深浅" key:@"previewFollowsMode" defaultValue:YES] to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"panelScale",nil) to:rows group:group when:FMDockWhenAlways];
