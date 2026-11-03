@@ -3423,8 +3423,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 // and long pressing it toggles hidden state. Since it is a UIButton, the
 // scroll view's scrub lens recognizer naturally yields (![hit isKindOfClass:UIButton.class]).
 - (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
-    UIButton *box=[UIButton buttonWithType:UIButtonTypeCustom];
-    box.frame=CGRectMake(0,0,size,size);
+    UIControl *box=[[UIControl alloc] initWithFrame:CGRectMake(0,0,size,size)];
     box.tag=9233; // The long-press scrub enlarges the icon under its lens.
     box.layer.cornerRadius=size*.225;
     if (@available(iOS 13.0, *)) {
@@ -3435,17 +3434,15 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     box.backgroundColor=UIColor.clearColor;
     UIImage *real=FMGuestIcon(app);
     if(real) {
-        UIImageView *iv=[[UIImageView alloc] initWithImage:
-                         [real imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]];
-        iv.frame=box.bounds;iv.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        // 彻底消除四角白边：系统 IconServices 生成的图标图片外圈自带 1px 高光描边与四角抗锯齿高亮杂色，
+        // 将图片略微外扩 1.5pt（3x 屏幕约 4.5 物理像素），由 box 的超椭圆连续曲率统一进行严格 masksToBounds 裁切，
+        // 物理级将原图外圈的所有系统高光描边和白角推出视界外，彻底消除白边！
+        CGFloat bleed=1.5;
+        UIImageView *iv=[[UIImageView alloc] initWithFrame:CGRectMake(-bleed,-bleed,size+bleed*2,size+bleed*2)];
+        iv.image=[real imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
         iv.contentMode=UIViewContentModeScaleAspectFill;
         iv.userInteractionEnabled=NO;
-        iv.layer.cornerRadius=size*.225;
-        if (@available(iOS 13.0, *)) {
-            iv.layer.cornerCurve=kCACornerCurveContinuous;
-        }
         iv.clipsToBounds=YES;
-        iv.layer.masksToBounds=YES;
         [box addSubview:iv];
     } else {
         box.backgroundColor=[FMThemeColor(FMColorRow) colorWithAlphaComponent:.50];
