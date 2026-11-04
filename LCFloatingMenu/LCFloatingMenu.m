@@ -1850,6 +1850,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     for(NSUInteger index=0;index<count;index++) {
         UIView *view=ordered[index][@"view"];
         CGFloat hidden=toWall*(MIN(CGRectGetHeight(view.bounds),56)+16);
+        if(mode==2) {
+            [view.layer removeAnimationForKey:@"fm.pop.in"];
+            [view.layer removeAnimationForKey:@"fm.pop.out"];
+            continue;
+        }
         if(reveal) {
             [view.layer removeAnimationForKey:@"fm.pop.out"];
             CGFloat start=FMPopStart(mode,index,count);
@@ -1857,6 +1862,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         } else if(mode!=2) FMPopOutLayer(view.layer,hidden,NO);
     }
     for(UIView *divider in dividers) {
+        if(mode==2) {
+            [divider.layer removeAnimationForKey:@"fm.pop.in"];
+            [divider.layer removeAnimationForKey:@"fm.pop.out"];
+            continue;
+        }
         if(reveal) {
             [divider.layer removeAnimationForKey:@"fm.pop.out"];
             CGFloat start=FMPopStart(mode,count,count+1);
@@ -2900,7 +2910,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 // Builds the drawer behind the bead the moment the pull starts. NO means the
 // drawer cannot be shown (no room, a settings window): the droplet carries on.
 - (BOOL)beginDrawerDragFromBead {
-    if(self.isOpen || self.settingsWindow || !self.orb) return NO;
+    if(FMPopMode()==2 || self.isOpen || self.settingsWindow || !self.orb) return NO;
     [self cancelOrbFade];
     self.page=@"apps";
     [self loadAppsScroll];
@@ -2923,7 +2933,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 }
 // Plays the open or close transition of a drawer that is already built.
 - (void)morphDrawerOpen:(BOOL)open {
-    if(UIAccessibilityIsReduceMotionEnabled() || ![self prepareDrawerMorph]) {
+    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || ![self prepareDrawerMorph]) {
         if(!open) [self draw];
         return;
     }
@@ -2941,6 +2951,12 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     _morphOpening=open;
     _morphTarget=open?1:0;
     _morphVelocity=Clamp(velocity,-24,24);
+    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) {
+        _morphVelocity=0;
+        [self applyMorphProgress:_morphTarget];
+        [self finishDrawerMorph];
+        return;
+    }
     // Opening is the dock's springy one (response .46 s, damping .68); closing is
     // firmer (.40 s, .82) so it does not hang around after the bead is back.
     _morphOmega=2*M_PI/(open?.46:.40);
@@ -3029,7 +3045,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         return self.isOpen && !_morphActive && overRow && !isInteractiveButton;
     }
     if(![gestureRecognizer isKindOfClass:UIPanGestureRecognizer.class]) return YES;
-    if(!self.isOpen || _morphActive || UIAccessibilityIsReduceMotionEnabled()) return NO;
+    if(!self.isOpen || _morphActive || FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) return NO;
     CGPoint move=[(UIPanGestureRecognizer *)gestureRecognizer translationInView:self.overlayView];
     // Only a deliberate horizontal drag toward the edge belongs to the drawer;
     // everything else stays with the list and its buttons.
@@ -7175,7 +7191,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self wake];
     _open=open;
     CGFloat target=open?1:0;
-    if(!animated || UIAccessibilityIsReduceMotionEnabled() || !self.window) {
+    if(!animated || FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || !self.window) {
         [self stopLink];
         _velocity=0;
         [self applyProgress:target];

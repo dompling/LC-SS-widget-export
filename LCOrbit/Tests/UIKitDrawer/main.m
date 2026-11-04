@@ -37,6 +37,7 @@
 - (void)loadAppsScroll;
 - (void)persistAppsScroll;
 - (void)draw;
+- (void)morphDrawerOpen:(BOOL)open;
 - (void)refreshSystemAppearance;
 - (void)refreshAppsContent;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
@@ -858,6 +859,16 @@ static void RunTests(void) {
     Check(@"dock-pop-in-choice-defaults-to-one-by-one",popChoice && popChoice.numberOfSegments==3 && popChoice.selectedSegmentIndex==0,nil);
     popChoice.selectedSegmentIndex=2;[dock segmentChanged:popChoice];
     Check(@"dock-pop-in-choice-persists",[prefs doubleForKey:@"LCFloatingMenu.popAnimation"]==2,nil);
+    Check(@"dock-pop-off-preview-finishes-without-spring",[dockPreview valueForKey:@"link"]==nil &&
+          fabs([[dockPreview valueForKey:@"progress"] doubleValue]-1)<.001,nil);
+    for(NSNumber *left in @[@NO,@YES]) {
+        FMManager *menu=Manager(NO,1,667,ordinary,left.boolValue,YES,@"apps");
+        [menu morphDrawerOpen:YES];
+        Check([NSString stringWithFormat:@"dock-pop-off-menu-without-spring-%@",left],menu.panel &&
+              ![[menu valueForKey:@"morphActive"] boolValue] && [menu valueForKey:@"morphLink"]==nil,nil);
+        menu.isOpen=NO;[menu morphDrawerOpen:NO];
+        Check([NSString stringWithFormat:@"dock-pop-off-menu-closes-immediately-%@",left],menu.panel==nil,nil);
+    }
     UISwitch *compactSwitch=(UISwitch *)DockControl(dock.view,@"FMDockSwitch",@"compactMode");
     compactSwitch.on=YES;[dock switchChanged:compactSwitch];[dock.view layoutIfNeeded];
     NSArray<NSString *> *compactKeys=ShownKeys(dock.view,@"FMDockSlider");
