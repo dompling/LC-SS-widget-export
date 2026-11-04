@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.29 formal release request
+
+Version: 1.0.29
+Source: 修复关闭展开动画后仍执行弹簧过渡和逐项动画
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.29.md
+Publish: compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.29 tag, GitHub Release, and refresh fm-latest.
