@@ -1957,6 +1957,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 + (instancetype)shared;
 - (void)installIfPossible;
 - (void)checkOrbUpdateIfNeeded;
+- (void)syncAutomaticUpdateTimer;
 - (void)applyOrbUpdateIndicator;
 - (void)draw;
 - (void)refreshSystemAppearance;
@@ -2130,12 +2131,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         (unsigned long)self.apps.count,FMHostUI()?@"lc-host":@"guest"]);
     [self draw];
     [self scheduleAppearanceCheck];
-    if(!self.orbUpdateTimer) {
-        __weak typeof(self) weakSelf=self;
-        self.orbUpdateTimer=[NSTimer scheduledTimerWithTimeInterval:60*60 repeats:YES block:^(NSTimer *timer) {
-            [weakSelf checkOrbUpdateIfNeeded];
-        }];
-    }
     [self checkOrbUpdateIfNeeded];
 }
 - (void)syncScreenAwakeState {
@@ -2344,7 +2339,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)applyOrbUpdateIndicator {
     UIView *line=self.orbUpdateLine;
     if(!line) return;
-    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL redEnabled=BoolPref(@"autoCheckUpdate",YES) && BoolPref(@"redBreathingLight",YES);
     BOOL blueEnabled=BoolPref(@"blueBreathingLight",NO);
     BOOL redPulse = redEnabled && self.orbUpdateAvailable;
     BOOL bluePulse = blueEnabled && !redPulse;
@@ -2369,7 +2364,21 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         if(!self.isOpen && BoolPref(@"idleFade",YES)) [self scheduleOrbFade];
     }
 }
+- (void)syncAutomaticUpdateTimer {
+    if(!BoolPref(@"autoCheckUpdate",YES)) {
+        [self.orbUpdateTimer invalidate];
+        self.orbUpdateTimer=nil;
+        return;
+    }
+    if(!self.orbUpdateTimer) {
+        __weak typeof(self) weakSelf=self;
+        self.orbUpdateTimer=[NSTimer scheduledTimerWithTimeInterval:60*60 repeats:YES block:^(NSTimer *timer) {
+            [weakSelf checkOrbUpdateIfNeeded];
+        }];
+    }
+}
 - (void)checkOrbUpdateIfNeeded {
+    [self syncAutomaticUpdateTimer];
     if(!BoolPref(@"autoCheckUpdate",YES)) {
         if(self.orbUpdateAvailable) {
             self.orbUpdateAvailable=NO;
@@ -2397,6 +2406,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         dispatch_async(dispatch_get_main_queue(), ^{
             FMManager *owner=weakSelf;
             owner.orbUpdateChecking=NO;
+            if(!BoolPref(@"autoCheckUpdate",YES)) return;
             if(!release) return; // failures never clear a known update
             NSDictionary *accepted=FMCacheUpdateRelease(release,sequence);
             if(!owner) return;
@@ -2411,7 +2421,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 
 - (void)scheduleOrbFade {
     [self.orbFadeTimer invalidate];
-    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL redEnabled=BoolPref(@"autoCheckUpdate",YES) && BoolPref(@"redBreathingLight",YES);
     BOOL redPulse=redEnabled && self.orbUpdateAvailable;
     if(!BoolPref(@"idleFade",YES) || redPulse) return;
     if(self.isOpen || !self.orb) return;
@@ -2425,7 +2435,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     self.orbFadeTimer=nil;
 }
 - (void)fadeOrb {
-    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL redEnabled=BoolPref(@"autoCheckUpdate",YES) && BoolPref(@"redBreathingLight",YES);
     BOOL redPulse=redEnabled && self.orbUpdateAvailable;
     if(_morphActive || self.isOpen || !self.orb || self.orbFaded || redPulse) return;
     self.orbFaded=YES;
@@ -2483,7 +2493,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     UIView *line=FMOrbLine(button.bounds, self.left);
     [bead addSubview:line];
     self.orbUpdateLine=line;
-    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL redEnabled=BoolPref(@"autoCheckUpdate",YES) && BoolPref(@"redBreathingLight",YES);
     BOOL blueEnabled=BoolPref(@"blueBreathingLight",NO);
     BOOL redPulse = redEnabled && self.orbUpdateAvailable;
     BOOL bluePulse = blueEnabled && !redPulse;
@@ -4562,7 +4572,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [body addSubview:glass];
     UIView *line=FMOrbLine(body.bounds, left);
     [glass addSubview:line];
-    BOOL redEnabled=BoolPref(@"redBreathingLight",YES);
+    BOOL redEnabled=BoolPref(@"autoCheckUpdate",YES) && BoolPref(@"redBreathingLight",YES);
     BOOL blueEnabled=BoolPref(@"blueBreathingLight",NO);
     BOOL redPulse = redEnabled && self.orbUpdateAvailable;
     BOOL bluePulse = blueEnabled && !redPulse;
@@ -4650,9 +4660,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIView *sw6=[self switchRowWithTitle:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
         UIView *appCard=FMCreateGroupedCard(@[sw4,sw5,sw6],16);
         if(appCard) [s addArrangedSubview:appCard];
-        [self spacer:s size:14];
-        [self section:@"插件更新" sub:@"后台每隔 1 小时自动检测一次插件新版本。检测到新版本后，悬浮“微珠”中央将闪烁红色呼吸灯提醒更新。" in:s];
-        [self settingSwitch:s title:@"自动检测更新" key:@"autoCheckUpdate" defaultValue:YES tag:25];
     } else if([category isEqualToString:@"apps"]) {
         [self managePage:s];
         [self spacer:s size:20];
@@ -5648,12 +5655,14 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
     SetPref(key,@(sw.isOn));
     if(sw.tag==25) {
+        [self syncAutomaticUpdateTimer];
         if(sw.isOn) {
             [self checkOrbUpdateIfNeeded];
         } else {
             self.orbUpdateAvailable=NO;
             [self applyOrbUpdateIndicator];
         }
+        [self refreshOrbPreview];
         FMLog(@"auto-check-update",sw.isOn?@"on":@"off");
     }
     if(sw.tag==24) {
@@ -6357,6 +6366,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 - (void)offerUpdateRelease:(NSDictionary *)release automatic:(BOOL)automatic {
     if(!FMHostUI() || ![self isSettingsRootVisible] || self.presentedViewController || self.checkingUpdate) return;
+    if(automatic && !BoolPref(@"autoCheckUpdate",YES)) return;
     NSString *version=release[@"version"];
     if(automatic) {
         if(!self.automaticallyOfferedVersions) self.automaticallyOfferedVersions=[NSMutableSet set];
@@ -6387,6 +6397,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)tryAutomaticUpdatePrompt {
+    if(!BoolPref(@"autoCheckUpdate",YES)) return;
     if(!FMHostUI() || ![self isSettingsRootVisible] || self.presentedViewController || self.checkingUpdate) return;
     NSDictionary *release=[LCOrbitUpdateRelease validatedRelease:
         [NSUserDefaults.standardUserDefaults objectForKey:FMUpdateCacheRelease] error:nil];
@@ -6406,7 +6417,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
             typeof(self) owner=weakSelf;
             // Cache even if Settings was closed; only a currently visible
             // root may offer it. Keep the checking guard during notification.
-            if(fetched) FMCacheUpdateRelease(fetched,sequence);
+            if(fetched && BoolPref(@"autoCheckUpdate",YES)) FMCacheUpdateRelease(fetched,sequence);
             owner.checkingUpdate=NO;
             [owner tryAutomaticUpdatePrompt];
         });
@@ -6532,6 +6543,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     press.minimumPressDuration=0.55;
     [versionRow addGestureRecognizer:press];
     [versionRow.heightAnchor constraintEqualToConstant:60].active=YES;
+    UIView *autoUpdateRow=[manager switchRowWithTitle:@"自动检测更新" key:@"autoCheckUpdate" defaultValue:YES tag:25];
     UIControl *checkRow=[self navigationRow:@"检测更新"
         subtitle:self.checkingUpdate?@"正在检查最新发布版…":@"检查微珠最新发布版"
         symbol:@"arrow.triangle.2.circlepath.circle.fill"
@@ -6566,6 +6578,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     [repository.heightAnchor constraintEqualToConstant:60].active=YES;
     NSMutableArray<UIView *> *configRows=[NSMutableArray array];
     if(versionRow) [configRows addObject:versionRow];
+    if(autoUpdateRow) [configRows addObject:autoUpdateRow];
     if(checkRow) [configRows addObject:checkRow];
     if(backupRow) [configRows addObject:backupRow];
     if(restoreRow) [configRows addObject:restoreRow];
@@ -6573,6 +6586,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(repository) [configRows addObject:repository];
     UIView *configCard=FMCreateGroupedCard(configRows,58);
     if(configCard) [stack addArrangedSubview:configCard];
+    [manager note:@"开启后每小时自动检测更新；关闭后不自动检测，也不显示红色更新提示，可点击「检测更新」手动检查。" in:stack];
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.contentScroll!=scroll || !scroll.window) return;
         [scroll layoutIfNeeded];
