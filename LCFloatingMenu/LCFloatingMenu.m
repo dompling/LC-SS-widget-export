@@ -819,27 +819,46 @@ static void FMApplyOrbOutline(UIButton *button,UIBezierPath *outline) {
         }
     button.layer.shadowPath=outline.CGPath;
 }
-// The 1.0.13 pull: a round water drop stretches from the wall. Keep the
-// current handle's curve topology so returning to either resting style is smooth.
+// The pulled contour uses the 1.0.13 Bezier head, neck and wall-root controls.
+// Only the first 14 scaled points blend from the current resting handle. Two
+// zero-length lines keep its path topology compatible with the resting outline.
 static UIBezierPath *FMDropletPath(CGRect bounds,BOOL dockLeft,CGFloat pullDist,CGFloat maxPull) {
     CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
     CGFloat pull=Clamp(pullDist,0,MAX(maxPull,0));
+    if(pull<=.01) return FMSideNotchPath(bounds,dockLeft,YES,YES);
     FMHandleMetrics handle=FMOrbHandleMetrics(FMOrbHandleIsCapsule());
     CGSize size=FMHandleFrameSize(handle);
     FMNotchParams rest=FMHandleNotchParams(handle,1,w-size.width,(h-size.height)*.5);
-    CGFloat t=Clamp(pull/MAX(maxPull,1),0,1),cy=h*.5;
-    CGFloat radius=MIN(h*.20,(MAX(1,w-pull*.4)*.5+pull*.025));
-    CGFloat root=cy*t,flare=cy-radius-root;
-    FMNotchParams drop={0,root,w,h-root,w-radius,flare,flare,.725,.9,
-                        radius,radius,radius*.55228475,radius*.55228475};
+    CGFloat x1=rest.wall-rest.rx,x2=rest.left+rest.rdx;
+    CGFloat top=rest.top+rest.ryt,bottom=rest.bottom-rest.ryb;
+    CGFloat t=Clamp(pull/MAX(maxPull,1),0,1),cy=h*.5,baseW=MAX(1,w-pull*.4);
+    CGFloat r=MIN(h*.20,(baseW*.5+pull*.025)*Clamp(FloatPref(@"orbDropletSize",1),.65,1.25));
+    CGFloat cx=r,k=r*.55228475;
+    CGFloat rootTop=h*.5*t;
+    CGFloat tipControlX=w-(w-cx)*.4*t;
+    CGFloat neck=h*(.22-.07*t);
     CGFloat blend=FMSmooth(pull/MAX(14*FMOrbScale(),1));
-    FMNotchParams p={FMLerp(rest.left,drop.left,blend),FMLerp(rest.top,drop.top,blend),
-        FMLerp(rest.wall,drop.wall,blend),FMLerp(rest.bottom,drop.bottom,blend),
-        FMLerp(rest.rx,drop.rx,blend),FMLerp(rest.ryt,drop.ryt,blend),FMLerp(rest.ryb,drop.ryb,blend),
-        FMLerp(rest.a,drop.a,blend),FMLerp(rest.b,drop.b,blend),
-        FMLerp(rest.rdx,drop.rdx,blend),FMLerp(rest.rdy,drop.rdy,blend),
-        FMLerp(rest.kx,drop.kx,blend),FMLerp(rest.ky,drop.ky,blend)};
-    UIBezierPath *path=FMNotchFamilyPath(p);
+    CGPoint (^mix)(CGPoint,CGPoint)=^CGPoint(CGPoint tab,CGPoint drop) {
+        return CGPointMake(FMLerp(tab.x,drop.x,blend),FMLerp(tab.y,drop.y,blend));
+    };
+    UIBezierPath *path=[UIBezierPath bezierPath];
+    [path moveToPoint:mix(CGPointMake(rest.wall,rest.top),CGPointMake(w,rootTop))];
+    [path addCurveToPoint:mix(CGPointMake(x1,top),CGPointMake(cx,cy-r))
+        controlPoint1:mix(CGPointMake(rest.wall,rest.top+rest.ryt*rest.a),CGPointMake(tipControlX,cy-neck*(1-t)))
+        controlPoint2:mix(CGPointMake(x1+rest.rx*rest.b,top),CGPointMake(cx+r*.9,cy-r))];
+    [path addLineToPoint:mix(CGPointMake(x2,top),CGPointMake(cx,cy-r))];
+    [path addCurveToPoint:mix(CGPointMake(rest.left,top+rest.rdy),CGPointMake(0,cy))
+        controlPoint1:mix(CGPointMake(x2-rest.kx,top),CGPointMake(cx-k,cy-r))
+        controlPoint2:mix(CGPointMake(rest.left,top+rest.rdy-rest.ky),CGPointMake(0,cy-k))];
+    [path addLineToPoint:mix(CGPointMake(rest.left,bottom-rest.rdy),CGPointMake(0,cy))];
+    [path addCurveToPoint:mix(CGPointMake(x2,bottom),CGPointMake(cx,cy+r))
+        controlPoint1:mix(CGPointMake(rest.left,bottom-rest.rdy+rest.ky),CGPointMake(0,cy+k))
+        controlPoint2:mix(CGPointMake(x2-rest.kx,bottom),CGPointMake(cx-k,cy+r))];
+    [path addLineToPoint:mix(CGPointMake(x1,bottom),CGPointMake(cx,cy+r))];
+    [path addCurveToPoint:mix(CGPointMake(rest.wall,rest.bottom),CGPointMake(w,h-rootTop))
+        controlPoint1:mix(CGPointMake(x1+rest.rx*rest.b,bottom),CGPointMake(cx+r*.9,cy+r))
+        controlPoint2:mix(CGPointMake(rest.wall,rest.bottom-rest.ryb*rest.a),CGPointMake(tipControlX,cy+neck*(1-t)))];
+    [path closePath];
     if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
     return path;
 }
@@ -6543,7 +6562,28 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     press.minimumPressDuration=0.55;
     [versionRow addGestureRecognizer:press];
     [versionRow.heightAnchor constraintEqualToConstant:60].active=YES;
-    UIView *autoUpdateRow=[manager switchRowWithTitle:@"自动检测更新" key:@"autoCheckUpdate" defaultValue:YES tag:25];
+    UIControl *autoUpdateRow=[self navigationRow:@"自动检测更新" subtitle:nil
+        symbol:@"arrow.triangle.2.circlepath"
+        badgeColor:[UIColor colorWithRed:52/255.0 green:199/255.0 blue:89/255.0 alpha:1.0]
+        action:NULL];
+    autoUpdateRow.userInteractionEnabled=YES;
+    autoUpdateRow.isAccessibilityElement=NO;
+    UISwitch *autoUpdateSwitch=[UISwitch new];
+    autoUpdateSwitch.on=BoolPref(@"autoCheckUpdate",YES);
+    autoUpdateSwitch.tag=25;
+    autoUpdateSwitch.onTintColor=FMSwitchGreen();
+    autoUpdateSwitch.accessibilityLabel=@"自动检测更新";
+    autoUpdateSwitch.translatesAutoresizingMaskIntoConstraints=NO;
+    [autoUpdateSwitch addTarget:manager action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
+    [autoUpdateRow addSubview:autoUpdateSwitch];
+    [NSLayoutConstraint activateConstraints:@[
+        [autoUpdateRow.heightAnchor constraintEqualToConstant:60],
+        [autoUpdateSwitch.trailingAnchor constraintEqualToAnchor:autoUpdateRow.trailingAnchor constant:-16],
+        [autoUpdateSwitch.centerYAnchor constraintEqualToAnchor:autoUpdateRow.centerYAnchor]
+    ]];
+    for(UIView *view in autoUpdateRow.subviews)
+        if([view isKindOfClass:UIStackView.class])
+            [view.trailingAnchor constraintLessThanOrEqualToAnchor:autoUpdateSwitch.leadingAnchor constant:-10].active=YES;
     UIControl *checkRow=[self navigationRow:@"检测更新"
         subtitle:self.checkingUpdate?@"正在检查最新发布版…":@"检查微珠最新发布版"
         symbol:@"arrow.triangle.2.circlepath.circle.fill"
