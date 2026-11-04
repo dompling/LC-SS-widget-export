@@ -6626,7 +6626,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(repository) [configRows addObject:repository];
     UIView *configCard=FMCreateGroupedCard(configRows,58);
     if(configCard) [stack addArrangedSubview:configCard];
-    [manager note:@"开启后每小时自动检测更新；关闭后不自动检测，也不显示红色更新提示，可点击「检测更新」手动检查。" in:stack];
+    [manager note:@"" in:stack];
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.contentScroll!=scroll || !scroll.window) return;
         [scroll layoutIfNeeded];
