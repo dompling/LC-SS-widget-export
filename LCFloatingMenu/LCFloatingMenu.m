@@ -4278,7 +4278,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
-        glyph.tintColor=compact?FMThemeColor(FMColorText):FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+        BOOL easterEgg=BoolPref(@"easterEggIOSTheme",NO);
+        glyph.tintColor=compact?FMThemeColor(FMColorText):(FMClearGlassEnabled()||easterEgg)?FMThemeColor(FMColorText):FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
@@ -6967,7 +6968,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     UIImageView *glyph=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
     glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
     glyph.contentMode=UIViewContentModeScaleAspectFit;
-    glyph.tintColor=compact?FMThemeColor(FMColorText):FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+    BOOL easterEgg=BoolPref(@"easterEggIOSTheme",NO);
+    glyph.tintColor=compact?FMThemeColor(FMColorText):(FMClearGlassEnabled()||easterEgg)?FMThemeColor(FMColorText):FMAccent();
     [tile addSubview:glyph];
     return tile;
 }
