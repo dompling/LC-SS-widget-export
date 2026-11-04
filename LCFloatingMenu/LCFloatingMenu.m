@@ -7755,40 +7755,13 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addNote:@"微珠的位置不在这里调：在屏幕上直接把它拖到想放的地方，松手会吸到最近的一边。上面两项管松手吸边时的快慢和回弹。" to:rows group:group];
 }
 - (UIView *)handleCombinedRow {
-    FMDockSegments *segment=[[FMDockSegments alloc] initWithItems:@[@"胶囊",@"水滴"]];
-    segment.key=@"orbHandleStyle";
-    segment.selectedSegmentIndex=FMOrbHandleIsCapsule()?0:1;
-    segment.accessibilityLabel=@"微珠形状";
-    [segment addTarget:self action:@selector(segmentChanged:) forControlEvents:UIControlEventValueChanged];
-    [segment setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
-
-    UILabel *label=FMDockLabelWithWeight(@"拉动水滴",14.5,UIFontWeightMedium,FMThemeColor(FMColorText));
-    [label setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-
-    FMDockSwitch *toggle=[FMDockSwitch new];
-    toggle.key=@"orbDropletPull";
-    toggle.on=BoolPref(@"orbDropletPull",NO);
-    toggle.onTintColor=FMSwitchGreen();
-    toggle.accessibilityLabel=@"拉动水滴";
-    [toggle setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-    [toggle addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-
-    UIStackView *switchStack=[[UIStackView alloc] initWithArrangedSubviews:@[label,toggle]];
-    switchStack.axis=UILayoutConstraintAxisHorizontal;
-    switchStack.alignment=UIStackViewAlignmentCenter;
-    switchStack.spacing=8;
-    [switchStack setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-
-    UIView *spacer=[UIView new];
-    [spacer setContentHuggingPriority:UILayoutPriorityFittingSizeLevel forAxis:UILayoutConstraintAxisHorizontal];
-    [spacer setContentCompressionResistancePriority:UILayoutPriorityFittingSizeLevel forAxis:UILayoutConstraintAxisHorizontal];
-
-    UIStackView *line=[[UIStackView alloc] initWithArrangedSubviews:@[segment,spacer,switchStack]];
-    line.axis=UILayoutConstraintAxisHorizontal;
-    line.alignment=UIStackViewAlignmentCenter;
-    line.spacing=10;
-    line.distribution=UIStackViewDistributionFill;
-    return FMDockRow(line,10,YES,52);
+    NSInteger selected = 0;
+    if(BoolPref(@"orbDropletPull", NO)) {
+        selected = 2;
+    } else {
+        selected = FMOrbHandleIsCapsule() ? 0 : 1;
+    }
+    return [self segmentRow:nil items:@[@"胶囊",@"水滴",@"拉动水滴"] key:@"orbHandleCombined" selected:selected];
 }
 - (void)addHandleRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupHandle;
@@ -7976,6 +7949,24 @@ static UIView *FMDockCard(UIStackView *rows) {
     if(self.dockSettingsChanged) self.dockSettingsChanged();
 }
 - (void)segmentChanged:(FMDockSegments *)control {
+    if([control.key isEqualToString:@"orbHandleCombined"]) {
+        NSInteger idx = control.selectedSegmentIndex;
+        if(idx == 0) {
+            SetPref(@"orbHandleStyle", @0);
+            SetPref(@"orbDropletPull", @NO);
+        } else if(idx == 1) {
+            SetPref(@"orbHandleStyle", @1);
+            SetPref(@"orbDropletPull", @NO);
+        } else {
+            SetPref(@"orbHandleStyle", @1);
+            SetPref(@"orbDropletPull", @YES);
+        }
+        [self applyHandleNote];
+        [self applyVisibilityAnimated:YES];
+        [self.preview reload];
+        if(self.dockSettingsChanged) self.dockSettingsChanged();
+        return;
+    }
     SetPref(control.key,@(control.selectedSegmentIndex));
     if([control.key isEqualToString:@"orbHandleStyle"]) {
         [self applyHandleNote];
