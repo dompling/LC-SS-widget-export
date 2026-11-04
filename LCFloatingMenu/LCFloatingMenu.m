@@ -7087,9 +7087,14 @@ static UIView *FMDockCard(UIStackView *rows) {
     CGFloat rowHeight=_compact?63:MAX(56,48/MAX(.50,_actual));
     CGFloat footer=_compact?76:44;
     _pw=_compact?76:240;
-    _favorites=_compact?@[]:[manager pinnedApps];
+    NSArray<NSDictionary *> *pinned=[manager pinnedApps];
+    if(!pinned.count) {
+        NSArray<NSDictionary *> *allApps=[manager orderedAppsForMenu];
+        if(allApps.count) pinned=[allApps subarrayWithRange:NSMakeRange(0,MIN(allApps.count,4))];
+    }
+    _favorites=_compact?@[]:pinned;
     _headroom=headroom;
-    _listTop=headroom+(_favorites.count?[manager menuHeaderDepth]:0);
+    _listTop=headroom+(_compact?0:[manager menuHeaderDepth]);
     _ph=_listTop+(footer+6+shoulder)+(_compact?3*65+18:3*(rowHeight+4));
     _closedHeight=MAX([manager orbHeight]+100,190);
     // A short window cannot spare that much: the card gives way before the options do.
@@ -7220,8 +7225,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         }
         UIView *bar=[[UIView alloc] initWithFrame:CGRectMake(3,ph-76-6-22,width,76)];
         [_content addSubview:bar];
-        UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(13,0,width-26,.8)];
-        divider.backgroundColor=rule;
+        UIView *divider=FMMakeGlowSeparator(CGRectMake(13,0,width-26,1.0));
         [bar addSubview:divider];
         [dividers addObject:divider];
         UIView *home=[self footerTile:@"house.fill" compact:YES size:50];
@@ -7230,22 +7234,19 @@ static UIView *FMDockCard(UIStackView *rows) {
         [items addObject:home];
     } else {
         CGFloat inner=pw-24,gap=4,cell=(inner-gap*3)/4;
-        NSUInteger pins=_favorites.count;
+        NSUInteger pins=_favorites.count?_favorites.count:4;
         CGFloat strip=12+(inner-(cell*pins+gap*(pins?pins-1:0)))*.5;
         for(NSUInteger index=0;index<pins;index++) {
             UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(strip+index*(cell+gap),_headroom+2,cell,40)];
-            UIView *icon=[self iconForSlot:index size:32 apps:_favorites];
+            UIView *icon=[self iconForSlot:index size:32 apps:_favorites.count?_favorites:apps];
             icon.frame=CGRectMake((cell-32)*.5,4,32,32);
             [tile addSubview:icon];
             [_content addSubview:tile];
             [items addObject:tile];
         }
-        if(pins) {
-            UIView *divider=[[UIView alloc] initWithFrame:CGRectMake(12,_headroom+50,inner,hairline)];
-            divider.backgroundColor=rule;
-            [_content addSubview:divider];
-            [dividers addObject:divider];
-        }
+        UIView *divider=FMMakeGlowSeparator(CGRectMake(12,_headroom+50,inner,1.0));
+        [_content addSubview:divider];
+        [dividers addObject:divider];
         CGFloat top=_listTop,rowHeight=MAX(56,48/MAX(.50,_actual)),size=FMMenuStyleValue(@"menuListIconSize");
         for(NSUInteger index=0;index<3;index++) {
             UIView *row=[[UIView alloc] initWithFrame:CGRectMake(12,top+index*(rowHeight+4),inner,rowHeight)];
@@ -7753,11 +7754,45 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self addSlider:FMDockOption(@"orbSnapDamping",nil) to:rows group:group when:FMDockWhenAlways];
     [self addNote:@"微珠的位置不在这里调：在屏幕上直接把它拖到想放的地方，松手会吸到最近的一边。上面两项管松手吸边时的快慢和回弹。" to:rows group:group];
 }
+- (UIView *)handleCombinedRow {
+    FMDockSegments *segment=[[FMDockSegments alloc] initWithItems:@[@"胶囊",@"水滴"]];
+    segment.key=@"orbHandleStyle";
+    segment.selectedSegmentIndex=FMOrbHandleIsCapsule()?0:1;
+    segment.accessibilityLabel=@"微珠形状";
+    [segment addTarget:self action:@selector(segmentChanged:) forControlEvents:UIControlEventValueChanged];
+    [segment setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
+
+    UILabel *label=FMDockLabelWithWeight(@"拉动水滴",14.5,UIFontWeightMedium,FMThemeColor(FMColorText));
+    [label setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    FMDockSwitch *toggle=[FMDockSwitch new];
+    toggle.key=@"orbDropletPull";
+    toggle.on=BoolPref(@"orbDropletPull",NO);
+    toggle.onTintColor=FMSwitchGreen();
+    toggle.accessibilityLabel=@"拉动水滴";
+    [toggle setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [toggle addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
+
+    UIStackView *switchStack=[[UIStackView alloc] initWithArrangedSubviews:@[label,toggle]];
+    switchStack.axis=UILayoutConstraintAxisHorizontal;
+    switchStack.alignment=UIStackViewAlignmentCenter;
+    switchStack.spacing=8;
+    [switchStack setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    UIView *spacer=[UIView new];
+    [spacer setContentHuggingPriority:UILayoutPriorityFittingSizeLevel forAxis:UILayoutConstraintAxisHorizontal];
+    [spacer setContentCompressionResistancePriority:UILayoutPriorityFittingSizeLevel forAxis:UILayoutConstraintAxisHorizontal];
+
+    UIStackView *line=[[UIStackView alloc] initWithArrangedSubviews:@[segment,spacer,switchStack]];
+    line.axis=UILayoutConstraintAxisHorizontal;
+    line.alignment=UIStackViewAlignmentCenter;
+    line.spacing=10;
+    line.distribution=UIStackViewDistributionFill;
+    return FMDockRow(line,10,YES,52);
+}
 - (void)addHandleRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupHandle;
-    [self add:[self switchRow:@"拉动水滴" key:@"orbDropletPull" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
-    [self add:[self segmentRow:nil items:@[@"胶囊",@"水滴"] key:@"orbHandleStyle" selected:FMOrbHandleIsCapsule()?0:1]
-           to:rows group:group when:FMDockWhenAlways];
+    [self add:[self handleCombinedRow] to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbHandleReach",nil) to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbDropletCurve",nil) to:rows group:group when:FMDockWhenDroplet];
     [self addSlider:FMDockOption(@"orbDropletExtend",nil) to:rows group:group when:FMDockWhenDroplet];
