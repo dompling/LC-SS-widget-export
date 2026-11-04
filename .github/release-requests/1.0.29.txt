@@ -1,10 +1,7 @@
 LCFloatingMenu v1.0.29 formal release request
 
 Version: 1.0.29
-Source: 修复关闭展开动画后仍执行弹簧过渡和逐项动画
+Source: latest lcss-original including restored classic droplet outline, animation-off fix and update controls
 Notes: LCFloatingMenu/RELEASE_NOTES_1.0.29.md
-Publish: compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.29 tag, GitHub Release, and refresh fm-latest.
-
-Republish: 2026-11-04 after retiring the previous 1.0.29 Release and Tag.
-
-Republish request: use latest lcss-original code and updated release notes; perform fresh arm64 build and verification.
+Publish: fresh compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.29 tag, GitHub Release, and refresh fm-latest.
+Request: republish after old 1.0.29 Release and Tag were deleted on 2026-11-04.
