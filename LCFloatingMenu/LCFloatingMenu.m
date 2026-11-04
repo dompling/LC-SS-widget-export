@@ -1012,11 +1012,13 @@ static BOOL FMClearGlassEnabled(void) {
     return NO;
 }
 static CGFloat FMGlassTintStrength(void) {
+    if(BoolPref(@"easterEggIOSTheme", NO)) return .16;
     return Clamp(.16+FloatPref(@"glassTint",0),0,.40);
 }
 // Clear keeps the full system glass visible. The accent supplies the selected
 // theme's identity without placing an opaque sheet below the material.
 static CGFloat FMClearGlassTintStrength(void) {
+    if(BoolPref(@"easterEggIOSTheme", NO)) return .18;
     return Clamp(.18+FloatPref(@"glassTint",0)*.65,.18,.29);
 }
 static CGFloat FMReadableRowAlpha(void) {
@@ -2177,8 +2179,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                     ((void(*)(id,SEL,BOOL))objc_msgSend)(glassEffect,setInteractive,!strong);
                 SEL setTint=NSSelectorFromString(@"setTintColor:");
                 if([glassEffect respondsToSelector:setTint]) {
-                    UIColor *tint=[(clear?FMAccent():FMThemeColor(FMColorGlass))
-                        colorWithAlphaComponent:clear?FMClearGlassTintStrength():FMGlassTintStrength()];
+                    BOOL easterEgg=BoolPref(@"easterEggIOSTheme",NO);
+                    UIColor *tintBase=(clear && !easterEgg)?FMAccent():FMThemeColor(FMColorGlass);
+                    CGFloat strength=(clear && !easterEgg)?FMClearGlassTintStrength():FMGlassTintStrength();
+                    UIColor *tint=[tintBase colorWithAlphaComponent:strength];
                     ((void(*)(id,SEL,id))objc_msgSend)(glassEffect,setTint,tint);
                 }
                 effect=(UIVisualEffect *)glassEffect;
