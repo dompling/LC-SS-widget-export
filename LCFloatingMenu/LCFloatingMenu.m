@@ -819,6 +819,30 @@ static void FMApplyOrbOutline(UIButton *button,UIBezierPath *outline) {
         }
     button.layer.shadowPath=outline.CGPath;
 }
+// The 1.0.13 pull: a round water drop stretches from the wall. Keep the
+// current handle's curve topology so returning to either resting style is smooth.
+static UIBezierPath *FMDropletPath(CGRect bounds,BOOL dockLeft,CGFloat pullDist,CGFloat maxPull) {
+    CGFloat w=CGRectGetWidth(bounds),h=CGRectGetHeight(bounds);
+    CGFloat pull=Clamp(pullDist,0,MAX(maxPull,0));
+    FMHandleMetrics handle=FMOrbHandleMetrics(FMOrbHandleIsCapsule());
+    CGSize size=FMHandleFrameSize(handle);
+    FMNotchParams rest=FMHandleNotchParams(handle,1,w-size.width,(h-size.height)*.5);
+    CGFloat t=Clamp(pull/MAX(maxPull,1),0,1),cy=h*.5;
+    CGFloat radius=MIN(h*.20,(MAX(1,w-pull*.4)*.5+pull*.025));
+    CGFloat root=cy*t,flare=cy-radius-root;
+    FMNotchParams drop={0,root,w,h-root,w-radius,flare,flare,.725,.9,
+                        radius,radius,radius*.55228475,radius*.55228475};
+    CGFloat blend=FMSmooth(pull/MAX(14*FMOrbScale(),1));
+    FMNotchParams p={FMLerp(rest.left,drop.left,blend),FMLerp(rest.top,drop.top,blend),
+        FMLerp(rest.wall,drop.wall,blend),FMLerp(rest.bottom,drop.bottom,blend),
+        FMLerp(rest.rx,drop.rx,blend),FMLerp(rest.ryt,drop.ryt,blend),FMLerp(rest.ryb,drop.ryb,blend),
+        FMLerp(rest.a,drop.a,blend),FMLerp(rest.b,drop.b,blend),
+        FMLerp(rest.rdx,drop.rdx,blend),FMLerp(rest.rdy,drop.rdy,blend),
+        FMLerp(rest.kx,drop.kx,blend),FMLerp(rest.ky,drop.ky,blend)};
+    UIBezierPath *path=FMNotchFamilyPath(p);
+    if(dockLeft) [path applyTransform:CGAffineTransformMake(-1,0,0,1,w,0)];
+    return path;
+}
 // FMDrawerMotion:begin
 // The drawer grows out of the docked handle as one continuous outline, a move
 // between two members of the notch family (see FMNotchParams).
@@ -1966,6 +1990,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @implementation FMManager {
     CGPoint _panStartPoint;
     CGPoint _panOriginalCenter;
+    CGRect _panOriginalOrbFrame;
+    BOOL _panUsesDroplet,_panDropletTriggered;
     BOOL _panOriginalLeft;
     CGFloat _panMaxInwardDist;
     CGFloat _panMaxVerticalDist;
@@ -2536,6 +2562,67 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     }
 }
 
+// The 1.0.13 pull stretches just the handle; the drawer waits for release.
+- (void)applyDropletPull:(CGFloat)pull offsetY:(CGFloat)offsetY {
+    CGRect frame=_panOriginalOrbFrame;
+    frame.size.width+=pull*.4;
+    frame.origin.x=_panOriginalLeft?0:CGRectGetWidth(self.window.bounds)-frame.size.width;
+    frame.origin.y+=offsetY;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.orb.frame=frame;
+    UIView *glass=[self.orb viewWithTag:9202];
+    glass.frame=self.orb.bounds;
+    UIBezierPath *path=FMDropletPath(self.orb.bounds,_panOriginalLeft,pull,52*FMOrbScale());
+    FMApplyOrbOutline(self.orb,path);
+    FMLayoutOrbCapsule(glass,self.left);
+    // The rounded head, rather than the original docked capsule, supplies the fill while pulled.
+    for(CALayer *layer in glass.layer.sublayers)
+        if([layer.name isEqualToString:@"fm.orb.capsule"]) layer.opacity=1-Clamp(pull/(14*FMOrbScale()),0,1);
+    self.orbUpdateLine.hidden=pull>.01;
+    FMLayoutOrbBackdrop(self.orb,self.left);
+    [self.orb viewWithTag:9204].alpha=1-Clamp(pull/(52*FMOrbScale())*1.6,0,1);
+    [CATransaction commit];
+}
+- (void)restoreDropletToOriginalAnimated:(BOOL)animated {
+    if(!self.orb) return;
+    UIButton *dragged=self.orb;
+    UIView *glass=[dragged viewWithTag:9202];
+    CGRect target=_panOriginalOrbFrame;
+    UIBezierPath *path=FMDropletPath((CGRect){CGPointZero,target.size},_panOriginalLeft,0,52*FMOrbScale());
+    BOOL animate=animated && FMPopMode()!=2 && !UIAccessibilityIsReduceMotionEnabled();
+    // Read the presentation paths before installing the final model geometry.
+    NSMutableArray<NSArray *> *paths=[NSMutableArray array];
+    CAShapeLayer *mask=(CAShapeLayer *)glass.layer.mask;
+    if([mask isKindOfClass:CAShapeLayer.class]) [paths addObject:@[mask,@"path"]];
+    for(CALayer *layer in glass.layer.sublayers)
+        if([layer.name isEqualToString:@"fm.orb.rim"] && [layer isKindOfClass:CAShapeLayer.class])
+            [paths addObject:@[layer,@"path"]];
+    [paths addObject:@[dragged.layer,@"shadowPath"]];
+    for(NSArray *entry in paths) {
+        CALayer *layer=entry[0];NSString *key=entry[1];
+        id from=[layer.presentationLayer?:layer valueForKey:key];
+        [layer removeAnimationForKey:@"fm.droplet.return"];
+        if(animate && from) {
+            CABasicAnimation *animation=[CABasicAnimation animationWithKeyPath:key];
+            animation.fromValue=from;animation.toValue=(__bridge id)path.CGPath;
+            animation.duration=.26;
+            animation.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            [layer addAnimation:animation forKey:@"fm.droplet.return"];
+        }
+    }
+    void (^restore)(void)=^{
+        dragged.frame=target;
+        [self applyDropletPull:0 offsetY:0];
+    };
+    if(animate) [UIView animateWithDuration:.32 delay:0 usingSpringWithDamping:.75 initialSpringVelocity:.4
+        options:UIViewAnimationOptionBeginFromCurrentState|UIViewAnimationOptionAllowUserInteraction
+        animations:restore completion:^(BOOL finished) {
+            if(finished && self.orb==dragged) [self scheduleOrbFade];
+        }];
+    else {restore();[self scheduleOrbFade];}
+}
+
 - (void)pan:(UIPanGestureRecognizer *)g {
     CGPoint p=[g locationInView:self.overlayView];
     if(g.state==UIGestureRecognizerStateBegan) {
@@ -2545,9 +2632,16 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         _isPanning=YES;
         // With Reduce Motion nothing follows the finger: a long enough pull
         // opens the drawer once it is let go.
-        _panUsesMorph=!UIAccessibilityIsReduceMotionEnabled();
+        _panUsesDroplet=BoolPref(@"orbDropletPull",NO) && !UIAccessibilityIsReduceMotionEnabled();
+        _panUsesMorph=!_panUsesDroplet && !UIAccessibilityIsReduceMotionEnabled();
+        [self.orb.layer removeAllAnimations];
+        UIView *glass=[self.orb viewWithTag:9202];
+        [glass.layer.mask removeAnimationForKey:@"fm.droplet.return"];
+        for(CALayer *layer in glass.layer.sublayers) [layer removeAnimationForKey:@"fm.droplet.return"];
         _panStartPoint=p;
         _panOriginalCenter=self.orb.center;
+        _panOriginalOrbFrame=self.orb.frame;
+        _panDropletTriggered=NO;
         _panOriginalLeft=self.left;
         _panMaxInwardDist=0;
         _panMaxVerticalDist=0;
@@ -2605,6 +2699,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             FMApplyOrbOutline(self.orb,FMNotchFamilyPath(FMHandleNotchParams(pill,1,0,0)));
             // Keep the raised fill aligned with the pill.
             FMLayoutOrbCapsule(bead, self.left);
+            for(CALayer *layer in bead.layer.sublayers)
+                if([layer.name isEqualToString:@"fm.orb.capsule"]) layer.opacity=1;
             self.orbUpdateLine.hidden=NO;
             CGFloat scale=FMOrbScale();
             CGFloat beadReach=FMOrbStyleValue(@"orbHandleReach")*scale;
@@ -2615,6 +2711,16 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             [CATransaction commit];
             self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
             
+        } else if(_panUsesDroplet) {
+            CGFloat pull=MAX(0,inwardDist);
+            if(pull>28) pull=28+(pull-28)/(1+(pull-28)/48);
+            pull=MIN(pull,52*FMOrbScale());
+            [self applyDropletPull:pull offsetY:(p.y-_panStartPoint.y)*.14];
+            if(pull>=36*FMOrbScale() && !_panDropletTriggered) {
+                _panDropletTriggered=YES;
+                if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
+                    initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+            }
         } else if(_panUsesMorph && (_morphActive || (_panIsInwardPull && [self beginDrawerDragFromBead]))) {
             // === 抽屉从微珠里长出来，内侧边与手指一比一 ===
             [self applyMorphProgress:FMRubberProgress(inwardDist/_morphTravel)];
@@ -2676,6 +2782,12 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                             completion:^(BOOL done){[capsule removeFromSuperview];}];
                     }];
             }
+        } else if(_panUsesDroplet) {
+            BOOL open=_panDropletTriggered || (inwardV>180 && finalVerticalDist<60) || finalTotalDist<6;
+            if(open) {
+                [self restoreDropletToOriginalAnimated:NO];
+                if(!self.isOpen) [self toggle];
+            } else [self restoreDropletToOriginalAnimated:YES];
         } else if(_morphActive && _morphDragging) {
             // === 抽屉跟手松开：拉得够远、或甩得够快就展开，否则收回 ===
             CGFloat pulled=_panOriginalLeft?(p.x-_panStartPoint.x):(_panStartPoint.x-p.x);
@@ -2702,6 +2814,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     } else if(g.state==UIGestureRecognizerStateCancelled || g.state==UIGestureRecognizerStateFailed) {
         _isPanning=NO;
         if(_panIsRepositioning) [self drawOrb];
+        else if(_panUsesDroplet) [self restoreDropletToOriginalAnimated:NO];
         else if(_morphActive && _morphDragging) [self settleDrawerMorphOpen:NO velocity:0];
         else [self scheduleOrbFade];
     }
@@ -5146,6 +5259,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     for(NSDictionary *option in FMOrbStyleOptions()) SetPref(option[@"key"],option[@"default"]);
     for(NSDictionary *option in FMMenuStyleOptions()) SetPref(option[@"key"],option[@"default"]);
     SetPref(@"orbHandleStyle",@0);SetPref(@"orbScale",@(1.0));
+    SetPref(@"orbDropletPull",@NO);
     SetPref(@"idleAlpha",@(.72));SetPref(@"idleFade",@YES);
     SetPref(@"compactMode",@NO);SetPref(@"panelScale",@(1.0));
     SetPref(@"popAnimation",@0);SetPref(@"iconFrame",@NO);SetPref(@"glowLine",@YES);
@@ -7589,6 +7703,7 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)addHandleRows:(UIStackView *)rows {
     FMDockGroup group=FMDockGroupHandle;
+    [self add:[self switchRow:@"拉动水滴" key:@"orbDropletPull" defaultValue:NO] to:rows group:group when:FMDockWhenAlways];
     [self add:[self segmentRow:nil items:@[@"胶囊",@"水滴"] key:@"orbHandleStyle" selected:FMOrbHandleIsCapsule()?0:1]
            to:rows group:group when:FMDockWhenAlways];
     [self addSlider:FMDockOption(@"orbHandleReach",nil) to:rows group:group when:FMDockWhenAlways];
@@ -7615,7 +7730,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSString *shape=FMOrbHandleIsCapsule()?
         @"圆角越小，顶边越平越方，调到最大接近正半圆；柔和度决定拉出时它和屏幕边缘之间那截水滴颈的长短。":
         @"凹角弧度与上下延长度控制水滴微珠两端与屏幕贴合的弧度与延展；柔和度越大，微珠和屏幕边缘连得越平缓。";
-    NSString *lightNote=@"\n发光呼吸灯：开启后线条带有发光光晕效果，关闭不影响呼吸灯闪烁。\n红色呼吸灯：开启时检测到新版本会红灯呼吸闪烁提醒，关闭后哪怕有新版本也不闪烁（默认开启）。\n装饰呼吸灯：开启后微珠把手线条会一直呼吸闪烁，纯装饰美观（默认关闭）。\n呼吸灯颜色：自定义呼吸灯与光条线条的颜色，支持网格、光谱、滑块自由选取。";
+    NSString *lightNote=@"\n拉动水滴：向内拉时微珠会拉成水滴，拉够后松手展开菜单；未拉够会回弹。关闭后使用菜单跟手展开。\n发光呼吸灯：开启后线条带有发光光晕效果，关闭不影响呼吸灯闪烁。\n红色呼吸灯：开启时检测到新版本会红灯呼吸闪烁提醒，关闭后哪怕有新版本也不闪烁（默认开启）。\n装饰呼吸灯：开启后微珠把手线条会一直呼吸闪烁，纯装饰美观（默认关闭）。\n呼吸灯颜色：自定义呼吸灯与光条线条的颜色，支持网格、光谱、滑块自由选取。";
     self.handleNote.text=[shape stringByAppendingString:lightNote];
 }
 - (void)addOpacityRows:(UIStackView *)rows {

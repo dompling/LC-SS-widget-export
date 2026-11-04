@@ -701,6 +701,28 @@ int main(void) { @autoreleasepool {
                "the margin around the drawer still counts as inside");
         Expect(FMScrubIsOutside(-44.01,240) && FMScrubIsOutside(284.01,240),"past the margin, letting go cancels");
     }
+    for(NSNumber *scale in @[@.7,@1,@1.9]) for(int style=0;style<2;style++) {
+        geometryScale=scale.doubleValue;[stylePreferences removeAllObjects];
+        SetHandle(style==0,22,80,1,.83);
+        CGSize rest=FMHandleFrameSize(FMOrbHandleMetrics(style==0));
+        CGRect bounds=CGRectMake(0,0,rest.width,rest.height);
+        UIBezierPath *zero=FMDropletPath(bounds,NO,0,52*geometryScale);
+        Expect(CGPathEqualToPath(zero.CGPath,FMSideNotchPath(bounds,NO,YES,YES).CGPath),"pull starts at exact configured handle outline");
+        for(int step=0;step<=52;step++) {
+            CGFloat pull=step*geometryScale;
+            bounds.size.width=rest.width+pull*.4;
+            UIBezierPath *right=FMDropletPath(bounds,NO,pull,52*geometryScale);
+            UIBezierPath *left=FMDropletPath(bounds,YES,pull,52*geometryScale);
+            CGAffineTransform mirror=CGAffineTransformMake(-1,0,0,1,bounds.size.width,0);
+            CGPathRef mirrored=CGPathCreateCopyByTransformingPath(right.CGPath,&mirror);
+            Expect(CGPathEqualToPath(mirrored,left.CGPath),"pull water drop mirrors exactly between edges");CGPathRelease(mirrored);
+            CGRect box=CGPathGetPathBoundingBox(right.CGPath);
+            Expect(!CGRectIsNull(box) && isfinite(box.origin.x) && isfinite(box.origin.y) &&
+                   box.origin.x>=-.001 && box.origin.y>=-.001 && CGRectGetMaxX(box)<=bounds.size.width+.001 &&
+                   CGRectGetMaxY(box)<=bounds.size.height+.001,"pull water drop stays finite inside its frame");
+        }
+    }
+    geometryScale=1;[stylePreferences removeAllObjects];
     const char *preview=getenv("FM_GEOMETRY_PREVIEW");
     if(preview) {
         // One row per handle style: the drawer growing out of it, drawn at 60%.

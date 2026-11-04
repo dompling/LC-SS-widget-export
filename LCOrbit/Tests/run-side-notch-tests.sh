@@ -15,7 +15,9 @@ style=source[source.index('static NSArray<NSDictionary *> *FMOrbStyleOptions'):s
 # The drawer morph is a self-contained block between two markers.
 begin_motion=source.index('// FMDrawerMotion:begin')
 end_motion=source.index('// FMDrawerMotion:end')
-Path(sys.argv[2]).write_text(style+'\n'+source[start:end]+'\n'+source[begin_motion:end_motion])
+drop_start=source.index('static UIBezierPath *FMDropletPath(')
+drop_end=source.index('\n}',drop_start)+2
+Path(sys.argv[2]).write_text(style+'\n'+source[start:end]+'\n'+source[drop_start:drop_end]+'\n'+source[begin_motion:end_motion])
 PYTEST
 xcrun --sdk macosx clang -fobjc-arc -fblocks -Wall -Wextra -Werror \
     -framework Foundation -framework CoreGraphics -framework ImageIO -I "$WORK" \

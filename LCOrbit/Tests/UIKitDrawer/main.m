@@ -802,6 +802,65 @@ static void RunTests(void) {
     FixtureCurrent=YES;closing=Manager(NO,1,667,ordinary,NO,YES,@"apps");
     CapturedAlert=nil;CloseCount=0;[closing closeMultitaskGuest];
     Check(@"footer-close-immediate",!CapturedAlert && CloseCount==1 && !closing.isOpen,@{@"closeCalls":@(CloseCount),@"alert":@(CapturedAlert!=nil)});FixtureCurrent=NO;
+    // A legacy water-drop pull keeps the drawer absent until the finger lifts.
+    id savedPull=[prefs objectForKey:@"LCFloatingMenu.orbDropletPull"];
+    id savedPullStyle=[prefs objectForKey:@"LCFloatingMenu.orbHandleStyle"];
+    id savedPullPop=[prefs objectForKey:@"LCFloatingMenu.popAnimation"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.orbDropletPull"];
+    for(NSNumber *left in @[@NO,@YES]) for(NSNumber *shape in @[@0,@1]) {
+        [prefs setObject:shape forKey:@"LCFloatingMenu.orbHandleStyle"];
+        [prefs setObject:@2 forKey:@"LCFloatingMenu.popAnimation"];
+        FMManager *drop=Manager(NO,1,667,ordinary,left.boolValue,NO,@"apps");
+        CGRect original=drop.orb.frame;NSUInteger writes=PositionWrites;
+        FixturePan *pull=[FixturePan new];CGFloat sign=left.boolValue?1:-1;
+        pull.fixturePoint=CGPointMake(CGRectGetMidX(original),CGRectGetMidY(original));
+        CGPoint start=pull.fixturePoint;pull.fixtureState=UIGestureRecognizerStateBegan;[drop pan:pull];
+        pull.fixturePoint=CGPointMake(start.x+sign*20,start.y);pull.fixtureState=UIGestureRecognizerStateChanged;[drop pan:pull];
+        NSString *suffix=[NSString stringWithFormat:@"%@-%@",left,shape];
+        Check([@"droplet-enabled-pull-stretches-bead-" stringByAppendingString:suffix],drop.orb.bounds.size.width>original.size.width+7 && !drop.panel,nil);
+        Snapshot(drop,[@"droplet-pull-" stringByAppendingString:suffix]);
+        pull.fixtureState=UIGestureRecognizerStateCancelled;[drop pan:pull];
+        Check([@"droplet-cancel-restores-bead-" stringByAppendingString:suffix],CGRectEqualToRect(drop.orb.frame,original) && !drop.isOpen && !drop.panel && writes==PositionWrites,nil);
+        pull.fixtureState=UIGestureRecognizerStateBegan;pull.fixturePoint=start;[drop pan:pull];
+        pull.fixtureState=UIGestureRecognizerStateChanged;pull.fixturePoint=CGPointMake(start.x+sign*20,start.y);[drop pan:pull];
+        pull.fixtureState=UIGestureRecognizerStateEnded;[drop pan:pull];
+        Check([@"droplet-short-pull-pop-off-restores-immediately-" stringByAppendingString:suffix],!drop.isOpen && CGRectEqualToRect(drop.orb.frame,original),nil);
+        pull.fixtureState=UIGestureRecognizerStateBegan;pull.fixturePoint=start;[drop pan:pull];
+        pull.fixtureState=UIGestureRecognizerStateChanged;pull.fixturePoint=CGPointMake(start.x+sign*70,start.y);[drop pan:pull];
+        Check([@"droplet-long-pull-waits-for-release-" stringByAppendingString:suffix],!drop.isOpen && !drop.panel,nil);
+        pull.fixtureState=UIGestureRecognizerStateEnded;[drop pan:pull];
+        Check([@"droplet-long-release-opens-menu-" stringByAppendingString:suffix],drop.isOpen && drop.panel,nil);
+    }
+    FMManager *turn=Manager(NO,1,667,ordinary,YES,NO,@"apps");CGRect turnRest=turn.orb.frame;
+    NSUInteger turnWrites=PositionWrites;
+    FixturePan *turnPull=[FixturePan new];turnPull.fixturePoint=CGPointMake(10,330);turnPull.fixtureState=UIGestureRecognizerStateBegan;[turn pan:turnPull];
+    turnPull.fixturePoint=CGPointMake(30,330);turnPull.fixtureState=UIGestureRecognizerStateChanged;[turn pan:turnPull];
+    turnPull.fixturePoint=CGPointMake(30,410);[turn pan:turnPull];
+    BOOL fillVisible=NO;
+    for(CALayer *layer in [turn.orb viewWithTag:9202].layer.sublayers)
+        if([layer.name isEqualToString:@"fm.orb.capsule"]) fillVisible=layer.opacity>.99;
+    Check(@"droplet-vertical-turn-restores-moving-capsule",!turn.panel && fillVisible && turn.orb.center.y>CGRectGetMidY(turnRest)+40,nil);
+    turnPull.fixtureState=UIGestureRecognizerStateCancelled;[turn pan:turnPull];
+    Check(@"droplet-vertical-turn-cancel-preserves-saved-position",PositionWrites==turnWrites && CGRectEqualToRect(turn.orb.frame,turnRest),nil);
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
+    FMManager *rebound=Manager(NO,1,667,ordinary,YES,NO,@"apps");
+    CGRect reboundRest=rebound.orb.frame;
+    FixturePan *shortPull=[FixturePan new];shortPull.fixturePoint=CGPointMake(10,330);shortPull.fixtureState=UIGestureRecognizerStateBegan;[rebound pan:shortPull];
+    shortPull.fixturePoint=CGPointMake(30,330);shortPull.fixtureState=UIGestureRecognizerStateChanged;[rebound pan:shortPull];
+    shortPull.fixtureState=UIGestureRecognizerStateEnded;[rebound pan:shortPull];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.6*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+        Check(@"droplet-short-release-spring-restores-resting-frame",!rebound.isOpen && !rebound.panel && CGRectEqualToRect(rebound.orb.frame,reboundRest),nil);
+    });
+    [prefs setObject:nil forKey:@"LCFloatingMenu.orbDropletPull"];
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
+    FMManager *modern=Manager(NO,1,667,ordinary,YES,NO,@"apps");
+    FixturePan *modernPull=[FixturePan new];modernPull.fixturePoint=CGPointMake(10,330);modernPull.fixtureState=UIGestureRecognizerStateBegan;[modern pan:modernPull];
+    modernPull.fixturePoint=CGPointMake(40,330);modernPull.fixtureState=UIGestureRecognizerStateChanged;[modern pan:modernPull];
+    Check(@"droplet-default-off-keeps-drawer-following-finger",modern.panel && [[modern valueForKey:@"morphDragging"] boolValue],nil);
+    modernPull.fixtureState=UIGestureRecognizerStateCancelled;[modern pan:modernPull];
+    [prefs setObject:savedPull forKey:@"LCFloatingMenu.orbDropletPull"];
+    [prefs setObject:savedPullStyle forKey:@"LCFloatingMenu.orbHandleStyle"];
+    [prefs setObject:savedPullPop forKey:@"LCFloatingMenu.popAnimation"];
     FMManager *pan=Manager(NO,1,667,ordinary,NO,NO,@"apps");CGRect saved=pan.orb.frame;PositionWrites=0;
     FixturePan *g=[FixturePan new];g.fixturePoint=CGPointMake(150,180);g.fixtureState=UIGestureRecognizerStateBegan;[pan pan:g];
     g.fixtureState=UIGestureRecognizerStateChanged;g.fixturePoint=CGPointMake(150,210);[pan pan:g];
@@ -860,6 +919,24 @@ static void RunTests(void) {
     Check(@"dock-slider-moves-in-the-dock-steps",reach && reach.minimumValue==14 && reach.maximumValue==34 && reach.value==22,nil);
     reach.value=31.4;[dock sliderChanged:reach];Settle(dock.view);
     Check(@"dock-slider-applies-and-persists",[prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31 && reach.value==31 && fabs([dockPreview viewWithTag:9211].bounds.size.width-31)<.01,@([prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]));
+    UISwitch *pullSwitch=(UISwitch *)DockControl(dock.view,@"FMDockSwitch",@"orbDropletPull");
+    if(!pullSwitch) {
+        for(UIView *view in Views(dock.view)) if([view isKindOfClass:UIControl.class] && view.tag==1 &&
+            [[(UIControl *)view actionsForTarget:dock forControlEvent:UIControlEventTouchUpInside] containsObject:@"headerTapped:"])
+            { [dock headerTapped:(UIControl *)view];break; }
+        pullSwitch=(UISwitch *)DockControl(dock.view,@"FMDockSwitch",@"orbDropletPull");
+    }
+    [dock.view layoutIfNeeded];
+    UIScrollView *pullScroll=[dock valueForKey:@"scroll"];
+    if(pullSwitch) [pullScroll scrollRectToVisible:[pullSwitch convertRect:pullSwitch.bounds toView:pullScroll] animated:NO];
+    UIGraphicsImageRenderer *pullRenderer=[[UIGraphicsImageRenderer alloc] initWithSize:dock.view.bounds.size];
+    UIImage *pullSettings=[pullRenderer imageWithActions:^(UIGraphicsImageRendererContext *context){[dock.view.layer renderInContext:context.CGContext];}];
+    [UIImagePNGRepresentation(pullSettings) writeToFile:[EvidencePath stringByAppendingPathComponent:@"droplet-setting-switch.png"] atomically:YES];
+    Check(@"droplet-setting-uses-existing-switch-and-defaults-off",pullSwitch && !pullSwitch.on,nil);
+    pullSwitch.on=YES;[dock switchChanged:pullSwitch];
+    Check(@"droplet-setting-persists-enabled",pullSwitch && [prefs boolForKey:@"LCFloatingMenu.orbDropletPull"],nil);
+    pullSwitch.on=NO;[dock switchChanged:pullSwitch];
+    Check(@"droplet-setting-persists-disabled",pullSwitch && ![prefs boolForKey:@"LCFloatingMenu.orbDropletPull"],nil);
     UIControl *trayHeader=nil;
     for(UIView *view in Views(dock.view)) if([view isKindOfClass:UIControl.class] && view.tag==3 &&
         [[(UIControl *)view actionsForTarget:dock forControlEvent:UIControlEventTouchUpInside] containsObject:@"headerTapped:"]) trayHeader=(UIControl *)view;
@@ -898,9 +975,11 @@ static void RunTests(void) {
     fadeSwitch.on=NO;[dock switchChanged:fadeSwitch];
     NSArray<NSString *> *steadyKeys=ShownKeys(dock.view,@"FMDockSlider");
     Check(@"dock-fade-sliders-hide-when-fading-is-off",![steadyKeys containsObject:@"fadeDelay"] && ![steadyKeys containsObject:@"fadedOpacity"] && [steadyKeys containsObject:@"idleAlpha"],steadyKeys);
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.orbDropletPull"];
     // Reset puts every one of the page's settings back.
     [prefs setObject:@44 forKey:@"LCFloatingMenu.menuExtension"];
     [style resetDockSettings];
+    Check(@"droplet-reset-restores-disabled-default",![prefs boolForKey:@"LCFloatingMenu.orbDropletPull"],nil);
     Check(@"dock-reset-restores-every-default",[prefs doubleForKey:@"LCFloatingMenu.orbHandleReach"]==22 && [prefs doubleForKey:@"LCFloatingMenu.popAnimation"]==0 &&
           [prefs doubleForKey:@"LCFloatingMenu.menuExtension"]==28 && ![prefs boolForKey:@"LCFloatingMenu.compactMode"] && [prefs boolForKey:@"LCFloatingMenu.idleFade"],nil);
     [dock rebuild];[dock.view layoutIfNeeded];
