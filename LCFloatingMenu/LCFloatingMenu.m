@@ -1744,6 +1744,7 @@ static UIControl *FMSettingsNavigationRowCustom(NSString *name,NSString *subtitl
 @property(nonatomic,weak) UILabel *updateStatusLabel;
 @property(nonatomic,assign) BOOL checkingUpdate;
 @property(nonatomic,assign) BOOL requestedAutomaticUpdate;
+@property(nonatomic,strong) UIAlertController *updateDownloadAlert;
 @property(nonatomic,strong) NSMutableSet<NSString *> *automaticallyOfferedVersions;
 @property(nonatomic,strong) id updateReleaseObserver;
 @property(nonatomic,strong) id updateActivationObserver;
@@ -6191,28 +6192,54 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     NSDictionary *release=[LCOrbitUpdateRelease validatedRelease:candidate error:nil];
     if(!release || ![LCOrbitUpdateRelease isNewerRelease:release thanVersion:FM_MENU_VERSION]) return;
     self.checkingUpdate=YES;
-    self.updateStatusLabel.text=@"下载并校验插件中…";
-    NSMutableURLRequest *download=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:release[@"downloadURL"]]];
-    download.timeoutInterval=40;
+    self.updateStatusLabel.text=@"正在连接 GitHub…";
     __weak typeof(self) weakSelf=self;
-    [[[NSURLSession sharedSession] dataTaskWithRequest:download completionHandler:^(NSData *binary,NSURLResponse *response,NSError *error) {
-        NSError *installError=nil;
-        BOOL success=NO;
-        if(!error && [(NSHTTPURLResponse *)response statusCode]==200 && binary.length>0 && FMHostUI())
-            success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:release[@"sha256"] error:&installError];
-        dispatch_async(dispatch_get_main_queue(),^{
-            typeof(self) owner=weakSelf;
-            if(!owner) return;
-            owner.checkingUpdate=NO;
-            owner.updateStatusLabel.text=@"检查微珠最新发布版";
-            [owner afterUpdatePrompt:prompt perform:^{
-                [weakSelf presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
-                    message:success?@"已校验并替换旧插件。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
-                    (installError.localizedDescription?:error.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
-                    showRepository:!success];
+    [self afterUpdatePrompt:prompt perform:^{
+        typeof(self) owner=weakSelf;
+        if(!owner) return;
+        UIAlertController *progressAlert=[UIAlertController alertControllerWithTitle:@"下载插件"
+            message:@"正在连接 GitHub…" preferredStyle:UIAlertControllerStyleAlert];
+        owner.updateDownloadAlert=progressAlert;
+        [owner presentViewController:progressAlert animated:YES completion:nil];
+        [LCOrbitGitHub downloadReleaseAsset:[NSURL URLWithString:release[@"downloadURL"]]
+            progress:^(int64_t received,int64_t expected) {
+                dispatch_async(dispatch_get_main_queue(),^{
+                    typeof(self) current=weakSelf;
+                    if(!current.checkingUpdate || current.updateDownloadAlert!=progressAlert) return;
+                    NSString *size=[NSByteCountFormatter stringFromByteCount:received countStyle:NSByteCountFormatterCountStyleFile];
+                    NSString *message=expected>0?[NSString stringWithFormat:@"正在下载 %.0f%%\n%@ / %@",
+                        MIN(100.,100.*received/expected),size,
+                        [NSByteCountFormatter stringFromByteCount:expected countStyle:NSByteCountFormatterCountStyleFile]]:
+                        [NSString stringWithFormat:@"正在下载\n已下载 %@",size];
+                    progressAlert.message=message;
+                    current.updateStatusLabel.text=message;
+                });
+            } completion:^(NSData *binary,NSHTTPURLResponse *response,NSError *error) {
+                dispatch_async(dispatch_get_main_queue(),^{
+                    if(!error && weakSelf.updateDownloadAlert==progressAlert) {
+                        progressAlert.message=@"下载完成，正在校验并安装…";
+                        weakSelf.updateStatusLabel.text=progressAlert.message;
+                    }
+                });
+                NSError *installError=nil;
+                BOOL success=NO;
+                if(!error && response.statusCode==200 && binary.length>0 && FMHostUI())
+                    success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:release[@"sha256"] error:&installError];
+                dispatch_async(dispatch_get_main_queue(),^{
+                    typeof(self) current=weakSelf;
+                    if(!current) return;
+                    current.checkingUpdate=NO;
+                    current.updateStatusLabel.text=@"检查微珠最新发布版";
+                    [current afterUpdatePrompt:progressAlert perform:^{
+                        weakSelf.updateDownloadAlert=nil;
+                        [weakSelf presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
+                            message:success?@"已校验并替换旧插件。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
+                            (installError.localizedDescription?:error.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
+                            showRepository:!success];
+                    }];
+                });
             }];
-        });
-    }] resume];
+    }];
 }
 - (void)offerUpdateRelease:(NSDictionary *)release automatic:(BOOL)automatic {
     if(!FMHostUI() || ![self isSettingsRootVisible] || self.presentedViewController || self.checkingUpdate) return;

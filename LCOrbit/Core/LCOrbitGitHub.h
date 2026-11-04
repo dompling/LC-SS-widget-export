@@ -12,6 +12,10 @@ NS_ASSUME_NONNULL_BEGIN
                                         error:(NSError * _Nullable * _Nullable)error;
 + (void)performRequest:(NSURLRequest *)request
            completion:(void (^)(NSData * _Nullable, NSHTTPURLResponse * _Nullable, NSError * _Nullable))completion;
+/// Downloads only the official plugin release; progress is delivered on the session queue.
++ (void)downloadReleaseAsset:(NSURL *)browserURL
+                    progress:(void (^)(int64_t received, int64_t expected))progress
+                  completion:(void (^)(NSData * _Nullable, NSHTTPURLResponse * _Nullable, NSError * _Nullable))completion;
 /// Always returns local, bounded messages, never GitHub bodies or credentials.
 + (NSString *)messageForStatusCode:(NSInteger)status;
 @end

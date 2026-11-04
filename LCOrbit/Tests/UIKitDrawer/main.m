@@ -91,6 +91,7 @@ static NSUInteger UpdatePromptPresentations,DownloadResumes,UpdateInstalls;
 static BOOL RejectUpdateSkipSave;
 static NSURLRequest *DownloadRequest;
 static void (^DownloadCompletion)(NSData *,NSURLResponse *,NSError *);
+static void (^DownloadProgress)(int64_t,int64_t);
 static NSString *InstalledUpdateDigest;
 static NSMutableDictionary *PluginAutoStates;
 static NSString *LastPluginAutoName;
@@ -129,23 +130,17 @@ static NSUInteger GitHubCredentialReads,GitHubRequests,GitHubSaves,GitHubClears;
 static BOOL GitHubSavedEmptyToken;
 static NSString *GitHubRequestedURL;
 static NSMutableArray *GitHubCompletions;
-@interface FixtureDownloadTask : NSObject
-- (void)resume;
+@interface LCOrbitGitHub (DrawerDownloadFixture)
++ (void)fixtureDownloadReleaseAsset:(NSURL *)url progress:(void (^)(int64_t,int64_t))progress
+                       completion:(void (^)(NSData *,NSHTTPURLResponse *,NSError *))completion;
 @end
-@implementation FixtureDownloadTask
-- (void)resume { DownloadResumes++; }
-@end
-@interface FixtureDownloadSession : NSObject
-- (id)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *,NSURLResponse *,NSError *))completion;
-@end
-@implementation FixtureDownloadSession
-- (id)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *,NSURLResponse *,NSError *))completion {
-    DownloadRequest=request;DownloadCompletion=[completion copy];return [FixtureDownloadTask new];
+@implementation LCOrbitGitHub (DrawerDownloadFixture)
++ (void)fixtureDownloadReleaseAsset:(NSURL *)url progress:(void (^)(int64_t,int64_t))progress
+                       completion:(void (^)(NSData *,NSHTTPURLResponse *,NSError *))completion {
+    DownloadResumes++;
+    DownloadRequest=[NSURLRequest requestWithURL:url];
+    DownloadProgress=[progress copy];DownloadCompletion=(id)[completion copy];
 }
-@end
-@interface NSURLSession (DrawerUpdateFixture) @end
-@implementation NSURLSession (DrawerUpdateFixture)
-+ (NSURLSession *)fixtureSharedSession { return (id)[FixtureDownloadSession new]; }
 @end
 @interface LCOrbitPluginUpdater (DrawerUpdateFixture) @end
 @implementation LCOrbitPluginUpdater (DrawerUpdateFixture)
@@ -429,6 +424,17 @@ static void RunUpdatePromptTests(void) {
         Check(@"update-download-action-starts-once-without-second-confirmation",DownloadResumes==downloadsBefore+1 &&
               [DownloadRequest.URL.absoluteString isEqual:UpdateRelease(@"9.0.11")[@"downloadURL"]] &&
               ![DownloadRequest valueForHTTPHeaderField:@"Authorization"],nil);
+        UIAlertController *progressAlert=[reopened respondsToSelector:NSSelectorFromString(@"updateDownloadAlert")]?
+            [reopened valueForKey:@"updateDownloadAlert"]:nil;
+        Check(@"update-download-displays-progress-alert",[progressAlert.title isEqual:@"下载插件"],nil);
+        if(DownloadProgress) DownloadProgress(512*1024,1024*1024);
+        dispatch_async(dispatch_get_main_queue(),^{
+        Check(@"update-download-displays-percentage-and-size",[progressAlert.message containsString:@"50%"] &&
+              [progressAlert.message containsString:@"/"],progressAlert.message);
+        if(DownloadProgress) DownloadProgress(768*1024,NSURLResponseUnknownLength);
+        dispatch_async(dispatch_get_main_queue(),^{
+        Check(@"update-download-unknown-total-displays-received-size",[progressAlert.message containsString:@"已下载"] &&
+              ![progressAlert.message containsString:@"%"],progressAlert.message);
         CapturedAlert=nil;
         if(DownloadCompletion) {
             void (^completion)(NSData *,NSURLResponse *,NSError *)=DownloadCompletion;DownloadCompletion=nil;
@@ -438,6 +444,9 @@ static void RunUpdatePromptTests(void) {
         dispatch_async(dispatch_get_main_queue(),^{
             Check(@"update-download-uses-existing-digest-install-boundary",UpdateInstalls==1 &&
                   [InstalledUpdateDigest isEqual:UpdateRelease(@"9.0.11")[@"sha256"]],nil);
+            Check(@"update-download-clears-progress-before-result",[reopened valueForKey:@"updateDownloadAlert"]==nil &&
+                  ![[reopened valueForKey:@"checkingUpdate"] boolValue] &&
+                  [CapturedAlert.title isEqual:@"插件已下载并替换"],CapturedAlert.title);
             // No metadata: fetch once, leave the root before completion. The
             // late result is cacheable but cannot take over a child page.
             [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
@@ -520,6 +529,8 @@ static void RunUpdatePromptTests(void) {
                     });
                 });
             });
+        });
+        });
         });
     });
 }
@@ -1225,7 +1236,8 @@ static void RunTests(void) {
         SwapClass(LCOrbitTweakSync.class,@selector(setAutomaticSyncEnabled:forPlugin:error:),@selector(fixtureSetAutomaticSyncEnabled:forPlugin:error:));
     SwapClass(LCOrbitTweakSync.class,@selector(syncAutomaticallyIfNeeded),@selector(fixtureSyncAutomaticallyIfNeeded));
     SwapClass(LCOrbitTweakCenter.class,@selector(pluginInfo:shared:),@selector(fixturePluginInfo:shared:));
-    SwapClass(NSURLSession.class,@selector(sharedSession),@selector(fixtureSharedSession));
+    if([LCOrbitGitHub respondsToSelector:NSSelectorFromString(@"downloadReleaseAsset:progress:completion:")])
+        SwapClass(LCOrbitGitHub.class,NSSelectorFromString(@"downloadReleaseAsset:progress:completion:"),@selector(fixtureDownloadReleaseAsset:progress:completion:));
     SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPlugin:expectedSHA256:error:),@selector(fixtureInstallDownloadedPlugin:expectedSHA256:error:));
     SwapClass(LCOrbitStorage.class,@selector(lastError),@selector(fixtureLastError));
     SwapClass(LCOrbitGitHub.class,@selector(accountWithError:),@selector(fixtureAccountWithError:));

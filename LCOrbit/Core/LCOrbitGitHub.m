@@ -91,7 +91,122 @@ static BOOL GHAPIURL(NSURL *url) {
 }
 @end
 
+// Release assets redirect to signed CDN URLs. Credentials belong only to the API.
+static BOOL GHAssetCDNURL(NSURL *url) {
+    return [url.scheme.lowercaseString isEqualToString:@"https"] &&
+        ([@[@"release-assets.githubusercontent.com",@"objects.githubusercontent.com"] containsObject:url.host.lowercaseString]) &&
+        (!url.port || url.port.integerValue==443) && !url.user && !url.password && !url.fragment;
+}
+static const NSUInteger GHAssetLimit=32*1024*1024;
+@interface LCOrbitGitHubAssetDelegate : NSObject <NSURLSessionDataDelegate>
+@property(nonatomic,copy) NSURLRequest *request;
+@property(nonatomic,copy) void (^progress)(int64_t,int64_t);
+@property(nonatomic,copy) void (^completion)(NSData *,NSHTTPURLResponse *,NSError *);
+@property(nonatomic,strong) NSMutableData *received;
+@property(nonatomic,strong) NSHTTPURLResponse *response;
+@property(nonatomic,strong) NSError *failure;
+@property(nonatomic,assign) NSUInteger attempts;
+- (void)start;
+@end
+@implementation LCOrbitGitHubAssetDelegate
+- (void)start {
+    self.received=[NSMutableData data];self.response=nil;self.failure=nil;
+    if(self.progress) self.progress(0,NSURLSessionTransferSizeUnknown);
+    NSURLSessionConfiguration *configuration=NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    configuration.HTTPCookieStorage=nil;configuration.URLCredentialStorage=nil;configuration.URLCache=nil;
+    configuration.timeoutIntervalForResource=180;
+    NSURLSession *session=[NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
+    [[session dataTaskWithRequest:self.request] resume];
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
+    completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    BOOL api=GHAPIURL(request.URL) && GHAPIURL(task.currentRequest.URL);
+    if(!api && !GHAssetCDNURL(request.URL)) {
+        self.failure=GHError(8,@"插件下载跳转到了不受支持的地址，已取消下载。");
+        completionHandler(nil);return;
+    }
+    NSMutableURLRequest *next=[request mutableCopy];
+    [next setValue:api && [LCOrbitHost isHostUI]?[task.currentRequest valueForHTTPHeaderField:@"Authorization"]:nil
+        forHTTPHeaderField:@"Authorization"];
+    next.HTTPShouldHandleCookies=NO;
+    completionHandler(next);
+}
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task
+    didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    self.response=[response isKindOfClass:NSHTTPURLResponse.class]?(id)response:nil;
+    if(self.response.statusCode!=200) self.failure=GHError(self.response.statusCode,
+        [LCOrbitGitHub messageForStatusCode:self.response.statusCode]);
+    else if(response.expectedContentLength>(int64_t)GHAssetLimit) self.failure=GHError(9,@"插件文件超过下载大小限制，已取消更新。");
+    completionHandler(self.failure?NSURLSessionResponseCancel:NSURLSessionResponseAllow);
+}
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveData:(NSData *)data {
+    if(self.failure) return;
+    if(data.length>GHAssetLimit-self.received.length) {
+        self.failure=GHError(9,@"插件文件超过下载大小限制，已取消更新。");[task cancel];return;
+    }
+    [self.received appendData:data];
+    if(self.progress) self.progress((int64_t)self.received.length,self.response.expectedContentLength);
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    [session finishTasksAndInvalidate];
+    if(!self.failure && [error.domain isEqualToString:NSURLErrorDomain] &&
+       (error.code==NSURLErrorNetworkConnectionLost || error.code==NSURLErrorTimedOut) && self.attempts<2) {
+        self.attempts++;
+        // Restart from the API so an expired CDN URL is never reused, and never
+        // append a retried body to partial bytes from the interrupted attempt.
+        [self start];return;
+    }
+    NSError *failure=self.failure;
+    if(!failure && error) failure=GHError(error.code,@"插件下载连接失败，请检查网络后重试。已保存的 GitHub 配置不会被清除。");
+    if(!failure && !self.received.length) failure=GHError(10,@"下载的插件为空，请稍后重试。");
+    if(self.completion) self.completion(failure?nil:self.received,self.response,failure);
+    self.completion=nil;self.progress=nil;
+}
+@end
+
 @implementation LCOrbitGitHub
++ (void)downloadReleaseAsset:(NSURL *)browserURL progress:(void (^)(int64_t,int64_t))progress
+                  completion:(void (^)(NSData *,NSHTTPURLResponse *,NSError *))completion {
+    NSError *error=nil;
+    if(!GHHost(&error)) {completion(nil,nil,error);return;}
+    NSString *pattern=@"^https://github\\.com/dompling/LC-SS-widget-export/releases/download/[A-Za-z0-9_-][A-Za-z0-9._-]*/LCFloatingMenu\\.dylib$";
+    NSString *link=browserURL.absoluteString;
+    NSRange match=[link rangeOfString:pattern options:NSRegularExpressionSearch];
+    if(!link.length || match.location!=0 || match.length!=link.length) {
+        completion(nil,nil,GHError(6,@"仅允许下载官方发布的微珠插件。"));return;
+    }
+    NSString *tag=browserURL.URLByDeletingLastPathComponent.lastPathComponent;
+    NSURL *metadataURL=[NSURL URLWithString:[@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/tags/" stringByAppendingString:tag]];
+    NSMutableURLRequest *metadata=[self requestForURL:metadataURL timeout:40 error:&error];
+    if(!metadata) {completion(nil,nil,error);return;}
+    [self performRequest:metadata completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure) {
+        if(failure || response.statusCode!=200) {
+            completion(nil,response,failure?:GHError(response.statusCode,[self messageForStatusCode:response.statusCode]));return;
+        }
+        id json=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
+        NSArray *assets=[json isKindOfClass:NSDictionary.class] && [json[@"assets"] isKindOfClass:NSArray.class]?json[@"assets"]:nil;
+        NSNumber *identifier=nil;
+        for(id asset in assets) {
+            if(![asset isKindOfClass:NSDictionary.class] || ![asset[@"name"] isEqual:@"LCFloatingMenu.dylib"] ||
+               ![asset[@"browser_download_url"] isEqual:link]) continue;
+            id value=asset[@"id"];
+            NSString *digits=[value isKindOfClass:NSNumber.class]?[value stringValue]:@"";
+            NSRange valid=[digits rangeOfString:@"^[1-9][0-9]{0,18}$" options:NSRegularExpressionSearch];
+            if(valid.location==0 && valid.length==digits.length && digits.length) identifier=value;
+            break;
+        }
+        if(!identifier) {completion(nil,response,GHError(11,@"未找到对应版本的插件资源，请重新检查更新。"));return;}
+        NSURL *assetURL=[NSURL URLWithString:[NSString stringWithFormat:@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/assets/%@",identifier]];
+        NSError *requestError=nil;
+        NSMutableURLRequest *request=[self requestForURL:assetURL timeout:40 error:&requestError];
+        if(!request) {completion(nil,nil,requestError);return;}
+        [request setValue:@"application/octet-stream" forHTTPHeaderField:@"Accept"];
+        LCOrbitGitHubAssetDelegate *delegate=[LCOrbitGitHubAssetDelegate new];
+        delegate.request=request;delegate.progress=progress;delegate.completion=completion;
+        [delegate start];
+    }];
+}
 + (NSString *)accountWithError:(NSError **)error {
     return GHRead(error)[@"account"];
 }

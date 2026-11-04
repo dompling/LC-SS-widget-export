@@ -65,22 +65,28 @@ static OSStatus FakeDelete(CFDictionaryRef query) {
 static NSURLSessionConfiguration *CapturedConfiguration;
 static NSURLRequest *CapturedRequest;
 static NSError *FixtureNetworkError;
+static NSData *FixtureResponseData;
+static id CapturedDelegate;
 static BOOL TaskResumed,SessionInvalidated;
 @interface GHFixtureDataTask : NSObject
 @property(nonatomic,copy) void (^callback)(NSData *,NSURLResponse *,NSError *);
+@property(nonatomic,copy) NSURLRequest *currentRequest;
+- (void)cancel;
 - (void)resume;
 @end
 @implementation GHFixtureDataTask
+- (void)cancel {}
 - (void)resume {
     TaskResumed=YES;
     NSHTTPURLResponse *response=[[NSHTTPURLResponse alloc] initWithURL:CapturedRequest.URL
         statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}];
-    self.callback([@"{}" dataUsingEncoding:NSUTF8StringEncoding],response,FixtureNetworkError);
+    if(self.callback) self.callback(FixtureResponseData?:[@"{}" dataUsingEncoding:NSUTF8StringEncoding],response,FixtureNetworkError);
 }
 @end
 @interface GHFixtureSession : NSObject
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request
     completionHandler:(void (^)(NSData *,NSURLResponse *,NSError *))completion;
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request;
 - (void)finishTasksAndInvalidate;
 @end
 @implementation GHFixtureSession
@@ -88,6 +94,9 @@ static BOOL TaskResumed,SessionInvalidated;
     completionHandler:(void (^)(NSData *,NSURLResponse *,NSError *))completion {
     CapturedRequest=request;GHFixtureDataTask *task=[GHFixtureDataTask new];task.callback=completion;
     return (NSURLSessionDataTask *)task;
+}
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request {
+    CapturedRequest=request;return (id)[GHFixtureDataTask new];
 }
 - (void)finishTasksAndInvalidate { SessionInvalidated=YES; }
 @end
@@ -98,7 +107,7 @@ static BOOL TaskResumed,SessionInvalidated;
 @implementation NSURLSession (GitHubBoundaryFixture)
 + (NSURLSession *)fixtureSessionWithConfiguration:(NSURLSessionConfiguration *)configuration
     delegate:(id<NSURLSessionDelegate>)delegate delegateQueue:(NSOperationQueue *)queue {
-    CapturedConfiguration=configuration;return (NSURLSession *)[GHFixtureSession new];
+    CapturedDelegate=delegate;CapturedConfiguration=configuration;return (NSURLSession *)[GHFixtureSession new];
 }
 @end
 
@@ -207,6 +216,94 @@ int main(void) { @autoreleasepool {
     NSMutableURLRequest *invalid=[r mutableCopy];invalid.HTTPMethod=@"POST";
     [LCOrbitGitHub performRequest:invalid completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure){safeError=failure;}];
     Check(safeError && !CapturedRequest,@"non-GET refused before session creation");
+    Class assetClass=NSClassFromString(@"LCOrbitGitHubAssetDelegate");
+    Check(assetClass!=Nil,@"release downloads have a streaming delegate");
+    Check([LCOrbitGitHub respondsToSelector:@selector(downloadReleaseAsset:progress:completion:)],@"release downloads expose progress API");
+    if(assetClass && [LCOrbitGitHub respondsToSelector:@selector(downloadReleaseAsset:progress:completion:)]) {
+        NSString *browser=@"https://github.com/dompling/LC-SS-widget-export/releases/download/fm-latest/LCFloatingMenu.dylib";
+        FixtureResponseData=[NSJSONSerialization dataWithJSONObject:@{@"assets":@[@{@"id":@123,@"name":@"LCFloatingMenu.dylib",@"browser_download_url":browser}]} options:0 error:nil];
+        __block NSData *binary=nil;__block NSError *assetError=nil;
+        __block int64_t received=-1,expected=-1;__block NSUInteger completions=0;
+        [LCOrbitGitHub downloadReleaseAsset:[NSURL URLWithString:browser] progress:^(int64_t got,int64_t total){received=got;expected=total;}
+            completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure){binary=data;assetError=failure;completions++;}];
+        Check([CapturedRequest.URL.absoluteString isEqual:@"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/assets/123"],@"download resolves official asset ID through release API");
+        Check([[CapturedRequest valueForHTTPHeaderField:@"Authorization"] isEqual:@"Bearer ghp_fixture2"],@"binary API request uses configured host token");
+        Check([[CapturedRequest valueForHTTPHeaderField:@"Accept"] isEqual:@"application/octet-stream"],@"binary API request accepts actual asset bytes");
+        id<NSURLSessionDataDelegate> assetDelegate=CapturedDelegate;
+        NSURLSession *session=(id)[GHFixtureSession new];
+        GHFixtureDataTask *fixtureTask=[GHFixtureDataTask new];fixtureTask.currentRequest=CapturedRequest;
+        NSURLSessionDataTask *task=(id)fixtureTask;
+        for(NSString *url in @[@"https://release-assets.githubusercontent.com/asset?sig=fixture",@"https://objects.githubusercontent.com/asset",
+            @"https://api.github.com/repos/dompling/LC-SS-widget-export/releases/assets/456",@"https://evil.test/steal",@"http://release-assets.githubusercontent.com/asset",
+            @"https://release-assets.githubusercontent.com:444/asset",@"https://release-assets.githubusercontent.com.evil.test/asset"]) {
+            NSMutableURLRequest *proposed=[NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+            [proposed setValue:@"Bearer ghp_fixture2" forHTTPHeaderField:@"Authorization"];
+            __block NSURLRequest *next=nil;
+            [assetDelegate URLSession:session task:task willPerformHTTPRedirection:moved newRequest:proposed completionHandler:^(NSURLRequest *value){next=value;}];
+            BOOL apiTarget=[url hasPrefix:@"https://api.github.com/"];
+            BOOL cdn=[url hasPrefix:@"https://release-assets.githubusercontent.com/"] || [url hasPrefix:@"https://objects.githubusercontent.com/"];
+            Check((apiTarget || cdn)?next!=nil:next==nil,@"asset redirects accept only approved HTTPS API/CDN hosts");
+            if(cdn) Check(![next valueForHTTPHeaderField:@"Authorization"] && !next.HTTPShouldHandleCookies,@"CDN redirect strips token and cookies");
+            if(apiTarget) Check([[next valueForHTTPHeaderField:@"Authorization"] isEqual:@"Bearer ghp_fixture2"],@"same API asset redirect preserves host token");
+            [(id)assetDelegate setValue:nil forKey:@"failure"];
+        }
+        fixtureTask.currentRequest=[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://release-assets.githubusercontent.com/asset"]];
+        __block NSURLRequest *backToAPI=nil;
+        [assetDelegate URLSession:session task:task willPerformHTTPRedirection:moved newRequest:original completionHandler:^(NSURLRequest *value){backToAPI=value;}];
+        Check(backToAPI==nil,@"CDN cannot redirect back to authenticated API");
+        [(id)assetDelegate setValue:nil forKey:@"failure"];fixtureTask.currentRequest=CapturedRequest;
+        NSHTTPURLResponse *ok=[[NSHTTPURLResponse alloc] initWithURL:CapturedRequest.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{@"Content-Length":@"8"}];
+        __block NSURLSessionResponseDisposition disposition=NSURLSessionResponseCancel;
+        [assetDelegate URLSession:session dataTask:task didReceiveResponse:ok completionHandler:^(NSURLSessionResponseDisposition value){disposition=value;}];
+        Check(disposition==NSURLSessionResponseAllow,@"200 asset response starts streaming");
+        [assetDelegate URLSession:session dataTask:task didReceiveData:[@"abcd" dataUsingEncoding:NSUTF8StringEncoding]];
+        Check(received==4 && expected==8,@"stream reports received and expected byte counts");
+        NSError *lost=[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorNetworkConnectionLost userInfo:@{NSLocalizedDescriptionKey:@"secret-fixture"}];
+        [assetDelegate URLSession:session task:task didCompleteWithError:lost];
+        Check(completions==0 && [[(id)assetDelegate valueForKey:@"attempts"] unsignedIntegerValue]==1 && received==0,@"interrupted download retries without appending partial bytes");
+        [assetDelegate URLSession:session dataTask:task didReceiveResponse:ok completionHandler:^(NSURLSessionResponseDisposition value){}];
+        [assetDelegate URLSession:session dataTask:task didReceiveData:[@"12345678" dataUsingEncoding:NSUTF8StringEncoding]];
+        [assetDelegate URLSession:session task:task didCompleteWithError:nil];
+        Check(completions==1 && !assetError && [binary isEqual:[@"12345678" dataUsingEncoding:NSUTF8StringEncoding]],@"retry installs only fully received attempt bytes");
+        for(NSNumber *status in @[@401,@403,@404,@429]) {
+            id<NSURLSessionDataDelegate> failed=[assetClass new];
+            NSHTTPURLResponse *response=[[NSHTTPURLResponse alloc] initWithURL:api statusCode:status.integerValue HTTPVersion:@"HTTP/1.1" headerFields:@{}];
+            [failed URLSession:session dataTask:task didReceiveResponse:response completionHandler:^(NSURLSessionResponseDisposition value){disposition=value;}];
+            NSError *failure=[(id)failed valueForKey:@"failure"];
+            Check(disposition==NSURLSessionResponseCancel && failure.code==status.integerValue,@"HTTP errors cancel streaming with actionable status");
+        }
+        id<NSURLSessionDataDelegate> large=[assetClass new];
+        NSHTTPURLResponse *huge=[[NSHTTPURLResponse alloc] initWithURL:api statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{@"Content-Length":@"33554433"}];
+        [large URLSession:session dataTask:task didReceiveResponse:huge completionHandler:^(NSURLSessionResponseDisposition value){disposition=value;}];
+        Check(disposition==NSURLSessionResponseCancel && [(id)large valueForKey:@"failure"]!=nil,@"oversized asset rejects before buffering");
+        id<NSURLSessionDataDelegate> unknown=[assetClass new];
+        [(id)unknown setValue:[NSMutableData data] forKey:@"received"];
+        NSHTTPURLResponse *unbounded=[[NSHTTPURLResponse alloc] initWithURL:api statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}];
+        [unknown URLSession:session dataTask:task didReceiveResponse:unbounded completionHandler:^(NSURLSessionResponseDisposition value){disposition=value;}];
+        Check(disposition==NSURLSessionResponseAllow,@"missing Content-Length permits indeterminate progress");
+        [(id)unknown setValue:[NSMutableData dataWithLength:32*1024*1024] forKey:@"received"];
+        [unknown URLSession:session dataTask:task didReceiveData:[NSData dataWithBytes:"x" length:1]];
+        Check([(id)unknown valueForKey:@"failure"]!=nil,@"unknown-size stream enforces byte limit while receiving");
+        id<NSURLSessionDataDelegate> exhausted=[assetClass new];
+        [(id)exhausted setValue:@2 forKey:@"attempts"];
+        __block NSError *lastError=nil;
+        [(id)exhausted setValue:[^(NSData *data,NSHTTPURLResponse *response,NSError *failure){lastError=failure;} copy] forKey:@"completion"];
+        [exhausted URLSession:session task:task didCompleteWithError:lost];
+        Check(lastError && ![lastError.localizedDescription containsString:@"secret-fixture"] && lastError.userInfo.count==1,
+              @"retry exhaustion returns sanitized error without token or request");
+        Check([[(id)exhausted valueForKey:@"attempts"] unsignedIntegerValue]==2,@"network retries stop at configured bound");
+        IsHost=NO;NSUInteger priorReads=Reads;lastError=nil;
+        [LCOrbitGitHub downloadReleaseAsset:[NSURL URLWithString:browser] progress:^(int64_t got,int64_t total){} completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure){lastError=failure;}];
+        Check(lastError && Reads==priorReads,@"Guest cannot start host plugin download or read credentials");IsHost=YES;
+        lastError=nil;
+        [LCOrbitGitHub downloadReleaseAsset:[NSURL URLWithString:@"https://evil.test/plugin.dylib"] progress:^(int64_t got,int64_t total){} completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure){lastError=failure;}];
+        Check(lastError!=nil,@"foreign plugin URL rejected before fetching metadata");
+        FixtureResponseData=[NSJSONSerialization dataWithJSONObject:@{@"assets":@[@{@"id":@123,@"name":@"LCFloatingMenu.dylib",@"browser_download_url":@"https://evil.test/plugin.dylib"}]} options:0 error:nil];
+        lastError=nil;
+        [LCOrbitGitHub downloadReleaseAsset:[NSURL URLWithString:browser] progress:^(int64_t got,int64_t total){} completion:^(NSData *data,NSHTTPURLResponse *response,NSError *failure){lastError=failure;}];
+        Check(lastError && [CapturedRequest.URL.path containsString:@"/releases/tags/"],@"mismatched metadata cannot switch downloaded resource");
+        FixtureResponseData=nil;
+    }
     method_exchangeImplementations(liveFactory,fixtureFactory);
     fprintf(stdout,"GitHub access and credential isolation: %lu assertions, %lu failures\n",(unsigned long)Checks,(unsigned long)Failures);
     return Failures?1:0;
