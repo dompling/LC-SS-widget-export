@@ -1055,11 +1055,13 @@ static BOOL FMClearGlassEnabled(void) {
     return NO;
 }
 static CGFloat FMGlassTintStrength(void) {
+    if(BoolPref(@"easterEggIOSTheme", NO)) return .16;
     return Clamp(.16+FloatPref(@"glassTint",0),0,.40);
 }
 // Clear keeps the full system glass visible. The accent supplies the selected
 // theme's identity without placing an opaque sheet below the material.
 static CGFloat FMClearGlassTintStrength(void) {
+    if(BoolPref(@"easterEggIOSTheme", NO)) return .18;
     return Clamp(.18+FloatPref(@"glassTint",0)*.65,.18,.29);
 }
 static CGFloat FMReadableRowAlpha(void) {
@@ -2228,8 +2230,10 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                     ((void(*)(id,SEL,BOOL))objc_msgSend)(glassEffect,setInteractive,!strong);
                 SEL setTint=NSSelectorFromString(@"setTintColor:");
                 if([glassEffect respondsToSelector:setTint]) {
-                    UIColor *tint=[(clear?FMAccent():FMThemeColor(FMColorGlass))
-                        colorWithAlphaComponent:clear?FMClearGlassTintStrength():FMGlassTintStrength()];
+                    BOOL easterEgg=BoolPref(@"easterEggIOSTheme",NO);
+                    UIColor *tintBase=(clear && !easterEgg)?FMAccent():FMThemeColor(FMColorGlass);
+                    CGFloat strength=(clear && !easterEgg)?FMClearGlassTintStrength():FMGlassTintStrength();
+                    UIColor *tint=[tintBase colorWithAlphaComponent:strength];
                     ((void(*)(id,SEL,id))objc_msgSend)(glassEffect,setTint,tint);
                 }
                 effect=(UIVisualEffect *)glassEffect;
@@ -4433,7 +4437,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
         glyph.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         glyph.contentMode=UIViewContentModeScaleAspectFit;
-        glyph.tintColor=compact?FMThemeColor(FMColorText):FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+        BOOL easterEgg=BoolPref(@"easterEggIOSTheme",NO);
+        glyph.tintColor=compact?FMThemeColor(FMColorText):(FMClearGlassEnabled()||easterEgg)?FMThemeColor(FMColorText):FMAccent();
         glyph.userInteractionEnabled=NO;
         [tile addSubview:glyph];
         [button addTarget:self action:NSSelectorFromString(spec[1])
@@ -6971,9 +6976,13 @@ static UIView *FMDockRow(UIView *content,CGFloat padding,BOOL separator,CGFloat 
 // its content view, because their height is what gives the card its own, and a view the
 // effect positions by itself cannot carry that.
 static UIView *FMDockCard(UIStackView *rows) {
-    UIView *card=[[FMManager shared] glass:CGRectMake(0,0,320,120) radius:FMDockCardRadius() strong:YES];
+    UIView *card=[UIView new];
     card.translatesAutoresizingMaskIntoConstraints=NO;
+    card.backgroundColor=FMThemeColor(FMColorSurface);
+    card.layer.cornerRadius=FMDockCardRadius();
     card.layer.cornerCurve=kCACornerCurveContinuous;
+    card.clipsToBounds=YES;
+    card.layer.masksToBounds=YES;
     rows.translatesAutoresizingMaskIntoConstraints=NO;
     [card addSubview:rows];
     [NSLayoutConstraint activateConstraints:@[
@@ -7174,7 +7183,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     UIImageView *glyph=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
     glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
     glyph.contentMode=UIViewContentModeScaleAspectFit;
-    glyph.tintColor=compact?FMThemeColor(FMColorText):FMClearGlassEnabled()?FMThemeColor(FMColorText):FMAccent();
+    BOOL easterEgg=BoolPref(@"easterEggIOSTheme",NO);
+    glyph.tintColor=compact?FMThemeColor(FMColorText):(FMClearGlassEnabled()||easterEgg)?FMThemeColor(FMColorText):FMAccent();
     [tile addSubview:glyph];
     return tile;
 }
@@ -7534,22 +7544,10 @@ static UIView *FMDockCard(UIStackView *rows) {
 // nothing: a gentle wash of the theme is enough for the cards to read as the material
 // rather than as a drawing of it.
 - (void)applyBackdrop {
-    CAGradientLayer *wash=self.backdrop;
-    if(!wash) {
-        wash=[CAGradientLayer layer];
-        [self.view.layer insertSublayer:wash atIndex:0];
-        self.backdrop=wash;
+    if(self.backdrop) {
+        [self.backdrop removeFromSuperlayer];
+        self.backdrop=nil;
     }
-    UIColor *base=FMThemeColor(FMColorBackground);
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    wash.frame=self.view.bounds;
-    wash.colors=@[(id)FMMix(base,FMAccent(),.10).CGColor,(id)base.CGColor,
-                  (id)FMMix(base,FMThemeColor(FMColorGlass),.07).CGColor];
-    wash.locations=@[@0,@.55,@1];
-    wash.startPoint=CGPointMake(0,0);
-    wash.endPoint=CGPointMake(1,1);
-    [CATransaction commit];
 }
 // The page shows the bead itself, so the one floating over the settings steps aside.
 - (void)viewWillAppear:(BOOL)animated {
