@@ -4018,10 +4018,31 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     return found;
 }
-// 记录当前子 App 状态：无论是否启用最近置顶，都同步记录最后使用的 App（供启动自启使用）
+// 记录当前活跃页面状态：若处于子 App 则记录该 App；若处于 LiveContainer 主页则记录 @"ui"
 - (void)rememberCurrentApp {
-    NSArray<NSDictionary *> *list=self.apps.count?self.apps:InstalledApps();
-    for(NSDictionary *app in list) {
+    if(FMHostUI()) {
+        if([LCOrbitMultitask isEnabled]) {
+            id activeWin=[LCOrbitMultitask activeWindow];
+            if(!activeWin) {
+                SetPref(@"lastActiveAppKey",@"ui");
+                return;
+            }
+            for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
+                if([LCOrbitMultitask isCurrentGuest:app]) {
+                    FMRememberOpenedApp(app);
+                    return;
+                }
+            }
+            SetPref(@"lastActiveAppKey",@"ui");
+            return;
+        } else {
+            // 经典模式下的宿主环境即为 LiveContainer 主页
+            SetPref(@"lastActiveAppKey",@"ui");
+            return;
+        }
+    }
+    // 处于子 App 内部环境
+    for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
         if([LCOrbitGuestService isCurrentGuest:app]) {
             FMRememberOpenedApp(app);
             break;
@@ -4685,8 +4706,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
         UIView *sw4=[self switchRowWithTitle:@"最近打开的 App 置顶" key:@"recentAppsFirst" defaultValue:NO tag:20];
-        // 启动时自动打开上次退出或使用的应用
-        UIView *sw7=[self switchRowWithTitle:@"启动自动打开上次应用" key:@"autoLaunchLastApp" defaultValue:NO tag:26];
+        // 启动时自动打开上次退出或使用的页面（若在 LC 主页退出则停留在主页，在子 App 退出则打开子 App）
+        UIView *sw7=[self switchRowWithTitle:@"启动上次选择的页面" key:@"autoLaunchLastApp" defaultValue:NO tag:26];
         UIView *sw5=[self switchRowWithTitle:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         UIView *sw6=[self switchRowWithTitle:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
         UIView *appCard=FMCreateGroupedCard(@[sw4,sw7,sw5,sw6],16);
@@ -4759,6 +4780,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
 - (void)cancelAppearanceCheck {
     self.appearancePollGeneration++;
     self.appearancePollScheduled=NO;
+    [self rememberCurrentApp];
 }
 - (void)scheduleAppearanceCheck {
     if(self.appearancePollScheduled || !self.window || !self.orbitContext ||
@@ -5959,8 +5981,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     sHasAttemptedAutoLaunch=YES;
 
     NSString *lastAppKey=StringPref(@"lastActiveAppKey",nil);
-    if(!lastAppKey.length) {
-        FMLog(@"auto-launch-skip",@"no-last-app-record");
+    if(!lastAppKey.length || [lastAppKey isEqualToString:@"ui"] || [lastAppKey isEqualToString:@"builtin/SideStore"]) {
+        FMLog(@"auto-launch-skip",@"last-page-was-home");
         return;
     }
 
@@ -6036,6 +6058,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     // collapse-only control or ask for the standard-mode confirmation.
     [self persistAppsScroll];
     FMLog(@"compact-home",FMHostUI()?@"host":@"guest");
+    SetPref(@"lastActiveAppKey",@"ui");
+    sHasAttemptedAutoLaunch=YES;
     if([LCOrbitMultitask isEnabled]) {
         [LCOrbitMultitask showHome];
         self.isOpen=NO;
@@ -6050,6 +6074,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     [self launchPath:@"ui" uuid:nil];
 }
 - (void)goHome {
+    SetPref(@"lastActiveAppKey",@"ui");
+    sHasAttemptedAutoLaunch=YES;
     if([LCOrbitMultitask isEnabled]) {
         [LCOrbitMultitask showHome];self.isOpen=NO;[self draw];
         return;
