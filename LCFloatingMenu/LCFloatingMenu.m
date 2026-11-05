@@ -222,10 +222,12 @@ static NSString *AppPref(void) {return [NSString stringWithFormat:@"appEnabled.%
 // Recency is independent of manual menu order and favorites. Store scoped
 // identities so private/shared apps with identical filenames stay distinct.
 static void FMRememberOpenedApp(NSDictionary *app) {
-    if(!BoolPref(@"recentAppsFirst",NO) || ![app isKindOfClass:NSDictionary.class] ||
-       [app[@"builtin"] boolValue]) return;
+    if(![app isKindOfClass:NSDictionary.class] || [app[@"builtin"] boolValue]) return;
     NSString *key=FMAppKey(app);
-    if(!key.length) return;
+    if(!key.length || [key isEqualToString:@"ui"] || [key isEqualToString:@"builtin/SideStore"]) return;
+    // 始终记录最后活跃的应用标识，供“启动自动打开上次应用”功能使用
+    SetPref(@"lastActiveAppKey",key);
+    if(!BoolPref(@"recentAppsFirst",NO)) return;
     id stored=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
     NSArray *previous=[stored isKindOfClass:NSArray.class]?stored:@[];
     if([previous.firstObject isEqualToString:key]) return;
@@ -2004,6 +2006,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
 - (void)openSettingsInScene:(UIWindowScene *)scene;
 - (void)syncScreenAwakeState;
+- (void)checkAutoLaunchLastAppIfNeeded;
 - (UIView *)switchRowWithTitle:(NSString *)title key:(NSString *)key defaultValue:(BOOL)def tag:(NSInteger)tag;
 - (void)updateEasterEggSnowEffect;
 - (void)stopEasterEggSnowEffect;
@@ -2153,6 +2156,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self draw];
     [self scheduleAppearanceCheck];
     [self checkOrbUpdateIfNeeded];
+    if(FMHostUI()) {
+        [self checkAutoLaunchLastAppIfNeeded];
+    }
 }
 - (void)syncScreenAwakeState {
     BOOL shouldDisable=FMShouldEnforceScreenAwake();
@@ -4012,11 +4018,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     return found;
 }
-// Only the visible launcher is reordered. App management and pinned favorites
-// continue to use the user's manual order, regardless of this switch.
+// 记录当前子 App 状态：无论是否启用最近置顶，都同步记录最后使用的 App（供启动自启使用）
 - (void)rememberCurrentApp {
-    if(!BoolPref(@"recentAppsFirst",NO)) return;
-    for(NSDictionary *app in self.apps) {
+    NSArray<NSDictionary *> *list=self.apps.count?self.apps:InstalledApps();
+    for(NSDictionary *app in list) {
         if([LCOrbitGuestService isCurrentGuest:app]) {
             FMRememberOpenedApp(app);
             break;
@@ -4680,9 +4685,11 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
         UIView *sw4=[self switchRowWithTitle:@"最近打开的 App 置顶" key:@"recentAppsFirst" defaultValue:NO tag:20];
+        // 启动时自动打开上次退出或使用的应用
+        UIView *sw7=[self switchRowWithTitle:@"启动自动打开上次应用" key:@"autoLaunchLastApp" defaultValue:NO tag:26];
         UIView *sw5=[self switchRowWithTitle:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
         UIView *sw6=[self switchRowWithTitle:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
-        UIView *appCard=FMCreateGroupedCard(@[sw4,sw5,sw6],16);
+        UIView *appCard=FMCreateGroupedCard(@[sw4,sw7,sw5,sw6],16);
         if(appCard) [s addArrangedSubview:appCard];
     } else if([category isEqualToString:@"apps"]) {
         [self managePage:s];
@@ -5674,6 +5681,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         case 23:key=@"keepScreenAwake";break;
         case 24:key=@"lockBanRightLandscape";break;
         case 25:key=@"autoCheckUpdate";break;
+        case 26:key=@"autoLaunchLastApp";break;
         case 4:key=AppPref();break;
         default:return;
     }
@@ -5691,6 +5699,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
     if(sw.tag==24) {
         FMLog(@"lock-ban-right-landscape",sw.isOn?@"on":@"off");
+    }
+    if(sw.tag==26) {
+        FMLog(@"auto-launch-last-app",sw.isOn?@"on":@"off");
     }
     if(sw.tag==23) {
         [self syncScreenAwakeState];
@@ -5909,6 +5920,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 - (void)launchPath:(NSString *)path uuid:(NSString *)uuid {
     [self persistAppsScroll];
     FMLog(@"switch-request",[path isEqualToString:@"ui"]?@"return-home":@"new-guest");
+    if([path isEqualToString:@"ui"]) {
+        sHasAttemptedAutoLaunch=YES;
+    }
     if(![path isEqualToString:@"ui"] &&
        ![LCOrbitGuestService isEligibleGuestPath:path uuid:uuid]) {
         FMLog(@"switch-rejected",@"guest-ineligible");
@@ -5932,6 +5946,58 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
     FMLog(@"switch-accepted",@"LCOrbitGuestService");
 }
+// 标记本次冷启动是否已尝试过自动启动，防止在运行中因切前台或返回首页而死循环拉起
+static BOOL sHasAttemptedAutoLaunch=NO;
+
+- (void)checkAutoLaunchLastAppIfNeeded {
+    // 仅在 LiveContainer 宿主前台界面有效，Guest App 内部不触发
+    if(!FMHostUI()) return;
+    // 检查用户是否开启了“启动自动打开上次应用”
+    if(!BoolPref(@"autoLaunchLastApp",NO)) return;
+    // 单次进程生命周期内只触发一次
+    if(sHasAttemptedAutoLaunch) return;
+    sHasAttemptedAutoLaunch=YES;
+
+    NSString *lastAppKey=StringPref(@"lastActiveAppKey",nil);
+    if(!lastAppKey.length) {
+        FMLog(@"auto-launch-skip",@"no-last-app-record");
+        return;
+    }
+
+    __weak typeof(self) weakSelf=self;
+    // 延迟 0.35 秒，等待 LiveContainer 宿主界面与 Scene 彻底完成前台就绪
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.35*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        typeof(self) manager=weakSelf;
+        if(!manager) return;
+        // 若已不再处于宿主 UI，或正在拉起/处于设置页面，则安全取消
+        if(!FMHostUI() || manager.launchPending || manager.settingsWindow) return;
+
+        NSArray<NSDictionary *> *allApps=InstalledApps();
+        NSDictionary *target=nil;
+        for(NSDictionary *app in allApps) {
+            if([FMAppKey(app) isEqualToString:lastAppKey] || [app[@"identity"] isEqualToString:lastAppKey]) {
+                target=app;
+                break;
+            }
+        }
+
+        if(!target) {
+            FMLog(@"auto-launch-skip",@"app-not-found-or-deleted");
+            return;
+        }
+
+        // 安全检查：如果该 App 已被锁定、不可启动或需要 JIT 等，则留在首页
+        if(![target[@"launchable"] boolValue] || [target[@"locked"] boolValue]) {
+            FMLog(@"auto-launch-blocked",target[@"status"]?:@"not-launchable");
+            return;
+        }
+
+        [manager installIfPossible];
+        FMLog(@"auto-launch-exec",FMAppKey(target));
+        [manager launchApp:target];
+    });
+}
+
 - (void)showMessage:(NSString *)title details:(NSString *)detail {
     FMLog(@"ui-warning",title);
     UIViewController *presenter=self.settingsNavigation.topViewController ?: self.window.rootViewController;
@@ -8055,6 +8121,11 @@ static UIView *FMDockCard(UIStackView *rows) {
     });
     [[FMManager shared] installIfPossible];
     [[FMManager shared] checkOrbUpdateIfNeeded];
+    if(hostUI) {
+        [[FMManager shared] checkAutoLaunchLastAppIfNeeded];
+    } else {
+        [[FMManager shared] rememberCurrentApp];
+    }
 }
 - (void)orbitDidReceiveLifecycleEvent:(NSString *)event scene:(UIWindowScene *)scene {
     FMManager *manager=[FMManager shared];
