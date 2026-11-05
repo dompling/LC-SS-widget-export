@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.31"
+#define FM_MENU_VERSION @"1.0.32"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -6008,8 +6008,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
             return;
         }
 
-        // 安全检查：如果该 App 已被锁定、不可启动或需要 JIT 等，则留在首页
-        if(![target[@"launchable"] boolValue] || [target[@"locked"] boolValue]) {
+        // 安全检查：如果该 App 已被隐藏、锁定、不可启动或需要 JIT 等，则留在首页
+        if(![target[@"launchable"] boolValue] || [target[@"locked"] boolValue] || [target[@"hidden"] boolValue]) {
             FMLog(@"auto-launch-blocked",target[@"status"]?:@"not-launchable");
             return;
         }
