@@ -1,6 +1,7 @@
 #import "LCOrbitMultitask.h"
 #import "LCOrbitHost.h"
 #import "LCOrbitLog.h"
+#import "LCOrbitStorage.h"
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -58,9 +59,19 @@ BOOL OrbitMethodMatches(Class cls, NSString *name, const char *result, NSArray<N
 - (void)setPeripheryInsets:(UIEdgeInsets)insets;
 - (void)setSafeAreaInsetsPortrait:(UIEdgeInsets)insets;
 - (void)setSafeAreaEdgeInsets:(UIEdgeInsets)insets;
+- (CGRect)frame;
+- (UIEdgeInsets)peripheryInsets;
+- (UIEdgeInsets)safeAreaInsetsPortrait;
+- (UIEdgeInsets)safeAreaEdgeInsets;
+- (BOOL)statusBarDisabled;
+- (void)setStatusBarDisabled:(BOOL)disabled;
+- (double)statusBarHeight;
+- (void)setStatusBarHeight:(double)height;
+- (void)setStatusBarAvoidanceFrame:(CGRect)frame;
+- (CGRect)statusBarAvoidanceFrame;
 @end
 
-static char SnapshotKey, ConstraintsKey, HostingPlacementKey;
+static char SnapshotKey, ConstraintsKey, HostingPlacementKey, GeometryLogKey, ViewportReadyKey;
 static Class WindowClass, DockClass;
 static IMP OriginalInit, OriginalSetup, OriginalVertical, OriginalFrame;
 static IMP OriginalSafeArea, OriginalSettings, OriginalExit, OriginalInitialized;
@@ -114,6 +125,14 @@ static UIViewController *HostingParentController(UIViewController *requested) {
 @end
 @implementation LCOrbitHostingPlacement @end
 
+// The Guest scene uses complete window dimensions. Its physical viewport must
+// cover that same window even when SwiftUI gives the parent a safe-area-sized
+// or offset view. A parent's bounds are not window coordinates.
+static CGRect FullscreenHostingFrame(UIView *root,UIWindow *host) {
+    if(!host || root.window!=host) return CGRectNull;
+    return [root convertRect:host.bounds fromView:host];
+}
+
 // LC normally attaches this container inside the first SwiftUI subview.
 // Mount it above the root content so fullscreen Guests also cover LC's tab bar.
 static void PositionHostingView(UIViewController *window,BOOL fullscreen) {
@@ -123,7 +142,7 @@ static void PositionHostingView(UIViewController *window,BOOL fullscreen) {
     if(fullscreen) {
         UIView *root=window.parentViewController.view;
         if(!root || root==hosting || [root isDescendantOfView:hosting]) return;
-        CGRect bounds=root.bounds;
+        CGRect bounds=FullscreenHostingFrame(root,root.window);
         if(!isfinite(bounds.size.width) || !isfinite(bounds.size.height) || bounds.size.width<=0 || bounds.size.height<=0) return;
         if(!placement) {
             placement=[LCOrbitHostingPlacement new];placement.parent=hosting.superview;
@@ -133,7 +152,7 @@ static void PositionHostingView(UIViewController *window,BOOL fullscreen) {
         }
         if(hosting.superview!=root) [root addSubview:hosting];
         [root bringSubviewToFront:hosting];
-        hosting.frame=root.bounds;
+        hosting.frame=bounds;
         hosting.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     } else if(placement) {
         UIView *parent=placement.parent;
@@ -166,16 +185,74 @@ static BOOL OrbitValidFrame(CGRect frame) {
     return isfinite(frame.origin.x) && isfinite(frame.origin.y) &&
         isfinite(frame.size.width) && isfinite(frame.size.height) && frame.size.width>0 && frame.size.height>0;
 }
+// Keep launch dimensions intact. After the presenter exists, reserve real
+// screen occlusion physically; Apps need not honor remote safe-area metadata.
+static BOOL GuestOwnsTopInset(NSString *bundle) {
+    if(!bundle.length) return NO;
+    id value=[LCOrbitStorage objectForKey:[@"guestOwnTopInset." stringByAppendingString:bundle]
+                                 module:@"LCFloatingMenu"];
+    return [value isKindOfClass:NSNumber.class] && [value boolValue];
+}
+static CGRect GuestViewport(CGRect bounds,UIEdgeInsets safe,BOOL ready) {
+    if(!OrbitValidFrame(bounds) || !isfinite(safe.top) || !isfinite(safe.left) ||
+       !isfinite(safe.bottom) || !isfinite(safe.right) || safe.top<0 || safe.left<0 ||
+       safe.bottom<0 || safe.right<0 || safe.top+safe.bottom>=bounds.size.height ||
+       safe.left+safe.right>=bounds.size.width) return CGRectNull;
+    if(!ready) return bounds;
+    CGRect viewport=CGRectMake(bounds.origin.x+safe.left,bounds.origin.y+safe.top,
+        bounds.size.width-safe.left-safe.right,bounds.size.height-safe.top);
+    return OrbitValidFrame(viewport)?viewport:CGRectNull;
+}
 static UIEdgeInsets PortraitInsets(UIEdgeInsets insets, UIInterfaceOrientation orientation) {
     switch(orientation) {
         case UIInterfaceOrientationLandscapeLeft:
-            return UIEdgeInsetsMake(insets.right, 0, insets.left > 0 ? insets.left : insets.bottom, 0);
-        case UIInterfaceOrientationLandscapeRight:
             return UIEdgeInsetsMake(insets.left, 0, insets.right > 0 ? insets.right : insets.bottom, 0);
+        case UIInterfaceOrientationLandscapeRight:
+            return UIEdgeInsetsMake(insets.right, 0, insets.left > 0 ? insets.left : insets.bottom, 0);
         default: return insets;
     }
 }
+static BOOL OrbitInsetsInViewport(CGRect safeRect,CGRect viewport,UIEdgeInsets *insets) {
+    if(!insets || !OrbitValidFrame(viewport) || !OrbitValidFrame(safeRect)) return NO;
+    if(!isfinite(CGRectGetMaxX(viewport)) || !isfinite(CGRectGetMaxY(viewport)) ||
+       !isfinite(CGRectGetMaxX(safeRect)) || !isfinite(CGRectGetMaxY(safeRect))) return NO;
+    CGRect visible=CGRectIntersection(viewport,safeRect);
+    if(CGRectIsNull(visible) || CGRectIsEmpty(visible)) return NO;
+    *insets=UIEdgeInsetsMake(CGRectGetMinY(visible)-CGRectGetMinY(viewport),
+        CGRectGetMinX(visible)-CGRectGetMinX(viewport),
+        CGRectGetMaxY(viewport)-CGRectGetMaxY(visible),
+        CGRectGetMaxX(viewport)-CGRectGetMaxX(visible));
+    return YES;
+}
+static BOOL HostedSafeArea(UIViewController *window,CGRect frame,
+                          UIInterfaceOrientation orientation,UIEdgeInsets *insets) {
+    if(!NSThread.isMainThread) return NO;
+    UIView *hosting=[(id)SceneController(window) contentView];
+    if(![hosting isKindOfClass:UIView.class]) return NO;
+    UIView *parent=hosting.superview;
+    UIWindow *host=window.view.window ?: window.parentViewController.view.window;
+    if(!host || !parent || host.hidden || hosting.hidden || parent.hidden || window.view.hidden ||
+       hosting.window!=host || parent.window!=host ||
+       host.windowScene.interfaceOrientation!=orientation ||
+       !CGAffineTransformIsIdentity(hosting.transform)) return NO;
+    CGRect windowSafe=host.safeAreaLayoutGuide.layoutFrame;
+    if(!OrbitValidFrame(parent.bounds) || !OrbitValidFrame(windowSafe)) return NO;
+    CGRect viewport=hosting.bounds;
+    if(!OrbitValidFrame(viewport)) return NO;
+    CGSize logical=UIInterfaceOrientationIsLandscape(orientation)?
+        CGSizeMake(viewport.size.height,viewport.size.width):viewport.size;
+    // Early/native resize passes may still have LC's small viewport. Keep the
+    // full-size startup guard until the actual hosting bounds agree with it.
+    if(fabs(logical.width-frame.size.width)>.5 ||
+       fabs(logical.height-frame.size.height)>.5) return NO;
+    // Parent safe areas include host UI/keyboard transitions. Those are not
+    // physical screen occlusion for a full-window Guest; use only the window's
+    // safe rectangle, converted to the actual hosting viewport coordinates.
+    CGRect physicalSafe=[hosting convertRect:windowSafe fromView:host];
+    return OrbitInsetsInViewport(physicalSafe,viewport,insets);
+}
 static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfaceOrientation *orientation,UIEdgeInsets *insets) {
+    if(!NSThread.isMainThread) return NO;
     UIWindow *host=window.view.window ?: window.parentViewController.view.window;
     UIWindowScene *scene=host.windowScene;
     CGRect bounds=host.bounds;
@@ -186,12 +263,81 @@ static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfac
     if(!isfinite(safe.top) || !isfinite(safe.left) || !isfinite(safe.bottom) || !isfinite(safe.right) ||
        safe.top<0 || safe.left<0 || safe.bottom<0 || safe.right<0 ||
        safe.top+safe.bottom>bounds.size.height || safe.left+safe.right>bounds.size.width) return NO;
-    *frame=(CGRect){CGPointZero,bounds.size};
-    if(UIInterfaceOrientationIsLandscape(direction)) frame->size=CGSizeMake(bounds.size.height,bounds.size.width);
+    BOOL ready=InitialSceneWindow!=window && [objc_getAssociatedObject(window,&ViewportReadyKey) boolValue];
+    CGRect viewport=GuestViewport(bounds,safe,ready && !GuestOwnsTopInset([(id)SceneController(window) bundleId]));
+    if(!OrbitValidFrame(viewport)) return NO;
+    *frame=(CGRect){CGPointZero,viewport.size};
+    if(UIInterfaceOrientationIsLandscape(direction)) frame->size=CGSizeMake(viewport.size.height,viewport.size.width);
+    if(ready) {
+        CGRect physicalSafe=CGRectMake(bounds.origin.x+safe.left,bounds.origin.y+safe.top,
+            bounds.size.width-safe.left-safe.right,bounds.size.height-safe.top-safe.bottom);
+        if(!OrbitInsetsInViewport(physicalSafe,viewport,&safe)) return NO;
+    } else {
+        HostedSafeArea(window,*frame,direction,&safe);
+    }
     *orientation=direction;*insets=safe;
     return YES;
 }
-static void ApplyGeometry(id settings,CGRect frame,UIInterfaceOrientation orientation,UIEdgeInsets insets) {
+static void RecordGeometry(NSString *stage,UIViewController *window,id settings) {
+    if(!NSThread.isMainThread || !window) return;
+    NSMutableDictionary *counts=objc_getAssociatedObject(window,&GeometryLogKey);
+    if(!counts) {
+        counts=[NSMutableDictionary dictionary];
+        objc_setAssociatedObject(window,&GeometryLogKey,counts,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    NSUInteger count=[counts[stage] unsignedIntegerValue];
+    if(count>=4) return;
+    counts[stage]=@(count+1);
+    UIViewController *scene=SceneController(window);
+    UIView *hosting=[(id)scene contentView];
+    UIView *parent=hosting.superview;
+    UIWindow *host=window.view.window ?: window.parentViewController.view.window;
+    NSMutableDictionary *details=[@{@"stage":stage,@"sample":@(count+1),
+        @"geometryPolicy":@"per-app-viewport-v6",
+        @"viewportReady":@([objc_getAssociatedObject(window,&ViewportReadyKey) boolValue]),
+        @"appOwnsTopInset":@(GuestOwnsTopInset([(id)scene bundleId])),
+        @"decoratedFrame":NSStringFromCGRect(window.view.frame),
+        @"sceneViewFrame":NSStringFromCGRect(scene.view.frame),
+        @"guestBundle":[(id)scene bundleId]?:@"unknown",
+        @"guestContainer":[(id)scene dataUUID]?:@"unknown",
+        @"window":[NSString stringWithFormat:@"%p",window],
+        @"hostBounds":NSStringFromCGRect(host?host.bounds:CGRectZero),
+        @"hostInsets":NSStringFromUIEdgeInsets(host?host.safeAreaInsets:UIEdgeInsetsZero),
+        @"hostingBounds":NSStringFromCGRect(hosting?hosting.bounds:CGRectZero),
+        @"hostingFrame":NSStringFromCGRect(hosting?hosting.frame:CGRectZero),
+        @"parentSafeRect":NSStringFromCGRect(parent?parent.safeAreaLayoutGuide.layoutFrame:CGRectZero),
+        @"attached":@(host && hosting.window==host),
+        @"hostStatusBarFrame":NSStringFromCGRect(host.windowScene.statusBarManager.statusBarFrame),
+        @"orientation":@(host.windowScene.interfaceOrientation)} mutableCopy];
+    CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
+    if(FullscreenGeometry(window,&frame,&orientation,&insets)) {
+        details[@"insetSource"]=HostedSafeArea(window,frame,orientation,&insets)?@"hosting-viewport":@"host-fallback";
+        details[@"resolvedInsets"]=NSStringFromUIEdgeInsets(insets);
+    }
+    if(hosting && parent && host && hosting.window==host && parent.window==host)
+        details[@"safeRectInHosting"]=NSStringFromCGRect(
+            [hosting convertRect:parent.safeAreaLayoutGuide.layoutFrame fromView:parent]);
+    if(hosting) details[@"nativeGeometryAPI"]=@(OrbitMethodMatches(object_getClass(hosting),
+        @"applyViewGeometryToSettings:",@encode(void),@[@"@"]));
+    if(hosting) details[@"hostingTransform"]=NSStringFromCGAffineTransform(hosting.transform);
+    Class cls=object_getClass(settings);
+    if(OrbitMethodMatches(cls,@"frame",@encode(CGRect),@[]))
+        details[@"settingsFrame"]=NSStringFromCGRect([(id)settings frame]);
+    for(NSString *name in @[@"peripheryInsets",@"safeAreaInsetsPortrait",@"safeAreaEdgeInsets"])
+        if(OrbitMethodMatches(cls,name,@encode(UIEdgeInsets),@[]))
+            details[name]=NSStringFromUIEdgeInsets(((UIEdgeInsets(*)(id,SEL))objc_msgSend)(settings,NSSelectorFromString(name)));
+    for(NSString *name in @[@"interfaceOrientation",@"deviceOrientation"])
+        if(OrbitMethodMatches(cls,name,@encode(NSInteger),@[]))
+            details[name]=@(((NSInteger(*)(id,SEL))objc_msgSend)(settings,NSSelectorFromString(name)));
+    if(OrbitMethodMatches(cls,@"statusBarDisabled",@encode(BOOL),@[]))
+        details[@"statusBarDisabled"]=@([(id)settings statusBarDisabled]);
+    if(OrbitMethodMatches(cls,@"statusBarHeight",@encode(double),@[]))
+        details[@"statusBarHeight"]=@([(id)settings statusBarHeight]);
+    if(OrbitMethodMatches(cls,@"statusBarAvoidanceFrame",@encode(CGRect),@[]))
+        details[@"statusBarAvoidanceFrame"]=NSStringFromCGRect([(id)settings statusBarAvoidanceFrame]);
+    [LCOrbitLog appendEvent:@"multitask-geometry-v2" details:details kind:@"runtime"];
+}
+static void ApplyGeometry(UIViewController *window,id settings,CGRect frame,UIInterfaceOrientation orientation,UIEdgeInsets insets) {
     [settings setInterfaceOrientation:orientation];
     if([settings respondsToSelector:@selector(setDeviceOrientation:)]) {
         NSInteger dev = UIDevice.currentDevice.orientation;
@@ -203,6 +349,29 @@ static void ApplyGeometry(id settings,CGRect frame,UIInterfaceOrientation orient
         }
         [settings setDeviceOrientation:dev];
     }
+    // Decorated LC windows disable the Guest status bar. Fullscreen Guests
+    // need normal status-bar layout as well as safe-area insets and host metrics.
+    if([settings respondsToSelector:@selector(setStatusBarDisabled:)]) [settings setStatusBarDisabled:NO];
+    UIWindow *host=window.view.window ?: window.parentViewController.view.window;
+    UIStatusBarManager *manager=host.windowScene.statusBarManager;
+    if(manager) {
+        CGRect avoidance=CGRectZero;
+        CGRect bar=manager.statusBarFrame;
+        if(!manager.statusBarHidden && OrbitValidFrame(bar)) {
+            avoidance=[host convertRect:bar fromCoordinateSpace:host.windowScene.coordinateSpace];
+            UIView *hosting=[(id)SceneController(window) contentView];
+            if(hosting.window==host && OrbitValidFrame(hosting.bounds) && CGAffineTransformIsIdentity(hosting.transform))
+                avoidance=[hosting convertRect:avoidance fromView:host];
+            CGRect viewport=UIInterfaceOrientationIsLandscape(orientation)?
+                CGRectMake(0,0,frame.size.height,frame.size.width):frame;
+            avoidance=CGRectIntersection(avoidance,viewport);
+            if(!OrbitValidFrame(avoidance)) avoidance=CGRectZero;
+        }
+        // Enabling the flag alone leaves LC's zero statusbar geometry intact.
+        // Copy real host metrics at the same final boundary as safe-area data.
+        if([settings respondsToSelector:@selector(setStatusBarHeight:)]) [settings setStatusBarHeight:CGRectGetHeight(avoidance)];
+        if([settings respondsToSelector:@selector(setStatusBarAvoidanceFrame:)]) [settings setStatusBarAvoidanceFrame:avoidance];
+    }
     [settings setFrame:frame];
     [settings setPeripheryInsets:insets];
     [settings setSafeAreaInsetsPortrait:PortraitInsets(insets,orientation)];
@@ -210,11 +379,11 @@ static void ApplyGeometry(id settings,CGRect frame,UIInterfaceOrientation orient
 }
 static void ConfigureSafeArea(UIViewController *window,id settings) {
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
-    if(FullscreenGeometry(window,&frame,&orientation,&insets)) ApplyGeometry(settings,frame,orientation,insets);
+    if(FullscreenGeometry(window,&frame,&orientation,&insets)) ApplyGeometry(window,settings,frame,orientation,insets);
 }
 
 static void LayoutFullscreen(UIViewController *window) {
-    if(OrbitPiPProtectedWindow(window)) return;
+    if(!NSThread.isMainThread || OrbitPiPProtectedWindow(window)) return;
     UIViewController *scene=SceneController(window);
     if(!window.isViewLoaded || !scene || ![(id)window navigationBar]) return;
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
@@ -222,8 +391,18 @@ static void LayoutFullscreen(UIViewController *window) {
     RememberAppearance(window);
     PositionHostingView(window,YES);
     UIView *view=window.view;
-    if(view.superview && OrbitValidFrame(view.superview.bounds) && !CGRectEqualToRect(view.frame,view.superview.bounds))
-        view.frame=view.superview.bounds;
+    UIWindow *host=view.window ?: window.parentViewController.view.window;
+    UIView *mounted=[(id)scene contentView];
+    if(mounted.window==host && host && InitialSceneWindow!=window)
+        objc_setAssociatedObject(window,&ViewportReadyKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGRect viewport=GuestViewport(host.bounds,host.safeAreaInsets,
+        [objc_getAssociatedObject(window,&ViewportReadyKey) boolValue] && !GuestOwnsTopInset([(id)scene bundleId]));
+    if(!OrbitValidFrame(viewport)) return;
+    if(view.superview) {
+        CGRect physical=[view.superview convertRect:viewport fromView:host];
+        if(!OrbitValidFrame(physical)) return;
+        if(!CGRectEqualToRect(view.frame,physical)) view.frame=physical;
+    }
     view.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     view.layer.cornerRadius=0;
     view.layer.borderWidth=0;
@@ -249,10 +428,12 @@ static void LayoutFullscreen(UIViewController *window) {
     }
 }
 static void UpdateScene(UIViewController *window,id baseSettings) {
-    if(OrbitPiPProtectedWindow(window)) return;
+    if(!NSThread.isMainThread || OrbitPiPProtectedWindow(window)) return;
+    LayoutFullscreen(window);
+    [window.view layoutIfNeeded];
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
     if(!FullscreenGeometry(window,&frame,&orientation,&insets)) return;
-    LayoutFullscreen(window);
+    RecordGeometry(@"layout",window,nil);
     UIViewController *scene=SceneController(window);
     if(!scene) return;
     __weak UIViewController *weakWindow=window;
@@ -267,24 +448,27 @@ static void UpdateScene(UIViewController *window,id baseSettings) {
             [settings setDeviceOrientation:UIDevice.currentDevice.orientation];
         }
         [settings setForeground:YES];
-        ApplyGeometry(settings,frame,orientation,insets);
+        ApplyGeometry(strongWindow,settings,frame,orientation,insets);
     }];
 }
 static void SceneSettings(id scene,SEL selector,void (^block)(id)) {
     UIViewController *window=[scene delegate];
-    if(!Fullscreen() || ![window isKindOfClass:WindowClass] || OrbitPiPProtectedWindow(window)) {
+    if(!NSThread.isMainThread || !Fullscreen() || ![window isKindOfClass:WindowClass] || OrbitPiPProtectedWindow(window)) {
         ((void(*)(id,SEL,id))OriginalSceneSettings)(scene,selector,block);return;
     }
-    CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
-    if(!FullscreenGeometry(window,&frame,&orientation,&insets)) return;
     // LC's queued resize blocks bypass the decorated-controller delegate.
-    // Apply one coherent geometry snapshot after every caller's changes.
+    // Preserve the caller even while UIKit is changing/attaching the window.
     ((void(*)(id,SEL,id))OriginalSceneSettings)(scene,selector,^(id settings) {
         if(block) block(settings);
-        ApplyGeometry(settings,frame,orientation,insets);
+        CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
+        if(FullscreenGeometry(window,&frame,&orientation,&insets))
+            ApplyGeometry(window,settings,frame,orientation,insets);
     });
 }
 static void FinalSceneSettings(id remote,SEL selector,void (^block)(id,id)) {
+    if(!NSThread.isMainThread) {
+        ((void(*)(id,SEL,id))OriginalFinalSettings)(remote,selector,block);return;
+    }
     UIViewController *window=nil;
     if(Fullscreen()) for(UIViewController *candidate in [LCOrbitMultitask windows]) {
         id presenter=[(id)SceneController(candidate) presenter];
@@ -293,27 +477,31 @@ static void FinalSceneSettings(id remote,SEL selector,void (^block)(id,id)) {
     if(!window || OrbitPiPProtectedWindow(window)) {
         ((void(*)(id,SEL,id))OriginalFinalSettings)(remote,selector,block);return;
     }
-    CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
-    if(!FullscreenGeometry(window,&frame,&orientation,&insets)) return;
-    // iOS 18+ uses AppScene's temporary settings only for contentView.frame.
-    // Apply insets at the real FBScene boundary, after LC's UIKit wrapper.
+    // The native block can update the actual hosted view. Measure after it,
+    // without forcing a recursive UIKit layout inside the remote transaction.
     ((void(*)(id,SEL,id))OriginalFinalSettings)(remote,selector,^(id settings,id context) {
         if(block) block(settings,context);
-        ApplyGeometry(settings,frame,orientation,insets);
+        RecordGeometry(@"native-final",window,settings);
+        CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
+        if(FullscreenGeometry(window,&frame,&orientation,&insets))
+            ApplyGeometry(window,settings,frame,orientation,insets);
+        RecordGeometry(@"plugin-final",window,settings);
     });
 }
 static void InitialSceneSettings(id parameters,SEL selector,void (^block)(id)) {
     UIViewController *window=NSThread.isMainThread && Fullscreen()?InitialSceneWindow:nil;
-    CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
-    if(!window || OrbitPiPProtectedWindow(window) ||
-       !FullscreenGeometry(window,&frame,&orientation,&insets)) {
+    if(!window || OrbitPiPProtectedWindow(window)) {
         ((void(*)(id,SEL,id))OriginalInitialSettings)(parameters,selector,block);return;
     }
-    // Both LC scene APIs configure these parameters before remote activation.
-    // Later FBScene updates cannot repair geometry an App cached at launch.
+    // Correct configuration before this settings block returns. The modern
+    // hosting constructor may already have created a remote scene at this point.
     ((void(*)(id,SEL,id))OriginalInitialSettings)(parameters,selector,^(id settings) {
         if(block) block(settings);
-        ApplyGeometry(settings,frame,orientation,insets);
+        RecordGeometry(@"initial-native",window,settings);
+        CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
+        if(FullscreenGeometry(window,&frame,&orientation,&insets))
+            ApplyGeometry(window,settings,frame,orientation,insets);
+        RecordGeometry(@"initial-plugin",window,settings);
     });
 }
 static void PresenterReady(id scene,SEL selector) {
@@ -326,8 +514,10 @@ static void PresenterReady(id scene,SEL selector) {
         !OrbitPiPProtectedWindow(window);
     UIViewController *previous=InitialSceneWindow;
     if(managed) {
+        objc_setAssociatedObject(window,&ViewportReadyKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         LayoutFullscreen(window);
         [window.view layoutIfNeeded];
+        RecordGeometry(@"presenter-before",window,nil);
     }
     InitialSceneWindow=managed?window:nil;
     @try {
@@ -336,6 +526,8 @@ static void PresenterReady(id scene,SEL selector) {
         InitialSceneWindow=previous;
     }
     if(managed) {
+        objc_setAssociatedObject(window,&ViewportReadyKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        RecordGeometry(@"presenter-mounted",window,nil);
         [window.view layoutIfNeeded];
         UpdateScene(window,nil);
     }
@@ -348,6 +540,7 @@ static void RestoreAppearance(UIViewController *window) {
     if(OrbitPiPProtectedWindow(window)) return;
     NSDictionary *snapshot=objc_getAssociatedObject(window,&SnapshotKey);
     if(!snapshot) return;
+    objc_setAssociatedObject(window,&ViewportReadyKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     PositionHostingView(window,NO);
     [NSLayoutConstraint deactivateConstraints:[(id)window activatedVerticalConstraints]?:@[]];
     [(id)window setActivatedVerticalConstraints:@[]];
@@ -374,6 +567,13 @@ static void RestoreAppearance(UIViewController *window) {
     [(id)window updateOriginalFrame];
     ((void(*)(id,SEL))OriginalVertical)(window,NSSelectorFromString(@"updateVerticalConstraints"));
     [window.view layoutIfNeeded];
+    // This controller returns to LC's decorated (non-native-window) path,
+    // whose original AppScene initialization disables the Guest status bar.
+    [(id)SceneController(window) updateSettingsWithBlock:^(id settings) {
+        if([settings respondsToSelector:@selector(setStatusBarDisabled:)]) [settings setStatusBarDisabled:YES];
+        if([settings respondsToSelector:@selector(setStatusBarHeight:)]) [settings setStatusBarHeight:0];
+        if([settings respondsToSelector:@selector(setStatusBarAvoidanceFrame:)]) [settings setStatusBarAvoidanceFrame:CGRectZero];
+    }];
     [(id)window appSceneVCWillActivateScene:SceneController(window)];
 }
 
@@ -413,21 +613,21 @@ static void Setup(UIViewController *window,SEL selector) {
     if(Fullscreen()) LayoutFullscreen(window);
 }
 static void Vertical(UIViewController *window,SEL selector) {
-    if(!Fullscreen()) { ((void(*)(id,SEL))OriginalVertical)(window,selector);return; }
+    if(!NSThread.isMainThread || !Fullscreen()) { ((void(*)(id,SEL))OriginalVertical)(window,selector);return; }
     LayoutFullscreen(window);
     UpdateScene(window,nil);
 }
 static void Frame(UIViewController *window,SEL selector,id settings) {
-    if(!Fullscreen() || OrbitPiPProtectedWindow(window)) { ((void(*)(id,SEL,id))OriginalFrame)(window,selector,settings);return; }
+    if(!NSThread.isMainThread || !Fullscreen() || OrbitPiPProtectedWindow(window)) { ((void(*)(id,SEL,id))OriginalFrame)(window,selector,settings);return; }
     LayoutFullscreen(window);ConfigureSafeArea(window,settings);
 }
 static UIEdgeInsets SafeArea(UIViewController *window,SEL selector,id settings) {
-    if(!Fullscreen() || OrbitPiPProtectedWindow(window)) return ((UIEdgeInsets(*)(id,SEL,id))OriginalSafeArea)(window,selector,settings);
+    if(!NSThread.isMainThread || !Fullscreen() || OrbitPiPProtectedWindow(window)) return ((UIEdgeInsets(*)(id,SEL,id))OriginalSafeArea)(window,selector,settings);
     ConfigureSafeArea(window,settings);
     return UIEdgeInsetsZero;
 }
 static void Settings(UIViewController *window,SEL selector,id scene,id settings,id context,uint32_t actionType) {
-    if(!Fullscreen()) {
+    if(!NSThread.isMainThread || !Fullscreen()) {
         ((void(*)(id,SEL,id,id,id,uint32_t))OriginalSettings)(window,selector,scene,settings,context,actionType);
         return;
     }
@@ -591,6 +791,16 @@ static void PiPStopped(id manager,SEL selector,id controller) {
 }
 
 @implementation LCOrbitMultitask (Presentation)
++ (BOOL)usesAppTopInsetForBundle:(NSString *)bundle { return GuestOwnsTopInset(bundle); }
++ (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle {
+    if(!bundle.length) return;
+    [LCOrbitStorage setObject:@(enabled) forKey:[@"guestOwnTopInset." stringByAppendingString:bundle] module:@"LCFloatingMenu"];
+    for(UIViewController *window in [self windows])
+        if([[(id)SceneController(window) bundleId] isEqual:bundle])
+            objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [LCOrbitLog appendEvent:@"guest-top-inset-mode" details:@{@"guestBundle":bundle,@"appOwnsTopInset":@(enabled)} kind:@"runtime"];
+    [self refreshPresentation];
+}
 + (BOOL)installHooksWithError:(NSError **)error {
     static BOOL installed=NO;
     if(installed) return YES;

@@ -256,3 +256,11 @@ LC 主界面中进入 **微珠设置 → 配置与更新 → GitHub 访问**。�
 LC 宿主检测到新版本后，进入微珠设置首页会自动显示版本号及更新说明，提供“跳过此版本”和“下载更新”两个按钮。同一次设置会话里，同一版本只自动弹出一次；跳过精确版本的记录保存在 `LCFloatingMenu.skippedUpdateVersion` 配置中，更高版本仍会提示，手动“检测更新”可再次查看已跳过的版本。
 
 说明优先使用 latest Release 的正文；如果 `fm-latest` 只有内部版本标记，则读取同版本 tag 的公开 Release 正文。暂时无法获取说明时明确显示缺失提示。下载继续使用官方公开 dylib，执行 SHA-256 校验、临时文件校验及原子替换；失败时保留旧插件，不再生成永久备份。安装后仍需通过 LC 原生 Tweaks 重新签名并重启。
+
+
+应用兼容性：微珠设置 → 管理与支持 → 应用兼容性，列出全部已安装 App（包含隐藏、锁定与当前未运行的 App），每行显示图标、名称与兼容性开关。无需先启动 App 或开启多任务即可配置。开启后，微珠全屏多任务中的该 App 使用 v6 Guest 自行避让顶部；关闭时维持 v6 默认的物理避让。部分 App 需要关闭任务后重新启动。此设置不改变 LC 原生窗口、单任务和画中画的启动策略。
+
+兼容性沿用 `LCFloatingMenu` 模块的 `guestOwnTopInset.<LC 安装目录名>` 存储键（LC scene 的 `bundleId` 实际对应清单 `path`，不是 CFBundleIdentifier），旧 v6 开关设置可直接保留。同一安装目录名的私有/共享条目沿用同一个 v6 设置。日志 `geometryPolicy=per-app-viewport-v6`、`appOwnsTopInset` 可确认模式；未开启的其他 App 不受影响，保留首次启动完整尺寸、NaN 防护和窗口恢复逻辑。
+
+
+本次移植基于 `lcss-original` 的 `26cefd2`：只引入参考分支 `14ffa01` 中 Guest 坐标/安全区的前置修复，以及参考工作区里 `LCOrbitMultitaskUI.m/.h` 的 v6 逻辑和对应测试；未合并脏分支，也未移植旧“当前 App 顶部布局”入口。新增测试接入 `LCOrbit/Build/build.sh`。可用 `sh LCOrbit/Tests/run-app-compatibility-tests.sh`、`sh LCOrbit/Tests/run-multitask-scene-tests.sh`、`sh LCOrbit/Tests/run-multitask-viewport-tests.sh` 和 `sh LCOrbit/Tests/run-multitask-restore-tests.sh` 单独验证，或运行完整构建。兼容性 UI 的自动检查属于源码契约检查；真实图标、长名称布局和各 Guest 顶部行为仍需 UIKit 模拟器/真机验收。

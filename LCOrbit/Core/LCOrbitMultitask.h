@@ -41,5 +41,7 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 @interface LCOrbitMultitask (Presentation)
 + (BOOL)installHooksWithError:(NSError * _Nullable * _Nullable)error;
 + (void)refreshPresentation;
++ (BOOL)usesAppTopInsetForBundle:(NSString *)bundle;
++ (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle;
 @end
 NS_ASSUME_NONNULL_END

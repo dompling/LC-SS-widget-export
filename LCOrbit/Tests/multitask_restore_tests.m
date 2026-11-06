@@ -48,8 +48,9 @@ static BOOL UIInterfaceOrientationIsLandscape(NSInteger orientation) { return or
 
 @interface OrbitSettings : NSObject <NSCopying,NSMutableCopying>
 @property NSInteger userInterfaceStyle,interfaceOrientation,deviceOrientation;
-@property BOOL foreground;
-@property CGRect frame;
+@property BOOL foreground,statusBarDisabled;
+@property CGRect frame,statusBarAvoidanceFrame;
+@property double statusBarHeight;
 @property UIEdgeInsets peripheryInsets,safeAreaInsetsPortrait;
 @end
 @implementation OrbitSettings
@@ -97,7 +98,7 @@ static BOOL UIInterfaceOrientationIsLandscape(NSInteger orientation) { return or
 @end
 @compatibility_alias NSLayoutConstraint OrbitConstraint;
 
-static char SnapshotKey,ConstraintsKey;
+static char SnapshotKey,ConstraintsKey,ViewportReadyKey;
 static IMP OriginalVertical;
 static IMP OriginalPiPStopped;
 static NSUInteger NativePiPStops,PiPRestores;
@@ -136,6 +137,8 @@ int main(void) {
     @autoreleasepool {
         OrbitWindow *window=[OrbitWindow new];window.view=[UIView new];window.resizeHandle=[UIView new];window.navigationBar=[UIView new];
         window.appSceneVC=[OrbitScene new];window.appSceneVC.presenter=[OrbitScene new];window.appSceneVC.presenter.scene=[OrbitScene new];
+        window.appSceneVC.settings.statusBarHeight=54;
+        window.appSceneVC.settings.statusBarAvoidanceFrame=CGRectMake(0,0,390,54);
         window.view.window=[UIView new];window.view.window.frame=CGRectMake(0,0,390,844);
         window.view.frame=CGRectMake(0,0,390,844);window.isMaximized=YES;window.scaleRatio=1;
         window.appSceneVC.contentView.frame=CGRectMake(0,0,390,844);
@@ -143,6 +146,7 @@ int main(void) {
             @"hidden":@NO,@"maximized":@NO,@"scale":@1,@"barHidden":@NO,@"barAlpha":@1,@"handleHidden":@NO,@"handleAlpha":@1,
             @"contentTransform":Transform(CGAffineTransformIdentity),@"contentSublayer":[NSValue valueWithCATransform3D:CATransform3DIdentity]};
         objc_setAssociatedObject(window,&SnapshotKey,snapshot,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(window,&ViewportReadyKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         OriginalVertical=(IMP)NativeVertical;
         unsigned failures=0,assertions=0;
 #define EXPECT(condition,message) do {assertions++;if(!(condition)){failures++;fprintf(stderr,"FAIL: %s\n",message);}}while(0)
@@ -157,6 +161,9 @@ int main(void) {
         EXPECT(NativePiPStops==1 && PiPRestores==0,"native PiP callback completes before deferred presentation restoration");
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.05]];
         EXPECT(PiPRestores==1 && objc_getAssociatedObject(window,&SnapshotKey)==nil,"ending manual PiP completes the retained snapshot restoration");
+        EXPECT(objc_getAssociatedObject(window,&ViewportReadyKey)==nil,"restore clears physical viewport phase");
+        EXPECT(window.appSceneVC.settings.statusBarHeight==0 && CGRectEqualToRect(window.appSceneVC.settings.statusBarAvoidanceFrame,CGRectZero),"restoring decorated window clears fullscreen statusbar metrics");
+        EXPECT(window.appSceneVC.settings.statusBarDisabled,"restoring decorated LC window restores native statusbar policy");
         EXPECT(CGSizeEqualToSize(window.originalFrame.size,CGSizeMake(320,524)),"disable initializes LC's saved window dimensions");
         EXPECT(fabs(window.originalFrame.origin.x-35.0/390)<0.00001 && fabs(window.originalFrame.origin.y-100.0/844)<0.00001,"disable restores normalized window position for rotation");
         EXPECT(CGSizeEqualToSize(window.appSceneVC.contentView.frame.size,CGSizeMake(320,480)),"disable resizes remote content after restoring native control bar");
