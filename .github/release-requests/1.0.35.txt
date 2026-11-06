@@ -1,0 +1,6 @@
+LCFloatingMenu v1.0.35 formal release request
+
+Version: 1.0.35
+
+Notes: LCFloatingMenu/RELEASE_NOTES_1.0.35.md
+Publish: fresh compile and verify arm64 LCFloatingMenu.dylib, create annotated 1.0.35 tag, GitHub Release, and refresh fm-latest.
