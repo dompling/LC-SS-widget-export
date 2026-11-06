@@ -8,7 +8,8 @@ from pathlib import Path
 import sys
 source=(Path(sys.argv[1])/'LCOrbit/Core/LCOrbitMultitaskUI.m').read_text()
 parts=[]
-for signature in ['static BOOL OrbitValidFrame(', 'static UIEdgeInsets PortraitInsets(',
+for signature in ['static BOOL OrbitValidFrame(', 'static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL GuestOwnsTopInset(', 'static CGRect GuestViewport(', 'static CGRect FullscreenHostingFrame(', 'static UIEdgeInsets PortraitInsets(',
+                  'static BOOL OrbitInsetsInViewport(', 'static BOOL HostedSafeArea(',
                   'static BOOL FullscreenGeometry(', 'static void ApplyGeometry(',
                   'static void ConfigureSafeArea(', 'static void UpdateScene(',
                   'static void SceneSettings(', 'static void FinalSceneSettings(',
@@ -16,6 +17,12 @@ for signature in ['static BOOL OrbitValidFrame(', 'static UIEdgeInsets PortraitI
     if signature in source:
         start=source.index(signature)
         parts.append(source[start:source.index('\n}',start)+2])
+if 'static BOOL GuestOwnsTopInset(' not in source:
+    parts.insert(0,'static BOOL GuestOwnsTopInset(NSString *bundle) { return NO; }')
+if 'static CGRect GuestViewport(' not in source:
+    parts.insert(1,'static CGRect GuestViewport(CGRect bounds,UIEdgeInsets safe,BOOL ready) { return bounds; }')
+if 'static CGRect FullscreenHostingFrame(' not in source:
+    parts.append('static CGRect FullscreenHostingFrame(UIView *root,UIWindow *host) { return root.bounds; }')
 if 'static void SceneSettings(' not in source:
     # The baseline has no final AppScene hook. Its native resize path runs
     # unmodified; exercising that boundary reproduces the missing enforcement.
@@ -36,6 +43,8 @@ start=app.index('        [parameters updateSettingsWithBlock:updateSceneSettings
 end=app.index('\n        FBScene *scene =',start)
 (work/'legacy-parameters.inc').write_text(app[start:end])
 native=(Path(sys.argv[1])/'MultitaskSupport/UIKitHooks.m').read_text()
+start=native.index('UIEdgeInsets LCUIEdgeInsetsRotateToOrientation(')
+(work/'native-orientation.inc').write_text(native[start:native.index('\n}',start)+2])
 start=native.index('void hook_FBScene_performUpdateWithoutActivation(')
 parts.append(native[start:native.index('\n}',start)+2])
 Path(sys.argv[2]).write_text('\n'.join(parts))

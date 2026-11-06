@@ -1998,6 +1998,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (NSArray<NSDictionary *> *)orderedAppsForMenu;
 - (void)closeSettings;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
+- (void)compatibilityPage:(UIStackView *)stack;
 - (void)updateSettingsContent;
 - (void)appendResetStyleRow:(UIStackView *)stack;
 - (void)launchApp:(NSDictionary *)app;
@@ -4717,6 +4718,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         UIView *sw6=[self switchRowWithTitle:@"显示重启按钮" key:@"showRestart" defaultValue:YES tag:3];
         UIView *appCard=FMCreateGroupedCard(@[sw4,sw7,sw5,sw6],16);
         if(appCard) [s addArrangedSubview:appCard];
+    } else if([category isEqualToString:@"compatibility"]) {
+        [self compatibilityPage:s];
     } else if([category isEqualToString:@"apps"]) {
         [self managePage:s];
         [self spacer:s size:20];
@@ -5656,6 +5659,57 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
 }
 
+- (void)compatibilityPage:(UIStackView *)stack {
+    [self section:@"应用兼容性" sub:@"开启后以兼容性方式启动，由 App 自行避让顶部。关闭时保持默认行为。部分 App 需重新启动后生效。" in:stack];
+    NSArray<NSDictionary *> *apps=InstalledApps();
+    NSMutableArray<UIView *> *rows=[NSMutableArray arrayWithCapacity:apps.count];
+    for(NSDictionary *app in apps) {
+        // LC's scene bundleId is the relative installation path, not CFBundleIdentifier.
+        NSString *bundle=app[@"path"];
+        NSString *title=app[@"title"]?:bundle?:@"App";
+        UIView *row=[UIView new];
+        UIView *icon=[self iconViewForApp:app size:42];
+        icon.translatesAutoresizingMaskIntoConstraints=NO;
+        icon.userInteractionEnabled=NO;
+        [row addSubview:icon];
+        UILabel *name=[self label:title size:15 weight:UIFontWeightMedium];
+        name.translatesAutoresizingMaskIntoConstraints=NO;
+        name.numberOfLines=1;
+        name.lineBreakMode=NSLineBreakByTruncatingTail;
+        [row addSubview:name];
+        UISwitch *control=[UISwitch new];
+        control.translatesAutoresizingMaskIntoConstraints=NO;
+        control.onTintColor=FMSwitchGreen();
+        control.on=[LCOrbitMultitask usesAppTopInsetForBundle:bundle];
+        control.enabled=bundle.length>0;
+        control.accessibilityLabel=[title stringByAppendingString:@"，兼容性方式启动"];
+        [control setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        objc_setAssociatedObject(control,@selector(guestTopInsetChanged:),bundle,OBJC_ASSOCIATION_COPY_NONATOMIC);
+        [control addTarget:self action:@selector(guestTopInsetChanged:) forControlEvents:UIControlEventValueChanged];
+        [row addSubview:control];
+        [NSLayoutConstraint activateConstraints:@[
+            [row.heightAnchor constraintEqualToConstant:68],
+            [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:15],
+            [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [icon.widthAnchor constraintEqualToConstant:42],
+            [icon.heightAnchor constraintEqualToConstant:42],
+            [name.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:11],
+            [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+            [name.trailingAnchor constraintLessThanOrEqualToAnchor:control.leadingAnchor constant:-10],
+            [control.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-15],
+            [control.centerYAnchor constraintEqualToAnchor:row.centerYAnchor]
+        ]];
+        [rows addObject:row];
+    }
+    UIView *card=FMCreateGroupedCard(rows,68);
+    if(card) [stack addArrangedSubview:card];
+    if(!apps.count) [self note:@"暂无已安装的应用" in:stack];
+}
+- (void)guestTopInsetChanged:(UISwitch *)control {
+    NSString *bundle=objc_getAssociatedObject(control,@selector(guestTopInsetChanged:));
+    if(bundle.length) [LCOrbitMultitask setUsesAppTopInset:control.isOn forBundle:bundle];
+}
+
 - (void)perAppPage:(UIStackView*)s {
     [self section:FMHostUI()?@"LC 主界面独立设置":@"当前 App 独立设置" sub:GuestID() in:s];
     [self settingSwitch:s title:@"启用独立设置" key:[@"override." stringByAppendingString:GuestID()] defaultValue:NO tag:7];
@@ -6566,6 +6620,10 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         });
     });
 }
+- (void)openCompatibility {
+    FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:@"compatibility"];
+    [self.navigationController pushViewController:detail animated:YES];
+}
 - (void)openApps {
     FMSettingsSectionController *detail=[[FMSettingsSectionController alloc] initWithSection:@"apps"];
     [self.navigationController pushViewController:detail animated:YES];
@@ -6612,7 +6670,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     ]];
     FMManager *manager=[FMManager shared];
     // Display/Appearance and Interaction are inline on the root settings
-    // page. Only the two less frequently used management sections navigate.
+    // page. Less frequently used management sections navigate.
     [manager populateSettingsCategory:@"appearance" stack:stack];
     UIView *gap=[UIView new];[gap.heightAnchor constraintEqualToConstant:12].active=YES;
     [stack addArrangedSubview:gap];
@@ -6626,6 +6684,11 @@ static BOOL sHasAttemptedAutoLaunch=NO;
                            badgeColor:[UIColor colorWithRed:0/255.0 green:122/255.0 blue:255/255.0 alpha:1.0]
                                action:@selector(openApps)];
     [apps.heightAnchor constraintEqualToConstant:60].active=YES;
+    UIControl *compatibility=[self navigationRow:@"应用兼容性" subtitle:@"按 App 选择兼容性启动方式"
+        symbol:@"checkmark.shield.fill"
+        badgeColor:[UIColor colorWithRed:255/255.0 green:149/255.0 blue:0/255.0 alpha:1.0]
+        action:@selector(openCompatibility)];
+    [compatibility.heightAnchor constraintEqualToConstant:60].active=YES;
     UIControl *shared=nil;
     if(FMHostUI()) {
         shared=[self navigationRow:@"插件管理" subtitle:@"按 App 分配、启停和批量共享"
@@ -6641,6 +6704,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     [logs.heightAnchor constraintEqualToConstant:60].active=YES;
     NSMutableArray<UIView *> *mgmtRows=[NSMutableArray array];
     if(apps) [mgmtRows addObject:apps];
+    if(compatibility) [mgmtRows addObject:compatibility];
     if(shared) [mgmtRows addObject:shared];
     if(logs) [mgmtRows addObject:logs];
     UIView *mgmtCard=FMCreateGroupedCard(mgmtRows,58);
@@ -6749,7 +6813,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         self.navigationItem.largeTitleDisplayMode=UINavigationItemLargeTitleDisplayModeNever;
     }
     NSDictionary *titles=@{@"appearance":@"显示与外观",@"behavior":@"交互与切换",
-                           @"apps":@"应用管理",@"diagnostics":@"诊断日志",@"github":@"GitHub 访问"};
+                           @"apps":@"应用管理",@"compatibility":@"应用兼容性",@"diagnostics":@"诊断日志",@"github":@"GitHub 访问"};
     self.title=titles[self.sectionKey]?:@"设置";
     self.view.backgroundColor=FMThemeColor(FMColorBackground);
     UIScrollView *scroll=[UIScrollView new];
