@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.33"
+#define FM_MENU_VERSION @"1.0.34"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -4024,10 +4024,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if([LCOrbitMultitask isEnabled]) {
             id activeWin=[LCOrbitMultitask activeWindow];
             if(!activeWin) {
-                // 无活跃子窗口 ≠ 用户回主页：系统在后台回收子 App 窗口时 activeWindow
-                // 会变为 nil，此时把 lastActiveAppKey 改写成 @"ui" 会导致「系统自动杀进程后
-                // 只进主页、记不住上次 App」。回主页由 goHome / compactReturnHome 显式写入，
-                // 这里保持原值不覆盖。
+                // 无活跃子窗口时分两种情况，必须区分：
+                // 1) 用户主动关闭了 App（走 forgetWindow，窗口从 TaskWindows 移除），
+                //    此时应记录主页 —— 否则「关掉 App 回主页再杀后台」重进会错误拉起旧 App。
+                // 2) 系统在后台回收子 App 窗口（只走 didHideWindow，窗口对象仍存活），
+                //    此时不能覆盖原值 —— 否则「系统自动杀进程后」会丢记录只进主页。
+                if([LCOrbitMultitask windows].count==0) SetPref(@"lastActiveAppKey",@"ui");
                 return;
             }
             for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
