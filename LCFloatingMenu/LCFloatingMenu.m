@@ -4024,7 +4024,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if([LCOrbitMultitask isEnabled]) {
             id activeWin=[LCOrbitMultitask activeWindow];
             if(!activeWin) {
-                SetPref(@"lastActiveAppKey",@"ui");
+                // 无活跃子窗口 ≠ 用户回主页：系统在后台回收子 App 窗口时 activeWindow
+                // 会变为 nil，此时把 lastActiveAppKey 改写成 @"ui" 会导致「系统自动杀进程后
+                // 只进主页、记不住上次 App」。回主页由 goHome / compactReturnHome 显式写入，
+                // 这里保持原值不覆盖。
                 return;
             }
             for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
