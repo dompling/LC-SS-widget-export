@@ -13,7 +13,17 @@ static UIEdgeInsets UIEdgeInsetsMake(CGFloat top,CGFloat left,CGFloat bottom,CGF
     return (UIEdgeInsets){top,left,bottom,right};
 }
 
-// Both functions are extracted independently from production source. The LC
+static NSMutableDictionary *Preferences;
+@interface LCOrbitStorage : NSObject
++ (id)objectForKey:(NSString *)key module:(NSString *)module;
+@end
+@implementation LCOrbitStorage
++ (id)objectForKey:(NSString *)key module:(NSString *)module {
+    return [module isEqual:@"LCFloatingMenu"] ? Preferences[key] : nil;
+}
+@end
+
+// Geometry functions are extracted independently from production source. The LC
 // conversion is not replaced with an alias to the microbead implementation.
 #include "viewport.inc"
 
@@ -45,6 +55,17 @@ static void ExpectRejected(CGRect safe,CGRect viewport,const char *message) {
 int main(void) {
     @autoreleasepool {
         CGRect full=CGRectMake(0,0,390,844),safe=CGRectMake(0,59,390,751);
+        Preferences=[NSMutableDictionary dictionary];
+        for(NSNumber *enabled in @[@YES,@NO]) {
+            Preferences[@"guestOwnTopInset.A.app"]=enabled;
+            CGRect viewport=GuestViewport(full,(UIEdgeInsets){59,0,34,0},!GuestOwnsTopInset(@"A.app"));
+            Expect(CGRectEqualToRect(viewport,enabled.boolValue?CGRectMake(0,59,390,785):full),
+                "switch on moves and shrinks viewport; off retains v6 full bounds");
+            ExpectViewport(safe,viewport,(UIEdgeInsets){enabled.boolValue?0:59,0,34,0},
+                "switch on clears top inset; off retains Guest top safe area");
+            Expect(CGRectEqualToRect(GuestViewport(full,(UIEdgeInsets){59,0,34,0},NO),full),
+                "both policies preserve full startup bounds before presenter readiness");
+        }
         ExpectViewport(safe,full,(UIEdgeInsets){59,0,34,0},
             "a full viewport includes the status bar and home indicator");
         ExpectViewport(safe,CGRectMake(0,59,390,785),(UIEdgeInsets){0,0,34,0},

@@ -264,23 +264,32 @@ int main(void) {
             @"landscape viewport physically reserves both cutout edges but keeps bottom extension");
         Expect(CGRectIsNull(GuestViewport(host.bounds,(UIEdgeInsets){NAN,0,34,0},YES)),@"NaN safe area never creates a CALayer frame");
         Expect(CGRectIsNull(GuestViewport(host.bounds,(UIEdgeInsets){844,0,0,0},YES)),@"zero-height settled viewport is rejected");
+        scene.bundleId=@"physical.app";
+        LayoutPreferences=[@{@"guestOwnTopInset.physical.app":@YES} mutableCopy];
         objc_setAssociatedObject(window,&ViewportReadyKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         CGRect readyFrame;UIInterfaceOrientation readyOrientation;UIEdgeInsets readyInsets;
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
             CGRectEqualToRect(readyFrame,CGRectMake(0,0,390,785)) && readyInsets.top==0 && readyInsets.bottom==34,
-            @"settled Scene dimensions match physical viewport without duplicate top safe area");
+            @"switch on shrinks settled Scene height and clears top safe area");
         scene.bundleId=@"app.with-own-inset";
-        LayoutPreferences=[@{@"guestOwnTopInset.app.with-own-inset":@YES} mutableCopy];
+        LayoutPreferences[@"guestOwnTopInset.app.with-own-inset"]=@NO;
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
             readyFrame.size.height==844 && readyInsets.top==59,
-            @"App-owned inset mode uses full viewport and one remote top safe area");
+            @"switch off uses v6 full viewport and one remote top safe area");
         scene.bundleId=@"other.app";
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
-            readyFrame.size.height==785 && readyInsets.top==0,
-            @"App-owned inset preference cannot alter another Guest");
+            readyFrame.size.height==844 && readyInsets.top==59,
+            @"unconfigured App retains off compatibility policy");
         LayoutPreferences[@"guestOwnTopInset.app.with-own-inset"]=@{};
         scene.bundleId=@"app.with-own-inset";
-        Expect(!GuestOwnsTopInset(scene.bundleId),@"malformed layout preference falls back to physical avoidance");
+        Expect(GuestOwnsTopInset(scene.bundleId),@"malformed layout preference falls back to off compatibility policy");
+        Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
+            readyFrame.size.height==844 && readyInsets.top==59,
+            @"malformed preference preserves full height and top safe area");
+        scene.bundleId=@"physical.app";
+        Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
+            readyFrame.size.height==785 && readyInsets.top==0,
+            @"changing another App preserves the enabled physical avoidance policy");
         LayoutPreferences=nil;scene.bundleId=nil;
         objc_setAssociatedObject(window,&ViewportReadyKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UpdateScene(window,nil);
@@ -438,20 +447,27 @@ int main(void) {
         scene.presenter=[OrbitController new];scene.presenter.scene=[OrbitController new];
         host.frame=CGRectMake(0,0,390,844);host.windowScene.interfaceOrientation=UIInterfaceOrientationPortrait;
         host.safeAreaInsets=(UIEdgeInsets){59,0,34,0};
-        for(NSNumber *hostingAPI in @[@YES,@NO]) {
-            scene.usesHostingControllerAPI=hostingAPI.boolValue;
-            PresenterReady(scene,NSSelectorFromString(@"setUpAppPresenter"));
-            OrbitSettings *first=scene.initialSettings;
-            Expect(scene.settings.frame.size.height==785,@"presenter completion transitions to physical viewport dimensions without titlebar");
-            Expect(CGRectEqualToRect(first.frame,CGRectMake(0,0,390,844)) && first.interfaceOrientation==1,
-                hostingAPI.boolValue?@"hosting initial parameters have full portrait dimensions before configure":@"legacy initial parameters have full portrait dimensions before create");
-            Expect(first.safeAreaInsetsPortrait.top==59 && first.safeAreaInsetsPortrait.bottom==34 &&
-                first.peripheryInsets.top==59 && first.safeAreaEdgeInsets.bottom==34,
-                hostingAPI.boolValue?@"hosting initial parameters reserve statusbar and home indicator":@"legacy initial parameters reserve statusbar and home indicator");
-            Expect(first.statusBarHeight==54 && first.statusBarAvoidanceFrame.size.height==54,
-                @"initial Guest parameters contain full statusbar geometry before launch");
-            Expect(first.canShowAlerts && first.foreground && !first.statusBarDisabled && first.level==1 &&
-                [first.persistenceIdentifier isEqualToString:@"guest-container"],@"initial geometry preserves LC lifecycle and container fields");
+        scene.bundleId=@"presenter.app";
+        LayoutPreferences=[NSMutableDictionary dictionary];
+        for(NSNumber *physicalAvoidance in @[@YES,@NO]) {
+            LayoutPreferences[@"guestOwnTopInset.presenter.app"]=physicalAvoidance;
+            for(NSNumber *hostingAPI in @[@YES,@NO]) {
+                scene.usesHostingControllerAPI=hostingAPI.boolValue;
+                PresenterReady(scene,NSSelectorFromString(@"setUpAppPresenter"));
+                OrbitSettings *first=scene.initialSettings;
+                Expect(scene.settings.frame.size.height==(physicalAvoidance.boolValue?785:844) &&
+                    scene.settings.safeAreaEdgeInsets.top==(physicalAvoidance.boolValue?0:59),
+                    @"both presenter APIs settle to reduced height and zero top inset when on, full height and top safe area when off");
+                Expect(CGRectEqualToRect(first.frame,CGRectMake(0,0,390,844)) && first.interfaceOrientation==1,
+                    hostingAPI.boolValue?@"hosting initial parameters have full portrait dimensions before configure":@"legacy initial parameters have full portrait dimensions before create");
+                Expect(first.safeAreaInsetsPortrait.top==59 && first.safeAreaInsetsPortrait.bottom==34 &&
+                    first.peripheryInsets.top==59 && first.safeAreaEdgeInsets.bottom==34,
+                    hostingAPI.boolValue?@"hosting initial parameters reserve statusbar and home indicator":@"legacy initial parameters reserve statusbar and home indicator");
+                Expect(first.statusBarHeight==54 && first.statusBarAvoidanceFrame.size.height==54,
+                    @"initial Guest parameters contain full statusbar geometry before launch");
+                Expect(first.canShowAlerts && first.foreground && !first.statusBarDisabled && first.level==1 &&
+                    [first.persistenceIdentifier isEqualToString:@"guest-container"],@"initial geometry preserves LC lifecycle and container fields");
+            }
         }
         [scene updateSettingsWithBlock:^(OrbitSettings *settings) { settings.statusBarDisabled=YES; }];
         Expect(!scene.settings.statusBarDisabled,@"queued resize cannot restore windowed statusbar policy");

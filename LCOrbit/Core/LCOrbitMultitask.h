@@ -41,6 +41,7 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 @interface LCOrbitMultitask (Presentation)
 + (BOOL)installHooksWithError:(NSError * _Nullable * _Nullable)error;
 + (void)refreshPresentation;
+// Legacy switch API: YES = v5 physical avoidance; NO = v6 Guest-owned top inset.
 + (BOOL)usesAppTopInsetForBundle:(NSString *)bundle;
 + (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle;
 @end

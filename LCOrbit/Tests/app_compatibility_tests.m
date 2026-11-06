@@ -8,6 +8,7 @@ static UIViewController *SceneController(UIViewController *window) { return wind
 static char GeometryLogKey;
 static NSMutableDictionary *Preferences;
 static NSUInteger Refreshes;
+static NSDictionary *LastEvent;
 @interface LCOrbitStorage : NSObject
 + (id)objectForKey:(NSString *)key module:(NSString *)module;
 + (void)setObject:(id)value forKey:(NSString *)key module:(NSString *)module;
@@ -20,7 +21,7 @@ static NSUInteger Refreshes;
 + (void)appendEvent:(NSString *)event details:(NSDictionary *)details kind:(NSString *)kind;
 @end
 @implementation LCOrbitLog
-+ (void)appendEvent:(NSString *)event details:(NSDictionary *)details kind:(NSString *)kind {}
++ (void)appendEvent:(NSString *)event details:(NSDictionary *)details kind:(NSString *)kind { LastEvent=details; }
 @end
 static NSArray *Windows;
 @interface LCOrbitMultitask : NSObject
@@ -42,15 +43,23 @@ int main(void) {
         unsigned assertions=0,failures=0;
 #define EXPECT(c,m) do { assertions++;if(!(c)){failures++;fprintf(stderr,"FAIL: %s\n",m);} } while(0)
         EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"A.app"],"default remains off");
+        EXPECT(GuestOwnsTopInset(@"A.app"),"off by default delegates top safe area to Guest");
         [LCOrbitMultitask setUsesAppTopInset:YES forBundle:@"A.app"];
         EXPECT([Preferences[@"LCFloatingMenu.guestOwnTopInset.A.app"] boolValue],"uses v6 install-path storage key");
         EXPECT([LCOrbitMultitask usesAppTopInsetForBundle:@"A.app"],"can enable before any window exists");
+        EXPECT(!GuestOwnsTopInset(@"A.app"),"switch on selects physical avoidance");
+        EXPECT([LastEvent[@"physicalTopAvoidanceEnabled"] boolValue] && ![LastEvent[@"appOwnsTopInset"] boolValue],"on logs physical avoidance and actual Guest ownership");
+        EXPECT(GuestOwnsTopInset(@"B.app"),"another App remains in compatibility mode");
         EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"B.app"],"does not affect another App");
         EXPECT(Refreshes==1,"requests presentation update after save");
         [LCOrbitMultitask setUsesAppTopInset:NO forBundle:@"A.app"];
-        EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"A.app"],"turning off restores default");
+        EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"A.app"],"turning off selects compatibility mode");
+        EXPECT(GuestOwnsTopInset(@"A.app"),"switch off restores Guest-owned safe area");
+        EXPECT(![LastEvent[@"physicalTopAvoidanceEnabled"] boolValue] && [LastEvent[@"appOwnsTopInset"] boolValue],"off logs compatibility and actual Guest ownership");
         Preferences[@"LCFloatingMenu.guestOwnTopInset.A.app"]=@"YES";
         EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"A.app"],"invalid value defaults off");
+        EXPECT(GuestOwnsTopInset(@"A.app"),"invalid preference uses off compatibility policy");
+        EXPECT(GuestOwnsTopInset(@""),"empty identifier uses off compatibility policy");
         NSUInteger count=Preferences.count;
         [LCOrbitMultitask setUsesAppTopInset:YES forBundle:@""];
         EXPECT(Preferences.count==count,"empty identifier writes nothing");

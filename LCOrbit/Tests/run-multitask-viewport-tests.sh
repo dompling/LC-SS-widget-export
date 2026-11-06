@@ -13,6 +13,9 @@ native=(root/'MultitaskSupport/UIKitHooks.m').read_text()
 parts=[]
 for text,signature in [
     (source,'static BOOL OrbitValidFrame('),
+    (source,'static BOOL PhysicalTopAvoidanceEnabled('),
+    (source,'static BOOL GuestOwnsTopInset('),
+    (source,'static CGRect GuestViewport('),
     (source,'static BOOL OrbitInsetsInViewport('),
     (source,'static UIEdgeInsets PortraitInsets('),
     (native,'UIEdgeInsets LCUIEdgeInsetsRotateToOrientation('),

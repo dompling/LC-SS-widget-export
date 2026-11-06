@@ -9,13 +9,13 @@ import sys
 root,work=map(Path,sys.argv[1:])
 source=(root/'LCOrbit/Core/LCOrbitMultitaskUI.m').read_text()
 parts=[]
-for signature in ['static BOOL GuestOwnsTopInset(', '+ (BOOL)usesAppTopInsetForBundle:', '+ (void)setUsesAppTopInset:']:
+for signature in ['static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL GuestOwnsTopInset(', '+ (BOOL)usesAppTopInsetForBundle:', '+ (void)setUsesAppTopInset:']:
     if signature not in source:
         raise SystemExit('Missing compatibility API: '+signature)
     start=source.index(signature)
     end=source.index('}',start)+1 if signature.startswith('+ (BOOL)') else source.index('\n}',start)+2
     parts.append(source[start:end])
-(work/'compatibility.inc').write_text(parts[0]+'\n@implementation LCOrbitMultitask (Compatibility)\n'+'\n'.join(parts[1:])+'\n@end\n')
+(work/'compatibility.inc').write_text('\n'.join(parts[:2])+'\n@implementation LCOrbitMultitask (Compatibility)\n'+'\n'.join(parts[2:])+'\n@end\n')
 menu=(root/'LCFloatingMenu/LCFloatingMenu.m').read_text()
 start=menu.index('- (void)compatibilityPage:(UIStackView *)stack {')
 page=menu[start:menu.index('\n}',start)+2]

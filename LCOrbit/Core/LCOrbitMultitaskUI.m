@@ -185,14 +185,18 @@ static BOOL OrbitValidFrame(CGRect frame) {
     return isfinite(frame.origin.x) && isfinite(frame.origin.y) &&
         isfinite(frame.size.width) && isfinite(frame.size.height) && frame.size.width>0 && frame.size.height>0;
 }
-// Keep launch dimensions intact. After the presenter exists, reserve real
-// screen occlusion physically; Apps need not honor remote safe-area metadata.
-static BOOL GuestOwnsTopInset(NSString *bundle) {
+// Legacy storage key and UI API retain the raw switch value. Product policy:
+// ON = default physical avoidance (v5); OFF = Guest-owned top safe area (v6).
+static BOOL PhysicalTopAvoidanceEnabled(NSString *bundle) {
     if(!bundle.length) return NO;
     id value=[LCOrbitStorage objectForKey:[@"guestOwnTopInset." stringByAppendingString:bundle]
                                  module:@"LCFloatingMenu"];
     return [value isKindOfClass:NSNumber.class] && [value boolValue];
 }
+static BOOL GuestOwnsTopInset(NSString *bundle) {
+    return !PhysicalTopAvoidanceEnabled(bundle);
+}
+// Keep launch dimensions intact; physical avoidance begins after mounting.
 static CGRect GuestViewport(CGRect bounds,UIEdgeInsets safe,BOOL ready) {
     if(!OrbitValidFrame(bounds) || !isfinite(safe.top) || !isfinite(safe.left) ||
        !isfinite(safe.bottom) || !isfinite(safe.right) || safe.top<0 || safe.left<0 ||
@@ -791,14 +795,15 @@ static void PiPStopped(id manager,SEL selector,id controller) {
 }
 
 @implementation LCOrbitMultitask (Presentation)
-+ (BOOL)usesAppTopInsetForBundle:(NSString *)bundle { return GuestOwnsTopInset(bundle); }
+// Historical UI API reports the switch, not whether the Guest owns the inset.
++ (BOOL)usesAppTopInsetForBundle:(NSString *)bundle { return PhysicalTopAvoidanceEnabled(bundle); }
 + (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle {
     if(!bundle.length) return;
     [LCOrbitStorage setObject:@(enabled) forKey:[@"guestOwnTopInset." stringByAppendingString:bundle] module:@"LCFloatingMenu"];
     for(UIViewController *window in [self windows])
         if([[(id)SceneController(window) bundleId] isEqual:bundle])
             objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [LCOrbitLog appendEvent:@"guest-top-inset-mode" details:@{@"guestBundle":bundle,@"appOwnsTopInset":@(enabled)} kind:@"runtime"];
+    [LCOrbitLog appendEvent:@"guest-top-inset-mode" details:@{@"guestBundle":bundle,@"physicalTopAvoidanceEnabled":@(enabled),@"appOwnsTopInset":@(GuestOwnsTopInset(bundle))} kind:@"runtime"];
     [self refreshPresentation];
 }
 + (BOOL)installHooksWithError:(NSError **)error {
