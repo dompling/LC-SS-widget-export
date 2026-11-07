@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.35"
+#define FM_MENU_VERSION @"1.0.36"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -1619,6 +1619,16 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
     CGFloat height=MAX(44.,CGRectGetHeight(self.bounds)+20.);
     CGFloat x=self.docksLeft?0:CGRectGetWidth(self.bounds)-width;
     CGRect hit=CGRectMake(x,(CGRectGetHeight(self.bounds)-height)*.5,width,height);
+    return CGRectContainsPoint(hit,p);
+}
+@end
+
+// 关闭按钮：视觉图标尺寸不变，仅向左下扩大点击热区（贴右上角的 xmark 更容易命中）。
+@interface FMCloseHitButton : UIButton
+@end
+@implementation FMCloseHitButton
+- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
+    CGRect hit=CGRectInset(self.bounds,-8,-8);
     return CGRectContainsPoint(hit,p);
 }
 @end
@@ -3771,7 +3781,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     row.frame=CGRectMake(0,0,container.bounds.size.width-closeSize-4,height);
     row.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [container addSubview:row];
-    UIButton *close=[UIButton buttonWithType:UIButtonTypeCustom];
+    UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
     close.frame=CGRectMake(container.bounds.size.width-closeSize,(height-closeSize)*.5,
                            closeSize,closeSize);
     close.autoresizingMask=UIViewAutoresizingFlexibleLeftMargin;
@@ -4167,7 +4177,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                     [row.topAnchor constraintEqualToAnchor:container.topAnchor],
                     [row.heightAnchor constraintEqualToConstant:63]
                 ]];
-                UIButton *close=[UIButton buttonWithType:UIButtonTypeCustom];
+                UIButton *close=[FMCloseHitButton buttonWithType:UIButtonTypeCustom];
                 close.translatesAutoresizingMaskIntoConstraints=NO;
                 close.contentHorizontalAlignment=UIControlContentHorizontalAlignmentRight;
                 close.contentVerticalAlignment=UIControlContentVerticalAlignmentTop;
