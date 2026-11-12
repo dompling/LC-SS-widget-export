@@ -135,12 +135,19 @@ static UIColor *RGBA(CGFloat r,CGFloat g,CGFloat b,CGFloat a) {
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
 // Reading a setting locks the config file and parses it twice (see LCOrbitStorage), and
-// drawing the settings preview reads a few hundred of them. Between Begin and End the
-// plugin's settings are served from one copy instead. Writes still go to the store.
+// building the drawer or settings preview reads a few hundred of them. Between Begin and
+// End one synchronous draw/input event reads one copy. Writes still go to the store.
 @interface FMPreferenceSnapshot : LCOrbitPreferences
 @property(nonatomic,copy) NSDictionary *values;
 @end
 @implementation FMPreferenceSnapshot
+- (void)setObject:(id)value forKey:(NSString *)key {
+    [super setObject:value forKey:key];
+    if([LCOrbitStorage lastError]) return;
+    NSMutableDictionary *next=[self.values mutableCopy];
+    if(value) next[key]=value;else [next removeObjectForKey:key];
+    self.values=next;
+}
 - (id)objectForKey:(NSString *)key {
     if(![key hasPrefix:@"LCFloatingMenu."] || [key isEqualToString:@"LCFloatingMenu.previousMultitaskMode"])
         return [super objectForKey:key];
@@ -153,10 +160,13 @@ static LCOrbitPreferences *HostDefaults(void) {
     if(FMSnapshot) return FMSnapshot;
     return [LCOrbitStorage preferences];
 }
-static void FMBeginPreferenceSnapshot(void) {
+static void FMBeginPreferenceSnapshotUsingValues(NSDictionary *values) {
     if(FMSnapshotDepth++) return;
     FMSnapshot=[FMPreferenceSnapshot new];
-    FMSnapshot.values=[[LCOrbitStorage preferences] dictionaryRepresentation];
+    FMSnapshot.values=values?:[[LCOrbitStorage preferences] dictionaryRepresentation];
+}
+static void FMBeginPreferenceSnapshot(void) {
+    FMBeginPreferenceSnapshotUsingValues(nil);
 }
 static void FMEndPreferenceSnapshot(void) {
     if(FMSnapshotDepth && !--FMSnapshotDepth) FMSnapshot=nil;
@@ -1996,6 +2006,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)refreshSystemAppearance;
 - (void)scheduleAppearanceCheck;
 - (void)cancelAppearanceCheck;
+- (void)cancelDropletInteraction;
 - (void)detachFromScene;
 - (void)observeAppearanceInScene:(UIWindowScene *)scene;
 - (void)queueAppearanceRefresh;
@@ -2028,12 +2039,21 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     CGPoint _panOriginalCenter;
     CGRect _panOriginalOrbFrame;
     BOOL _panUsesDroplet,_panDropletTriggered;
+    BOOL _dropletPanelPrepared;
+    BOOL _drawerSlideActive;
+    CGPoint _drawerSlideRestCenter;
     BOOL _panOriginalLeft;
     CGFloat _panMaxInwardDist;
     CGFloat _panMaxVerticalDist;
     BOOL _panIsRepositioning;
     BOOL _panIsInwardPull;
     BOOL _isPanning;
+    NSDictionary *_panPreferences;
+    __weak UIButton *_panOrb;
+    CADisplayLink *_dropletPullLink;
+    CGFloat _dropletPullTarget,_dropletOffsetTarget,_dropletPullShown,_dropletOffsetShown;
+    BOOL _dropletReleasePending;
+    NSUInteger _dropletReleaseFrames;
     // Bead <-> drawer morph. Progress 0 is the docked bead, 1 the open drawer;
     // a finger or a spring moves it, and every transition goes through it.
     FMNotchParams _morphBead,_morphDroplet,_morphDrawer;
@@ -2360,6 +2380,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(scrollView==self.appsScroll) [self persistAppsScroll];
 }
 - (void)removePanel {
+    [self stopDropletPull];
+    _dropletPanelPrepared=NO;
     // Closing a running task refreshes this panel. Both the compact icon list
     // and the normal app rows must retain their shared scroll position.
     [self captureAppsScroll];
@@ -2584,6 +2606,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self openSettings];
 }
 - (void)draw {
+    FMBeginPreferenceSnapshot();
+    @try {
     if(!self.window) return;
     // A scene detached mid-flight leaves a morph with no drawer to animate.
     if(_morphActive && !self.panel) [self endDrawerMorph];
@@ -2610,8 +2634,58 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         }
         [self.overlayView bringSubviewToFront:self.orb];
     }
+    } @finally { FMEndPreferenceSnapshot(); }
 }
 
+static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
+    CGFloat pull=MAX(0,inward);
+    if(pull>28) pull=28+(pull-28)/(1+(pull-28)/48);
+    return MIN(pull,52*scale);
+}
+- (void)stopDropletPull {
+    [_dropletPullLink invalidate];
+    _dropletPullLink=nil;
+    _dropletReleasePending=NO;_dropletReleaseFrames=0;
+    if(!_isPanning) _panPreferences=nil;
+}
+- (void)cancelDropletInteraction {
+    if(!_dropletPullLink && !_dropletReleasePending) return;
+    _isPanning=NO;
+    [self restoreDropletToOriginalAnimated:NO];
+    _panOrb=nil;
+}
+// Raw touch callbacks only save the latest position after the first frame.
+// Rebuilding native-glass masks more often than the display cannot show more motion.
+- (void)updateDropletPull:(CGFloat)pull offsetY:(CGFloat)offsetY {
+    _dropletPullTarget=pull;_dropletOffsetTarget=offsetY;
+    if(_dropletPullLink) return;
+    [self applyDropletPull:pull offsetY:offsetY];
+    _dropletPullShown=pull;_dropletOffsetShown=offsetY;
+    if(pull<=0) return;
+    _dropletPullLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(dropletPullFrame:)];
+    [_dropletPullLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+- (void)dropletPullFrame:(CADisplayLink *)link {
+    if(link && link!=_dropletPullLink) return;
+    if(self.orb!=_panOrb || !self.window || self.settingsWindow || self.isOpen ||
+       (!_isPanning && !_dropletReleasePending)) {
+        [self stopDropletPull];
+        return;
+    }
+    FMBeginPreferenceSnapshotUsingValues(_panPreferences);
+    @try {
+        if(_dropletPullTarget!=_dropletPullShown || _dropletOffsetTarget!=_dropletOffsetShown) {
+            [self applyDropletPull:_dropletPullTarget offsetY:_dropletOffsetTarget];
+            _dropletPullShown=_dropletPullTarget;_dropletOffsetShown=_dropletOffsetTarget;
+        }
+        // The first tick follows the final path's commit; one displayed frame
+        // separates it from the next tick's menu build, including Began -> Ended flicks.
+        if(_dropletReleasePending && ++_dropletReleaseFrames>=2) {
+            [self stopDropletPull];
+            [self openDrawerFromDroplet];
+        }
+    } @finally { FMEndPreferenceSnapshot(); }
+}
 // The 1.0.13 pull stretches just the handle; the drawer waits for release.
 - (void)applyDropletPull:(CGFloat)pull offsetY:(CGFloat)offsetY {
     CGRect frame=_panOriginalOrbFrame;
@@ -2635,6 +2709,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [CATransaction commit];
 }
 - (void)restoreDropletToOriginalAnimated:(BOOL)animated {
+    [self stopDropletPull];
+    if(_dropletPanelPrepared) [self removePanel];
     if(!self.orb) return;
     UIButton *dragged=self.orb;
     UIView *glass=[dragged viewWithTag:9202];
@@ -2674,21 +2750,37 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 }
 
 - (void)pan:(UIPanGestureRecognizer *)g {
+    // A gesture uses one configuration copy; raw touch events must not parse
+    // the configuration file. Other UI events still take their own snapshots.
+    if(g.state==UIGestureRecognizerStateBegan) _panPreferences=nil;
+    FMBeginPreferenceSnapshotUsingValues(_panPreferences);
+    @try {
     CGPoint p=[g locationInView:self.overlayView];
+    if(g.state!=UIGestureRecognizerStateBegan && self.orb!=_panOrb) {
+        _isPanning=NO;
+        [self stopDropletPull];
+        return;
+    }
     if(g.state==UIGestureRecognizerStateBegan) {
+        if(_dropletReleasePending) [self restoreDropletToOriginalAnimated:NO];
+        [self stopDropletPull];
         // Grabbing the bead again while a let-go pull is still springing back
         // lets that finish at once, so this drag starts from the docked bead.
         if(_morphActive) [self completeDrawerMorphNow];
         _isPanning=YES;
+        _panOrb=self.orb;
+        _panPreferences=FMSnapshot.values;
         // With Reduce Motion nothing follows the finger: a long enough pull
         // opens the drawer once it is let go.
-        _panUsesDroplet=BoolPref(@"orbDropletPull",NO) && !UIAccessibilityIsReduceMotionEnabled();
-        _panUsesMorph=!_panUsesDroplet && !UIAccessibilityIsReduceMotionEnabled();
+        BOOL capsule=FMOrbHandleIsCapsule();
+        _panUsesDroplet=!capsule && BoolPref(@"orbDropletPull",NO) && !UIAccessibilityIsReduceMotionEnabled();
+        _panUsesMorph=capsule && !UIAccessibilityIsReduceMotionEnabled();
         [self.orb.layer removeAllAnimations];
         UIView *glass=[self.orb viewWithTag:9202];
         [glass.layer.mask removeAnimationForKey:@"fm.droplet.return"];
         for(CALayer *layer in glass.layer.sublayers) [layer removeAnimationForKey:@"fm.droplet.return"];
-        _panStartPoint=p;
+        CGPoint translation=[g translationInView:self.overlayView];
+        _panStartPoint=CGPointMake(p.x-translation.x,p.y-translation.y);
         _panOriginalCenter=self.orb.center;
         _panOriginalOrbFrame=self.orb.frame;
         _panDropletTriggered=NO;
@@ -2701,7 +2793,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         [self cancelOrbFade];
         self.orbFaded=NO;
         self.orb.alpha=1;
-    } else if(g.state==UIGestureRecognizerStateChanged) {
+    }
+    if(g.state==UIGestureRecognizerStateBegan || g.state==UIGestureRecognizerStateChanged) {
         _isPanning=YES;
         [self cancelOrbFade];
         self.orbFaded=NO;
@@ -2729,6 +2822,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         }
         
         if(_panIsRepositioning) {
+            [self stopDropletPull];
+            if(_dropletPanelPrepared) [self removePanel];
             // A pull that turned into a slide drops the drawer it had started.
             if(_morphActive) [self abortDrawerMorph];
             [self.orb viewWithTag:9204].alpha=0;
@@ -2762,10 +2857,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
             self.orb.center=CGPointMake(Clamp(p.x,minX,maxX),Clamp(p.y,minY,maxY));
             
         } else if(_panUsesDroplet) {
-            CGFloat pull=MAX(0,inwardDist);
-            if(pull>28) pull=28+(pull-28)/(1+(pull-28)/48);
-            pull=MIN(pull,52*FMOrbScale());
-            [self applyDropletPull:pull offsetY:(p.y-_panStartPoint.y)*.14];
+            CGFloat pull=FMDropletPullDistance(inwardDist,FMOrbScale());
+            if(_panIsInwardPull || _dropletPullLink)
+                [self updateDropletPull:pull offsetY:(p.y-_panStartPoint.y)*.14];
             if(pull>=36*FMOrbScale() && !_panDropletTriggered) {
                 _panDropletTriggered=YES;
                 if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
@@ -2833,10 +2927,19 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                     }];
             }
         } else if(_panUsesDroplet) {
-            BOOL open=_panDropletTriggered || (inwardV>180 && finalVerticalDist<60) || finalTotalDist<6;
+            CGFloat inward=_panOriginalLeft?p.x-_panStartPoint.x:_panStartPoint.x-p.x;
+            CGFloat pull=FMDropletPullDistance(inward,FMOrbScale());
+            BOOL tap=finalTotalDist<6 && _panMaxInwardDist<6 && _panMaxVerticalDist<6;
+            BOOL open=pull>=36*FMOrbScale() || (inwardV>180 && inward>0 && finalVerticalDist<60) || tap;
             if(open) {
-                [self restoreDropletToOriginalAnimated:NO];
-                if(!self.isOpen) [self toggle];
+                if(pull>0 && !tap) {
+                    [self updateDropletPull:pull offsetY:(p.y-_panStartPoint.y)*.14];
+                    // Always flush the precise release endpoint, even if input
+                    // arrived between display ticks or omitted Changed entirely.
+                    [self applyDropletPull:pull offsetY:_dropletOffsetTarget];
+                    _dropletPullShown=pull;_dropletOffsetShown=_dropletOffsetTarget;
+                    _dropletReleasePending=YES;_dropletReleaseFrames=0;
+                } else [self openDrawerFromDroplet];
             } else [self restoreDropletToOriginalAnimated:YES];
         } else if(_morphActive && _morphDragging) {
             // === 抽屉跟手松开：拉得够远、或甩得够快就展开，否则收回 ===
@@ -2854,9 +2957,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
                     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
                 }
                 if(!self.isOpen) {
-                    [self toggle];
+                    if(_dropletPanelPrepared) [self openDrawerFromDroplet];
+                    else [self toggle];
                 }
             } else {
+                if(_dropletPanelPrepared) [self removePanel];
                 // 微珠没有动过，只恢复自动淡化
                 [self scheduleOrbFade];
             }
@@ -2866,7 +2971,14 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
         if(_panIsRepositioning) [self drawOrb];
         else if(_panUsesDroplet) [self restoreDropletToOriginalAnimated:NO];
         else if(_morphActive && _morphDragging) [self settleDrawerMorphOpen:NO velocity:0];
-        else [self scheduleOrbFade];
+        else {
+            if(_dropletPanelPrepared) [self removePanel];
+            [self scheduleOrbFade];
+        }
+    }
+    } @finally {
+        _panPreferences=(_isPanning || _dropletReleasePending)?FMSnapshot.values:nil;
+        FMEndPreferenceSnapshot();
     }
 }
 - (void)announceDrawerState {
@@ -2897,8 +3009,11 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self scheduleOrbFade];
 }
 - (void)toggle {
+    FMBeginPreferenceSnapshot();
+    @try {
     // A drag or settle already owns the drawer; its release decides the state.
     if(_morphActive) return;
+    [self stopDropletPull];
     [self endScrubAnimated:NO];
     BOOL opening=!self.isOpen;
     if(opening) {
@@ -2924,6 +3039,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     } else if(self.panel && self.orb) {
         [self morphDrawerOpen:NO];
     } else [self draw];
+    } @finally { FMEndPreferenceSnapshot(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -2986,7 +3102,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     // rated at the display rate: an interior frame keeps the outline it already has and only
     // moves it, the first frame and the last one are always exact.
     BOOL ends=(t<=0||t>=1),fresh=NO;
-    if(ends || !clip.path) {
+    if(ends || !clip.path || (_morphShownT<=1e-4 && t>0)) {
         fresh=YES;
     } else if(CACurrentMediaTime()-_morphFrameAt>=_morphFrameTick) {
         fresh=YES;
@@ -3071,6 +3187,35 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(!reveal && FMPopMode()==2) _popStarted=NO;
     FMPopItems(items,dividers,self.left,reveal);
 }
+// Prepare the release-only drawer during the pull, without showing or enabling it.
+- (void)prepareDropletDrawer {
+    if(self.panel || self.settingsWindow || !self.orb) return;
+    self.page=@"apps";
+    [self loadAppsScroll];
+    self.apps=InstalledApps();
+    [self buildPanel];
+    if(!self.panel) return;
+    _dropletPanelPrepared=YES;
+    self.panel.hidden=YES;self.dismissLayer.hidden=YES;
+    self.panel.userInteractionEnabled=NO;self.dismissLayer.userInteractionEnabled=NO;
+    [self.panel layoutIfNeeded];
+    [self.appsScroll layoutIfNeeded];
+    [self.overlayView bringSubviewToFront:self.orb];
+}
+- (void)openDrawerFromDroplet {
+    if(!_dropletPanelPrepared) [self prepareDropletDrawer];
+    if(!_dropletPanelPrepared) {
+        [self restoreDropletToOriginalAnimated:NO];
+        if(!self.isOpen) [self toggle];
+        return;
+    }
+    _dropletPanelPrepared=NO;
+    self.orb.alpha=0;
+    if(_panUsesDroplet) [self applyDropletPull:0 offsetY:0];
+    [self rememberCurrentApp];
+    [self commitDrawerOpen];
+    [self slideDropletDrawerOpen];
+}
 // Builds the drawer behind the bead the moment the pull starts. NO means the
 // drawer cannot be shown (no room, a settings window): the droplet carries on.
 - (BOOL)beginDrawerDragFromBead {
@@ -3095,8 +3240,46 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [self applyMorphProgress:0];
     return YES;
 }
+// Water handles use the 1.0.13 entrance: the complete drawer slides in as one
+// piece, with its final outline and content already in place.
+- (void)slideDropletDrawerOpen {
+    UIView *drawer=self.panel;
+    if(!drawer) return;
+    _morphActive=YES;_morphDragging=NO;_morphOpening=YES;_morphFromBead=NO;
+    _morphTarget=1;
+    _drawerSlideActive=YES;
+    _drawerSlideRestCenter=drawer.center;
+    _popRevealed=YES;_popStarted=YES;
+    drawer.hidden=NO;self.dismissLayer.hidden=NO;
+    drawer.userInteractionEnabled=NO;self.dismissLayer.userInteractionEnabled=NO;
+    self.orb.alpha=0;self.orb.userInteractionEnabled=NO;
+    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) {
+        self.dismissLayer.alpha=1;
+        [self finishDrawerMorph];
+        return;
+    }
+    CGPoint destination=drawer.center;
+    CGFloat travel=CGRectGetWidth(drawer.frame)+
+        (self.left?self.window.safeAreaInsets.left:self.window.safeAreaInsets.right)+1;
+    drawer.center=CGPointMake(destination.x+(self.left?-travel:travel),destination.y);
+    self.dismissLayer.alpha=0;
+    NSUInteger generation=++self.morphGeneration;
+    [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.86
+        initialSpringVelocity:.3 options:UIViewAnimationOptionBeginFromCurrentState
+        animations:^{
+            drawer.center=destination;
+            self.dismissLayer.alpha=1;
+        } completion:^(BOOL finished) {
+            if(self.panel==drawer && generation==self.morphGeneration && self->_drawerSlideActive)
+                [self finishDrawerMorph];
+        }];
+}
 // Plays the open or close transition of a drawer that is already built.
 - (void)morphDrawerOpen:(BOOL)open {
+    if(open && !FMOrbHandleIsCapsule()) {
+        [self slideDropletDrawerOpen];
+        return;
+    }
     if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || ![self prepareDrawerMorph]) {
         if(!open) [self draw];
         return;
@@ -3154,6 +3337,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     [_morphLink invalidate];
     _morphLink=nil;
     _morphActive=NO;_morphDragging=NO;_panelDragLive=NO;
+    _drawerSlideActive=NO;
 }
 // The spring has arrived. Open: hand the drawer back to the user. Closed: a
 // pull that was let go early never moved the bead, so only the drawer goes;
@@ -3185,6 +3369,15 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
     if(_morphDragging) { [self abortDrawerMorph]; return; }
     // A redraw asked for meanwhile would replace the bead being grabbed.
     _drawDeferred=NO;
+    if(_drawerSlideActive) {
+        self.morphGeneration++;
+        [self.panel.layer removeAllAnimations];
+        self.panel.center=_drawerSlideRestCenter;
+        [self.dismissLayer.layer removeAllAnimations];
+        self.dismissLayer.alpha=1;
+        [self finishDrawerMorph];
+        return;
+    }
     [self applyMorphProgress:_morphTarget];
     [self finishDrawerMorph];
 }
@@ -4820,6 +5013,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     });
 }
 - (void)detachFromScene {
+    _isPanning=NO;
+    [self stopDropletPull];
+    _panOrb=nil;
     [self.orbUpdateTimer invalidate];
     self.orbUpdateTimer=nil;
     self.orbUpdateLine=nil;
@@ -7185,7 +7381,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSArray<UIView *> *_popDividers;
     FMNotchParams _beadParams,_dropletParams,_drawerParams;
     NSArray<NSDictionary *> *_favorites;
-    BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded,_rebuildScheduled;
+    BOOL _dirty,_placed,_left,_compact,_open,_revealed,_started,_faded,_rebuildScheduled,_slideActive;
+    NSUInteger _slideGeneration;
     CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop,_headroom;
     CGFloat _idleAlpha,_fadedAlpha;
     CGFloat _progress,_velocity,_omega,_zeta;
@@ -7286,6 +7483,10 @@ static UIView *FMDockCard(UIStackView *rows) {
 // Settings changed: measure again now (the card's height follows) and redraw at the
 // next layout, however many changes arrive before it.
 - (void)reload {
+    if(_slideActive) {
+        _slideActive=NO;_slideGeneration++;
+        [_drawer.layer removeAllAnimations];
+    }
     [self applyScene];
     [self measure];
     [self syncHeight];
@@ -7517,7 +7718,8 @@ static UIView *FMDockCard(UIStackView *rows) {
     CGFloat stretch=Clamp(MAX(_progress,0)-1,0,.08),visible=_pw*_actual;
     _drawer.transform=CGAffineTransformMakeScale(_actual*(1+stretch),_actual);
     CGFloat rest=_left?visible*.5:sceneWidth-visible*.5;
-    _drawer.center=CGPointMake(rest+(_left?1:-1)*stretch*visible*.5,sceneHeight*.5);
+    if(!_slideActive)
+        _drawer.center=CGPointMake(rest+(_left?1:-1)*stretch*visible*.5,sceneHeight*.5);
     _bead.frame=CGRectMake(_left?0:sceneWidth-_beadW,(sceneHeight-_beadH)*.5,_beadW,_beadH);
 }
 - (CGFloat)restAlpha { return _faded?_fadedAlpha:_idleAlpha; }
@@ -7565,9 +7767,51 @@ static UIView *FMDockCard(UIStackView *rows) {
     _link=nil;
 }
 - (void)setOpen:(BOOL)open animated:(BOOL)animated {
+    _slideGeneration++;
+    if(_slideActive) {
+        _slideActive=NO;
+        [_drawer.layer removeAllAnimations];
+    }
     [self wake];
     _open=open;
     CGFloat target=open?1:0;
+    if(open && !FMOrbHandleIsCapsule()) {
+        [self stopLink];
+        _velocity=0;_revealed=YES;_started=YES;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        for(NSDictionary *entry in _popItems) {
+            CALayer *layer=((UIView *)entry[@"view"]).layer;
+            [layer removeAnimationForKey:@"fm.pop.in"];
+            [layer removeAnimationForKey:@"fm.pop.out"];
+            layer.opacity=1;layer.transform=CATransform3DIdentity;
+        }
+        for(UIView *divider in _popDividers) {
+            [divider.layer removeAnimationForKey:@"fm.pop.in"];
+            [divider.layer removeAnimationForKey:@"fm.pop.out"];
+            divider.layer.opacity=1;divider.layer.transform=CATransform3DIdentity;
+        }
+        [CATransaction commit];
+        [self applyProgress:1];
+        [self layoutIfNeeded];
+        if(!animated || FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || !self.window) return;
+        UIView *drawer=_drawer;
+        CGPoint destination=drawer.center;
+        CGFloat travel=CGRectGetWidth(drawer.frame)+1;
+        drawer.center=CGPointMake(destination.x+(_left?-travel:travel),destination.y);
+        _slideActive=YES;
+        NSUInteger generation=_slideGeneration;
+        [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.86
+            initialSpringVelocity:.3 options:UIViewAnimationOptionBeginFromCurrentState
+            animations:^{drawer.center=destination;}
+            completion:^(BOOL finished) {
+                if(self->_drawer==drawer && generation==self->_slideGeneration) {
+                    self->_slideActive=NO;
+                    [self setNeedsLayout];
+                }
+            }];
+        return;
+    }
     if(!animated || FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || !self.window) {
         [self stopLink];
         _velocity=0;
@@ -8239,6 +8483,7 @@ static UIView *FMDockCard(UIStackView *rows) {
        [event isEqualToString:UISceneWillDeactivateNotification]) {
         UIApplication.sharedApplication.idleTimerDisabled=NO;
         if(!scene || scene==manager.window.windowScene || scene==manager.settingsWindow.windowScene) {
+            [manager cancelDropletInteraction];
             [manager invalidatePendingLaunch];
             if(manager.appsScroll) [manager persistAppsScroll];
             [manager cancelAppearanceCheck];

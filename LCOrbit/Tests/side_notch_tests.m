@@ -723,6 +723,7 @@ int main(void) { @autoreleasepool {
         }
     }
     geometryScale=1;[stylePreferences removeAllObjects];
+    geometryScale=1;[stylePreferences removeAllObjects];
     const char *preview=getenv("FM_GEOMETRY_PREVIEW");
     if(preview) {
         // One row per handle style: the drawer growing out of it, drawn at 60%.

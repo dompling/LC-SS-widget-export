@@ -11,6 +11,7 @@
 #import "LCOrbit/Core/LCOrbitTweakCenterViews.h"
 #import "LCOrbit/Core/LCOrbitSharedTweaksViewController.h"
 #import "LCOrbit/Core/LCOrbitTweakSync.h"
+#import "LCOrbit/SDK/LCOrbitModule.h"
 
 // Only host/task/presentation boundaries are fixtures; layout and menu actions
 // below execute the real LCFloatingMenu and Core linked into this simulator app.
@@ -37,6 +38,10 @@
 - (void)loadAppsScroll;
 - (void)persistAppsScroll;
 - (void)draw;
+- (void)toggle;
+- (void)completeDrawerMorphNow;
+- (void)buildPanel;
+- (void)morphFrame:(CADisplayLink *)link;
 - (void)morphDrawerOpen:(BOOL)open;
 - (void)refreshSystemAppearance;
 - (void)refreshAppsContent;
@@ -50,6 +55,7 @@
 - (void)refreshOrbPreview;
 - (void)themeColorChanged:(UIColorWell *)well;
 - (void)resetDockSettings;
+- (void)detachFromScene;
 @end
 @interface FMSettingsRootController : UIViewController
 - (void)tryAutomaticUpdatePrompt;
@@ -71,6 +77,17 @@
 - (void)segmentChanged:(UISegmentedControl *)control;
 - (void)headerTapped:(UIControl *)header;
 @end
+@interface FMDockPreviewView : UIView
+- (void)reload;
+- (void)setOpen:(BOOL)open animated:(BOOL)animated;
+@end
+static FMManager *LifecycleFixtureManager;
+@interface FMManager (DropletLifecycleFixture)
++ (instancetype)fixtureLifecycleShared;
+@end
+@implementation FMManager (DropletLifecycleFixture)
++ (instancetype)fixtureLifecycleShared { return LifecycleFixtureManager; }
+@end
 @interface NSUserDefaults (DrawerFixture) @end
 @implementation NSUserDefaults (DrawerFixture)
 + (BOOL)isLiveProcess { return YES; } // Suppress injection bootstrap only.
@@ -83,6 +100,8 @@ static NSArray *FixtureApps;
 static BOOL FixtureCurrent, FixtureRunning=YES, FixtureHost=YES;
 static CGFloat FixtureWidth=667;
 static NSUInteger CloseCount, PositionWrites;
+static NSUInteger PreferenceReads;
+static NSUInteger InstalledAppScans,DrawerBuilds,DropletOutlineUpdates;
 static NSMutableDictionary *AutoPiPStates;
 static NSDictionary *LastAutoPiPTarget;
 static BOOL RejectAutoPiP;
@@ -181,7 +200,7 @@ static void SwapClass(Class c,SEL a,SEL b) { method_exchangeImplementations(clas
 static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(class_getInstanceMethod(c,a),class_getInstanceMethod(c,b)); }
 @interface LCOrbitGuestService (DrawerFixture) @end
 @implementation LCOrbitGuestService (DrawerFixture)
-+ (NSArray *)fixtureApps { return FixtureApps; }
++ (NSArray *)fixtureApps { InstalledAppScans++;return FixtureApps; }
 + (BOOL)fixtureCurrent:(NSDictionary *)app { return FixtureCurrent && [app[@"identity"] isEqual:FixtureApps.firstObject[@"identity"]]; }
 @end
 @interface LCOrbitMultitask (DrawerFixture) @end
@@ -206,10 +225,25 @@ static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(c
 @end
 @interface LCOrbitPreferences (DrawerFixture) @end
 @implementation LCOrbitPreferences (DrawerFixture)
+- (id)fixtureObjectForKey:(NSString *)key {
+    PreferenceReads++;
+    return [self fixtureObjectForKey:key];
+}
+- (NSDictionary *)fixtureDictionaryRepresentation {
+    PreferenceReads++;
+    return [self fixtureDictionaryRepresentation];
+}
 - (void)fixtureSetObject:(id)object forKey:(NSString *)key {
     if([@[@"LCFloatingMenu.orbY",@"LCFloatingMenu.onLeft"] containsObject:key]) PositionWrites++;
     if(RejectUpdateSkipSave && [key isEqualToString:@"LCFloatingMenu.skippedUpdateVersion"]) return;
     [self fixtureSetObject:object forKey:key];
+}
+@end
+@interface FMManager (DrawerBuildFixture) @end
+@implementation FMManager (DrawerBuildFixture)
+- (void)fixtureBuildPanel { DrawerBuilds++;[self fixtureBuildPanel]; }
+- (void)fixtureApplyDropletPull:(CGFloat)pull offsetY:(CGFloat)offsetY {
+    DropletOutlineUpdates++;[self fixtureApplyDropletPull:pull offsetY:offsetY];
 }
 @end
 @interface UIViewController (DrawerFixture) @end
@@ -234,10 +268,14 @@ static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(c
 @interface FixturePan : UIPanGestureRecognizer
 @property(nonatomic,assign) UIGestureRecognizerState fixtureState;
 @property(nonatomic,assign) CGPoint fixturePoint;
+@property(nonatomic,assign) CGPoint fixtureTranslation;
+@property(nonatomic,assign) CGPoint fixtureVelocity;
 @end
 @implementation FixturePan
 - (UIGestureRecognizerState)state { return self.fixtureState; }
 - (CGPoint)locationInView:(UIView *)view { return self.fixturePoint; }
+- (CGPoint)translationInView:(UIView *)view { return self.fixtureTranslation; }
+- (CGPoint)velocityInView:(UIView *)view { return self.fixtureVelocity; }
 @end
 @interface FixtureLongPress : UILongPressGestureRecognizer
 @property(nonatomic,assign) UIGestureRecognizerState fixtureState;
@@ -622,7 +660,343 @@ static void RunShapePageTests(void) {
     manager.settingsWindow=oldWindow;manager.settingsNavigation=oldNavigation;
     manager.orbPreviewHost=oldOrbHost;manager.dimensionsPreview=oldDimensions;
 }
+// The water-only transition must move a complete drawer, with no item pop-in.
+static BOOL WaterLifecycleChecksDone;
+static BOOL DrawerSlideActive(FMManager *menu) {
+    if(!class_getInstanceVariable(FMManager.class,"_drawerSlideActive")) return NO;
+    return [[menu valueForKey:@"drawerSlideActive"] boolValue];
+}
+static UIView *DrawerContent(UIView *glass) {
+    for(UIView *child in glass.subviews)
+        if([child isKindOfClass:UIVisualEffectView.class]) return ((UIVisualEffectView *)child).contentView;
+    return glass;
+}
+static BOOL HasItemAnimation(UIView *root) {
+    for(UIView *view in Views(root))
+        for(NSString *key in view.layer.animationKeys)
+            if([key hasPrefix:@"fm.pop."]) return YES;
+    return NO;
+}
+// Wait for a committed pull to cross the display boundary, not a fixed animation delay.
+static BOOL WaitForDrawerOpen(FMManager *menu) {
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:.3];
+    while(!menu.isOpen && deadline.timeIntervalSinceNow>0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.005]];
+    return menu.isOpen;
+}
+static void RunDropletReleaseTests(void) {
+    WaterLifecycleChecksDone=NO;
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    NSArray *keys=@[@"orbHandleStyle",@"orbDropletPull",@"popAnimation"];
+    NSMutableDictionary *saved=[NSMutableDictionary dictionary];
+    for(NSString *key in keys) saved[key]=[prefs objectForKey:[@"LCFloatingMenu." stringByAppendingString:key]]?:NSNull.null;
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    for(NSNumber *pullMode in @[@NO,@YES]) for(NSNumber *pop in @[@0,@1,@2])
+    for(NSNumber *left in @[@NO,@YES]) for(NSNumber *compact in @[@NO,@YES]) for(NSNumber *tap in @[@NO,@YES]) {
+        [prefs setObject:pullMode forKey:@"LCFloatingMenu.orbDropletPull"];
+        [prefs setObject:pop forKey:@"LCFloatingMenu.popAnimation"];
+        FMManager *menu=Manager(compact.boolValue,compact.boolValue?.75:1.2,667,UIEdgeInsetsMake(0,24,21,24),left.boolValue,NO,@"apps");
+        CGRect rest=menu.orb.frame;CGPoint start=menu.orb.center;CGFloat sign=left.boolValue?1:-1;
+        NSString *suffix=[NSString stringWithFormat:@"%@-%@-%@-%@-%@",pullMode,pop,left,compact,tap];
+        CGPathRef contour=NULL;
+        NSUInteger scans=0,builds=0;
+        if(tap.boolValue) [menu toggle];
+        else {
+            FixturePan *pan=[FixturePan new];pan.fixtureState=UIGestureRecognizerStateBegan;pan.fixturePoint=start;[menu pan:pan];
+            scans=InstalledAppScans;builds=DrawerBuilds;
+            pan.fixtureState=UIGestureRecognizerStateChanged;pan.fixturePoint=CGPointMake(start.x+sign*20,start.y);[menu pan:pan];
+            Check([@"water-tracking-does-not-prepare-drawer-" stringByAppendingString:suffix],!menu.panel && !menu.isOpen && InstalledAppScans==scans && DrawerBuilds==builds,nil);
+            Check([@"water-pull-only-stretches-in-pull-mode-" stringByAppendingString:suffix],pullMode.boolValue?menu.orb.frame.size.width>rest.size.width+7:CGRectEqualToRect(rest,menu.orb.frame),nil);
+            pan.fixturePoint=CGPointMake(start.x+sign*90,start.y+8);[menu pan:pan];
+            Check([@"water-long-tracking-does-not-build-drawer-" stringByAppendingString:suffix],!menu.panel && InstalledAppScans==scans && DrawerBuilds==builds,nil);
+            pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
+            Check([@"water-release-opens-after-display-boundary-" stringByAppendingString:suffix],WaitForDrawerOpen(menu),nil);
+            Check([@"water-release-scans-and-builds-once-" stringByAppendingString:suffix],InstalledAppScans==scans+1 && DrawerBuilds==builds+1,
+                  @{@"scans":@(InstalledAppScans-scans),@"builds":@(DrawerBuilds-builds)});
+
+        }
+        UIView *glass=[menu.panel viewWithTag:9230];CAShapeLayer *mask=(CAShapeLayer *)glass.layer.mask;
+        Check([@"water-opens-with-complete-outline-" stringByAppendingString:suffix],menu.isOpen && !menu.panel.hidden && mask.path && CGPathGetPathBoundingBox(mask.path).size.width>=glass.bounds.size.width*.99,nil);
+        if(mask.path) contour=CGPathCreateCopy(mask.path);
+        Check([@"water-opens-with-content-visible-" stringByAppendingString:suffix],DrawerContent(glass).alpha>.99 && menu.orb.alpha<.01,nil);
+        Check([@"water-opens-without-item-animations-" stringByAppendingString:suffix],!HasItemAnimation(menu.panel),nil);
+        Check([@"water-animation-mode-keeps-slide-only-" stringByAppendingString:suffix],pop.intValue==2?!DrawerSlideActive(menu):DrawerSlideActive(menu),nil);
+        Check([@"water-slide-blocks-panel-interaction-" stringByAppendingString:suffix],pop.intValue==2?menu.panel.userInteractionEnabled:!menu.panel.userInteractionEnabled,nil);
+        if(!pullMode.boolValue && pop.intValue==0 && !left.boolValue && !compact.boolValue && tap.boolValue) Snapshot(menu,@"water-slide-start");
+        [menu completeDrawerMorphNow];
+        Check([@"water-opening-finishes-usable-" stringByAppendingString:suffix],!DrawerSlideActive(menu) && ![[menu valueForKey:@"morphActive"] boolValue] && menu.panel.userInteractionEnabled && !menu.orb.userInteractionEnabled && menu.orb.accessibilityElementsHidden,nil);
+        Check([@"water-release-restores-hidden-bead-" stringByAppendingString:suffix],CGRectEqualToRect(rest,menu.orb.frame),nil);
+        if(contour) {
+            mask=(CAShapeLayer *)[menu.panel viewWithTag:9230].layer.mask;
+            Check([@"water-finishes-at-unchanged-outline-" stringByAppendingString:suffix],CGPathEqualToPath(contour,mask.path),nil);CGPathRelease(contour);
+        }
+        [menu toggle];[menu completeDrawerMorphNow];
+        Check([@"water-close-restores-usable-bead-" stringByAppendingString:suffix],!menu.panel && !menu.isOpen && menu.orb.userInteractionEnabled && !menu.orb.accessibilityElementsHidden,nil);
+    }
+    // A legacy pull flag on a capsule cannot opt that style into the water transition.
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    for(NSNumber *legacy in @[@NO,@YES]) for(NSNumber *left in @[@NO,@YES]) {
+        [prefs setObject:legacy forKey:@"LCFloatingMenu.orbDropletPull"];
+        [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
+        FMManager *capsule=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),left.boolValue,NO,@"apps");
+        NSString *suffix=[NSString stringWithFormat:@"%@-%@",legacy,left];
+        FixturePan *pan=[FixturePan new];CGPoint start=capsule.orb.center;CGFloat sign=left.boolValue?1:-1;
+        pan.fixtureState=UIGestureRecognizerStateBegan;pan.fixturePoint=start;[capsule pan:pan];
+        pan.fixtureState=UIGestureRecognizerStateChanged;pan.fixturePoint=CGPointMake(start.x+sign*30,start.y);[capsule pan:pan];
+        Check([@"capsule-pull-keeps-following-finger-" stringByAppendingString:suffix],capsule.panel && !capsule.panel.hidden && [[capsule valueForKey:@"morphDragging"] boolValue] && !DrawerSlideActive(capsule),nil);
+        pan.fixtureState=UIGestureRecognizerStateCancelled;[capsule pan:pan];[capsule completeDrawerMorphNow];
+        Check([@"capsule-cancel-restores-bead-" stringByAppendingString:suffix],!capsule.panel && !capsule.isOpen && CGPointEqualToPoint(start,capsule.orb.center),nil);
+        [capsule toggle];
+        CAShapeLayer *mask=(CAShapeLayer *)[capsule.panel viewWithTag:9230].layer.mask;
+        Check([@"capsule-tap-keeps-bead-morph-" stringByAppendingString:suffix],[[capsule valueForKey:@"morphActive"] boolValue] && !DrawerSlideActive(capsule) && mask.path && CGPathGetPathBoundingBox(mask.path).size.width<[capsule.panel viewWithTag:9230].bounds.size.width*.5,nil);
+        [capsule completeDrawerMorphNow];[capsule toggle];[capsule completeDrawerMorphNow];
+    }
+    // Neither a short pull nor a cancellation should leak the prepared water drawer.
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    for(NSNumber *pullMode in @[@NO,@YES]) for(NSNumber *cancel in @[@NO,@YES]) {
+        [prefs setObject:pullMode forKey:@"LCFloatingMenu.orbDropletPull"];
+        [prefs setObject:@2 forKey:@"LCFloatingMenu.popAnimation"];
+        FMManager *water=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+        CGRect rest=water.orb.frame;FixturePan *pan=[FixturePan new];CGPoint start=water.orb.center;
+        pan.fixtureState=UIGestureRecognizerStateBegan;pan.fixturePoint=start;[water pan:pan];
+        pan.fixtureState=UIGestureRecognizerStateChanged;pan.fixturePoint=CGPointMake(start.x-20,start.y);[water pan:pan];
+        pan.fixtureState=cancel.boolValue?UIGestureRecognizerStateCancelled:UIGestureRecognizerStateEnded;[water pan:pan];
+        Check([NSString stringWithFormat:@"water-short-or-cancelled-pull-restores-bead-%@-%@",pullMode,cancel],!water.panel && !water.isOpen && CGRectEqualToRect(rest,water.orb.frame),nil);
+    }
+    // The preview uses the same water-only opening, including repeated toggles.
+    for(NSNumber *style in @[@0,@1]) {
+        [prefs setObject:style forKey:@"LCFloatingMenu.orbHandleStyle"];
+        [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
+        UIWindow *window=[[UIWindow alloc] initWithFrame:CGRectMake(0,0,375,400)];
+        FMDockPreviewView *preview=[[NSClassFromString(@"FMDockPreviewView") alloc] initWithFrame:window.bounds];
+        [window addSubview:preview];[preview reload];[preview layoutIfNeeded];
+        [preview setOpen:NO animated:NO];[preview setOpen:YES animated:YES];
+        BOOL slide=class_getInstanceVariable(preview.class,"_slideActive") && [[preview valueForKey:@"slideActive"] boolValue];
+        Check([NSString stringWithFormat:@"preview-only-water-uses-slide-%@",style],style.intValue==1?slide:!slide,nil);
+        if(style.intValue==1) {
+            UIView *content=[preview valueForKey:@"content"];
+            Check(@"water-preview-shows-content-without-pop",content.alpha>.99 && !HasItemAnimation(preview),nil);
+            Check(@"water-preview-does-not-run-morph-link",[preview valueForKey:@"link"]==nil,nil);
+            [preview setOpen:NO animated:NO];[preview setOpen:YES animated:YES];
+            [preview setOpen:NO animated:NO];
+            Check(@"water-preview-fast-reversal-stays-closed",[[preview valueForKey:@"progress"] doubleValue]<.001 && ![[preview valueForKey:@"slideActive"] boolValue],nil);
+        }
+        [preview setOpen:NO animated:NO];[preview removeFromSuperview];
+    }
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
+    [prefs setObject:@NO forKey:@"LCFloatingMenu.orbDropletPull"];
+    FMManager *natural=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+    [natural.window makeKeyAndVisible];
+    [natural toggle];
+    FMManager *deferred=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+    [deferred toggle];UIView *originalDeferred=deferred.panel;[deferred draw];
+    FMManager *stale=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),YES,NO,@"apps");
+    [stale toggle];[stale completeDrawerMorphNow];[stale toggle];[stale completeDrawerMorphNow];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.55*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+        Check(@"water-natural-completion-enables-panel",natural.isOpen && natural.panel.userInteractionEnabled && !DrawerSlideActive(natural) && natural.orb.accessibilityElementsHidden,nil);
+        Check(@"water-completion-applies-deferred-redraw",deferred.isOpen && deferred.panel && deferred.panel!=originalDeferred && deferred.panel.userInteractionEnabled && !DrawerSlideActive(deferred),nil);
+        Check(@"water-stale-opening-completion-cannot-reopen-closed-menu",!stale.isOpen && !stale.panel && ![[stale valueForKey:@"morphActive"] boolValue] && stale.orb.userInteractionEnabled,nil);
+        [natural toggle];[natural completeDrawerMorphNow];natural.window.hidden=YES;
+        [deferred toggle];[deferred completeDrawerMorphNow];
+        WaterLifecycleChecksDone=YES;
+    });
+    for(NSString *key in keys) {
+        id value=saved[key];[prefs setObject:value==NSNull.null?nil:value forKey:[@"LCFloatingMenu." stringByAppendingString:key]];
+    }
+}
+static void RunDropletDragTests(void) {
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    NSArray *keys=@[@"orbHandleStyle",@"orbDropletPull",@"popAnimation",@"onLeft",@"orbY"];
+    NSMutableDictionary *saved=[NSMutableDictionary dictionary];
+    for(NSString *key in keys) saved[key]=[prefs objectForKey:[@"LCFloatingMenu." stringByAppendingString:key]]?:NSNull.null;
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.orbDropletPull"];
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
+    for(NSNumber *left in @[@NO,@YES]) {
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),left.boolValue,NO,@"apps");
+        FixturePan *pan=[FixturePan new];CGPoint start=menu.orb.center;CGFloat sign=left.boolValue?1:-1;
+        pan.fixtureState=UIGestureRecognizerStateBegan;pan.fixturePoint=start;[menu pan:pan];
+        NSUInteger scans=InstalledAppScans,builds=DrawerBuilds;
+        for(NSNumber *distance in @[@12,@20,@30,@60,@90]) {
+            PreferenceReads=0;
+            pan.fixtureState=UIGestureRecognizerStateChanged;pan.fixturePoint=CGPointMake(start.x+sign*distance.doubleValue,start.y);[menu pan:pan];
+            NSString *suffix=[NSString stringWithFormat:@"%@-%@",left,distance];
+            Check([@"droplet-tracking-never-scans-inventory-" stringByAppendingString:suffix],InstalledAppScans==scans,nil);
+            Check([@"droplet-tracking-never-builds-panel-" stringByAppendingString:suffix],DrawerBuilds==builds && !menu.panel,nil);
+            Check([@"droplet-tracking-uses-gesture-preferences-" stringByAppendingString:suffix],PreferenceReads==0,@(PreferenceReads));
+        }
+        pan.fixtureState=UIGestureRecognizerStateCancelled;[menu pan:pan];
+    }
+    for(NSNumber *left in @[@NO,@YES]) for(NSNumber *translation in @[@30,@70]) {
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),left.boolValue,NO,@"apps");
+        [menu.window makeKeyAndVisible];
+        CGRect rest=menu.orb.frame;CGPoint start=menu.orb.center;CGFloat sign=left.boolValue?1:-1;
+        FixturePan *pan=[FixturePan new];pan.fixtureState=UIGestureRecognizerStateBegan;
+        pan.fixtureTranslation=CGPointMake(sign*translation.doubleValue,0);
+        pan.fixtureVelocity=CGPointMake(sign*900,0);
+        pan.fixturePoint=CGPointMake(start.x+pan.fixtureTranslation.x,start.y);
+        NSUInteger scans=InstalledAppScans,builds=DrawerBuilds;
+        [menu pan:pan];
+        NSString *suffix=[NSString stringWithFormat:@"%@-%@",left,translation];
+        Check([@"fast-began-renders-existing-translation-" stringByAppendingString:suffix],menu.orb.frame.size.width>rest.size.width+7 && menu.orb.alpha>.99 && !menu.isOpen,nil);
+        Check([@"fast-began-does-no-inventory-or-panel-work-" stringByAppendingString:suffix],InstalledAppScans==scans && DrawerBuilds==builds && !menu.panel,nil);
+        if(!left.boolValue && translation.intValue==70) Snapshot(menu,@"fast-droplet-began");
+        pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
+        Check([@"fast-release-preserves-drop-until-display-" stringByAppendingString:suffix],!menu.isOpen && !menu.panel && menu.orb.alpha>.99 && menu.orb.frame.size.width>rest.size.width+7,nil);
+        Check([@"fast-release-opens-after-drop-frame-" stringByAppendingString:suffix],WaitForDrawerOpen(menu),nil);
+        Check([@"fast-release-uses-water-slide-" stringByAppendingString:suffix],DrawerSlideActive(menu) && !HasItemAnimation(menu.panel),nil);
+        [menu completeDrawerMorphNow];[menu toggle];[menu completeDrawerMorphNow];menu.window.hidden=YES;
+    }
+    // Flood the gesture on one run-loop turn: only an actual display frame may rebuild.
+    for(NSNumber *left in @[@NO,@YES]) {
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),left.boolValue,NO,@"apps");
+        CGFloat originalWidth=menu.orb.frame.size.width;CGPoint start=menu.orb.center;CGFloat sign=left.boolValue?1:-1;
+        FixturePan *pan=[FixturePan new];pan.fixtureState=UIGestureRecognizerStateBegan;
+        pan.fixtureTranslation=CGPointMake(sign*30,0);pan.fixturePoint=CGPointMake(start.x+sign*30,start.y);[menu pan:pan];
+        NSUInteger updates=DropletOutlineUpdates;
+        for(NSUInteger i=1;i<=100;i++) {
+            pan.fixtureState=UIGestureRecognizerStateChanged;pan.fixturePoint=CGPointMake(start.x+sign*(30+i*.6),start.y);[menu pan:pan];
+        }
+        Check([NSString stringWithFormat:@"droplet-flood-coalesces-outline-work-%@",left],DropletOutlineUpdates-updates<=1,@(DropletOutlineUpdates-updates));
+        pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
+        Check([NSString stringWithFormat:@"droplet-release-flushes-exact-final-outline-%@",left],fabs(menu.orb.frame.size.width-(originalWidth+52*.4))<1e-6,nil);
+        Check([NSString stringWithFormat:@"droplet-flood-release-keeps-outline-visible-%@",left],!menu.isOpen && menu.orb.alpha>.99,nil);
+        Check([NSString stringWithFormat:@"droplet-flood-release-opens-%@",left],WaitForDrawerOpen(menu),nil);
+        [menu completeDrawerMorphNow];[menu toggle];[menu completeDrawerMorphNow];
+    }
+    for(NSNumber *left in @[@NO,@YES]) {
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),left.boolValue,NO,@"apps");
+        CGRect rest=menu.orb.frame;CGPoint start=menu.orb.center;CGFloat sign=left.boolValue?1:-1;
+        FixturePan *pan=[FixturePan new];pan.fixtureState=UIGestureRecognizerStateBegan;
+        pan.fixtureTranslation=CGPointMake(sign*70,0);pan.fixturePoint=CGPointMake(start.x+sign*70,start.y);[menu pan:pan];
+        pan.fixtureState=UIGestureRecognizerStateChanged;pan.fixtureTranslation=CGPointMake(sign*5,0);pan.fixturePoint=CGPointMake(start.x+sign*5,start.y);[menu pan:pan];
+        pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.4]];
+        Check([NSString stringWithFormat:@"droplet-fast-reversal-cancels-instead-of-tapping-%@",left],!menu.isOpen && !menu.panel && CGRectEqualToRect(rest,menu.orb.frame),nil);
+    }
+    // Route all three real module deactivation events to an isolated host manager.
+    // Draining the run loop afterward stands in for the paused display link resuming.
+    for(NSString *event in @[UIApplicationDidEnterBackgroundNotification,UIApplicationWillResignActiveNotification,UISceneWillDeactivateNotification])
+    for(NSNumber *release in @[@NO,@YES]) {
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+        CGRect rest=menu.orb.frame;CGPoint start=menu.orb.center;
+        FixturePan *pan=[FixturePan new];pan.fixtureState=UIGestureRecognizerStateBegan;
+        pan.fixtureTranslation=CGPointMake(-70,0);pan.fixtureVelocity=CGPointMake(-900,0);
+        pan.fixturePoint=CGPointMake(start.x-70,start.y);[menu pan:pan];
+        if(release.boolValue) {pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];}
+        Check([NSString stringWithFormat:@"droplet-lifecycle-fixture-starts-with-visible-pull-%@-%@",event,release],!menu.isOpen && menu.orb.frame.size.width>rest.size.width+7 && menu.orb.alpha>.99,nil);
+        LifecycleFixtureManager=menu;
+        SwapClass(FMManager.class,@selector(shared),@selector(fixtureLifecycleShared));
+        @try {
+            id<LCOrbitModule> module=[NSClassFromString(@"LCFloatingMenuModule") new];
+            [module orbitDidReceiveLifecycleEvent:event scene:nil];
+        } @finally {
+            SwapClass(FMManager.class,@selector(shared),@selector(fixtureLifecycleShared));
+            LifecycleFixtureManager=nil;
+        }
+        Check([NSString stringWithFormat:@"droplet-deactivation-restores-resting-bead-%@-%@",event,release],!menu.isOpen && !menu.panel && CGRectEqualToRect(rest,menu.orb.frame) && menu.orb.alpha>.99,nil);
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.08]];
+        Check([NSString stringWithFormat:@"droplet-deactivation-cancels-opening-on-resume-%@-%@",event,release],!menu.isOpen && !menu.panel && CGRectEqualToRect(rest,menu.orb.frame),nil);
+    }
+    // A later owner must invalidate an opening that is waiting to show the pulled bead.
+    for(NSString *action in @[@"cancel",@"reposition",@"toggle",@"detach",@"redraw"]) {
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+        CGPoint start=menu.orb.center;FixturePan *pan=[FixturePan new];
+        pan.fixtureState=UIGestureRecognizerStateBegan;pan.fixtureTranslation=CGPointMake(-70,0);
+        pan.fixtureVelocity=CGPointMake(-900,0);pan.fixturePoint=CGPointMake(start.x-70,start.y);[menu pan:pan];
+        pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
+        UIView *ownerPanel=nil;UIButton *ownerBead=nil;CGPoint ownerCenter=CGPointZero;
+        NSUInteger ownerScans=InstalledAppScans,ownerBuilds=DrawerBuilds;
+        if([action isEqual:@"toggle"]) {
+            [menu toggle];ownerPanel=menu.panel;ownerBead=menu.orb;ownerScans=InstalledAppScans;ownerBuilds=DrawerBuilds;
+        } else if([action isEqual:@"detach"]) [menu detachFromScene];
+        else if([action isEqual:@"redraw"]) { [menu draw];ownerBead=menu.orb;ownerCenter=menu.orb.center; }
+        else {
+            FixturePan *next=[FixturePan new];next.fixtureState=UIGestureRecognizerStateBegan;next.fixturePoint=start;[menu pan:next];
+            if([action isEqual:@"reposition"]) {
+                next.fixtureState=UIGestureRecognizerStateChanged;next.fixturePoint=CGPointMake(start.x,start.y+80);[menu pan:next];
+                next.fixtureState=UIGestureRecognizerStateEnded;[menu pan:next];
+            } else {next.fixtureState=UIGestureRecognizerStateCancelled;[menu pan:next];}
+            ownerBead=menu.orb;ownerCenter=menu.orb.center;
+        }
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.08]];
+        if([action isEqual:@"toggle"]) {
+            Check(@"superseding-click-owns-fast-pull-menu",menu.isOpen && menu.panel==ownerPanel && menu.orb==ownerBead && InstalledAppScans==ownerScans && DrawerBuilds==ownerBuilds,nil);
+            [menu completeDrawerMorphNow];[menu toggle];[menu completeDrawerMorphNow];
+        } else if([action isEqual:@"detach"]) Check(@"detached-scene-cancels-fast-pull-callback",!menu.window && !menu.orb && !menu.panel && !menu.isOpen,nil);
+        else {
+            Check([@"new-owner-cancels-fast-pull-opening-" stringByAppendingString:action],!menu.isOpen && !menu.panel && menu.orb==ownerBead,nil);
+            if(![action isEqual:@"reposition"]) Check([@"stale-fast-pull-cannot-move-new-bead-" stringByAppendingString:action],CGPointEqualToPoint(ownerCenter,menu.orb.center),nil);
+        }
+    }
+    for(NSString *key in keys) {id value=saved[key];[prefs setObject:value==NSNull.null?nil:value forKey:[@"LCFloatingMenu." stringByAppendingString:key]];}
+}
+static void RunDrawerPerformanceTests(void) {
+    FixtureHost=NO;
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    // A gesture can persist recency/position while drawing from a snapshot.
+    // Its subsequent reads must see the saved value, including removals.
+    [prefs setObject:@22 forKey:@"LCFloatingMenu.orbHandleReach"];
+    LCOrbitPreferences *snapshot=[NSClassFromString(@"FMPreferenceSnapshot") new];
+    [snapshot setValue:[prefs dictionaryRepresentation] forKey:@"values"];
+    [snapshot setObject:@31 forKey:@"LCFloatingMenu.orbHandleReach"];
+    Check(@"drawer-snapshot-sees-own-write",[snapshot doubleForKey:@"LCFloatingMenu.orbHandleReach"]==31,nil);
+    [snapshot removeObjectForKey:@"LCFloatingMenu.orbHandleReach"];
+    Check(@"drawer-snapshot-sees-own-removal",[snapshot objectForKey:@"LCFloatingMenu.orbHandleReach"]==nil,nil);
+    [prefs setObject:@NO forKey:@"LCFloatingMenu.haptic"];
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    for(NSNumber *legacy in @[@NO,@YES]) for(NSNumber *left in @[@NO,@YES]) {
+        [prefs setObject:legacy forKey:@"LCFloatingMenu.orbDropletPull"];
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),left.boolValue,NO,@"apps");
+        FixturePan *pan=[FixturePan new];
+        CGPoint start=menu.orb.center;CGFloat sign=left.boolValue?1:-1;
+        pan.fixturePoint=start;pan.fixtureState=UIGestureRecognizerStateBegan;[menu pan:pan];
+        PreferenceReads=0;CFTimeInterval at=CACurrentMediaTime();
+        pan.fixturePoint=CGPointMake(start.x+sign*20,start.y);pan.fixtureState=UIGestureRecognizerStateChanged;[menu pan:pan];
+        NSDictionary *cost=@{@"reads":@(PreferenceReads),@"milliseconds":@((CACurrentMediaTime()-at)*1000)};
+        NSString *suffix=[NSString stringWithFormat:@"%@-%@",legacy,left];
+        Check([@"drawer-first-input-bounded-reads-" stringByAppendingString:suffix],PreferenceReads<=10,cost);
+        Check([@"drawer-pull-preserves-mode-" stringByAppendingString:suffix],!menu.panel && !menu.isOpen,nil);
+        PreferenceReads=0;
+        pan.fixturePoint=CGPointMake(start.x+sign*24,start.y);[menu pan:pan];
+        Check([@"drawer-next-input-bounded-reads-" stringByAppendingString:suffix],PreferenceReads<=3,@(PreferenceReads));
+        pan.fixtureState=UIGestureRecognizerStateCancelled;[menu pan:pan];[menu completeDrawerMorphNow];
+        Check([@"drawer-cancel-restores-bead-" stringByAppendingString:suffix],!menu.isOpen && !menu.panel && CGPointEqualToPoint(start,menu.orb.center),nil);
+        // A new event must see settings saved after the previous snapshot ended.
+        [prefs removeObjectForKey:@"LCFloatingMenu.recentOpenedAppKeys"];
+        [prefs setObject:@YES forKey:@"LCFloatingMenu.recentAppsFirst"];
+        FixtureCurrent=YES;
+        PreferenceReads=0;at=CACurrentMediaTime();[menu toggle];
+        cost=@{@"reads":@(PreferenceReads),@"milliseconds":@((CACurrentMediaTime()-at)*1000)};
+        Check([@"drawer-tap-bounded-reads-" stringByAppendingString:suffix],PreferenceReads<=10,cost);
+        [menu completeDrawerMorphNow];
+        Check([@"drawer-tap-opens-" stringByAppendingString:suffix],menu.isOpen && menu.panel && menu.panel.userInteractionEnabled,nil);
+        Check([@"drawer-open-keeps-recency-write-" stringByAppendingString:suffix],[[prefs arrayForKey:@"LCFloatingMenu.recentOpenedAppKeys"].firstObject isEqual:FixtureApps.firstObject[@"identity"]],nil);
+        FixtureCurrent=NO;[prefs setObject:@NO forKey:@"LCFloatingMenu.recentAppsFirst"];
+        [menu toggle];[menu completeDrawerMorphNow];
+        Check([@"drawer-tap-closes-" stringByAppendingString:suffix],!menu.isOpen && !menu.panel,nil);
+    }
+    RunDropletDragTests();
+    RunDropletReleaseTests();
+    // Include natural UIView completions in the report without measuring device frame rate.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,.65*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+    NSUInteger failures=0;for(NSDictionary *r in Results) if(![r[@"passed"] boolValue]) failures++;
+    NSDictionary *report=@{@"kind":@"production-uikit-drawer-read-budget",@"runtime":UIDevice.currentDevice.systemVersion,@"count":@(Results.count),@"failures":@(failures),@"results":Results,
+        @"limitation":@"Real UIKit and configuration storage; synthetic guest inventory. Timings are diagnostic, not device frame-rate guarantees."};
+    [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[EvidencePath stringByAppendingPathComponent:@"result.json"] atomically:YES];
+    });
+}
 static void RunTests(void) {
+    RunDropletDragTests();
+    RunDropletReleaseTests();
+    // Broad tests mutate global task/preferences fixtures and window visibility. Finish
+    // the standalone popup lifecycle checks before handing those fixtures over.
+    NSDate *popupDeadline=[NSDate dateWithTimeIntervalSinceNow:1];
+    while(!WaterLifecycleChecksDone && popupDeadline.timeIntervalSinceNow>0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.02]];
+    Check(@"water-lifecycle-checks-finish-before-global-fixture-mutations",WaterLifecycleChecksDone,nil);
     UIEdgeInsets ordinary=UIEdgeInsetsMake(0,0,21,0);
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
     // A Guest's forced appearance must never override the menu's selection.
@@ -802,12 +1176,12 @@ static void RunTests(void) {
     FixtureCurrent=YES;closing=Manager(NO,1,667,ordinary,NO,YES,@"apps");
     CapturedAlert=nil;CloseCount=0;[closing closeMultitaskGuest];
     Check(@"footer-close-immediate",!CapturedAlert && CloseCount==1 && !closing.isOpen,@{@"closeCalls":@(CloseCount),@"alert":@(CapturedAlert!=nil)});FixtureCurrent=NO;
-    // A legacy water-drop pull keeps the drawer absent until the finger lifts.
+    // Water pulls track only the bead; inventory and drawer construction wait for release.
     id savedPull=[prefs objectForKey:@"LCFloatingMenu.orbDropletPull"];
     id savedPullStyle=[prefs objectForKey:@"LCFloatingMenu.orbHandleStyle"];
     id savedPullPop=[prefs objectForKey:@"LCFloatingMenu.popAnimation"];
     [prefs setObject:@YES forKey:@"LCFloatingMenu.orbDropletPull"];
-    for(NSNumber *left in @[@NO,@YES]) for(NSNumber *shape in @[@0,@1]) {
+    for(NSNumber *left in @[@NO,@YES]) for(NSNumber *shape in @[@1]) {
         [prefs setObject:shape forKey:@"LCFloatingMenu.orbHandleStyle"];
         [prefs setObject:@2 forKey:@"LCFloatingMenu.popAnimation"];
         FMManager *drop=Manager(NO,1,667,ordinary,left.boolValue,NO,@"apps");
@@ -829,7 +1203,7 @@ static void RunTests(void) {
         pull.fixtureState=UIGestureRecognizerStateChanged;pull.fixturePoint=CGPointMake(start.x+sign*70,start.y);[drop pan:pull];
         Check([@"droplet-long-pull-waits-for-release-" stringByAppendingString:suffix],!drop.isOpen && !drop.panel,nil);
         pull.fixtureState=UIGestureRecognizerStateEnded;[drop pan:pull];
-        Check([@"droplet-long-release-opens-menu-" stringByAppendingString:suffix],drop.isOpen && drop.panel,nil);
+        Check([@"droplet-long-release-opens-menu-" stringByAppendingString:suffix],WaitForDrawerOpen(drop) && drop.panel,nil);
     }
     FMManager *turn=Manager(NO,1,667,ordinary,YES,NO,@"apps");CGRect turnRest=turn.orb.frame;
     NSUInteger turnWrites=PositionWrites;
@@ -856,7 +1230,7 @@ static void RunTests(void) {
     FMManager *modern=Manager(NO,1,667,ordinary,YES,NO,@"apps");
     FixturePan *modernPull=[FixturePan new];modernPull.fixturePoint=CGPointMake(10,330);modernPull.fixtureState=UIGestureRecognizerStateBegan;[modern pan:modernPull];
     modernPull.fixturePoint=CGPointMake(40,330);modernPull.fixtureState=UIGestureRecognizerStateChanged;[modern pan:modernPull];
-    Check(@"droplet-default-off-keeps-drawer-following-finger",modern.panel && [[modern valueForKey:@"morphDragging"] boolValue],nil);
+    Check(@"water-without-pull-mode-waits-for-release",!modern.panel && ![[modern valueForKey:@"morphDragging"] boolValue],nil);
     modernPull.fixtureState=UIGestureRecognizerStateCancelled;[modern pan:modernPull];
     [prefs setObject:savedPull forKey:@"LCFloatingMenu.orbDropletPull"];
     [prefs setObject:savedPullStyle forKey:@"LCFloatingMenu.orbHandleStyle"];
@@ -1326,7 +1700,15 @@ static void RunTests(void) {
     SwapClass(LCOrbitGitHub.class,@selector(requestForURL:timeout:error:),@selector(fixtureRequestForURL:timeout:error:));
     SwapClass(LCOrbitGitHub.class,@selector(performRequest:completion:),@selector(fixturePerformRequest:completion:));
     SwapInstance(LCOrbitPreferences.class,@selector(setObject:forKey:),@selector(fixtureSetObject:forKey:));SwapInstance(UIViewController.class,@selector(presentViewController:animated:completion:),@selector(fixturePresent:animated:completion:));
-    RunTests();
+    SwapInstance(FMManager.class,@selector(buildPanel),@selector(fixtureBuildPanel));
+    SwapInstance(FMManager.class,@selector(applyDropletPull:offsetY:),@selector(fixtureApplyDropletPull:offsetY:));
+    if([NSProcessInfo.processInfo.arguments containsObject:@"--drawer-performance"] ||
+       [NSProcessInfo.processInfo.arguments containsObject:@"--water-popup-only"] ||
+       [NSProcessInfo.processInfo.arguments containsObject:@"--droplet-drag-only"]) {
+        SwapInstance(LCOrbitPreferences.class,@selector(objectForKey:),@selector(fixtureObjectForKey:));
+        SwapInstance(LCOrbitPreferences.class,@selector(dictionaryRepresentation),@selector(fixtureDictionaryRepresentation));
+        RunDrawerPerformanceTests();
+    } else RunTests();
 }
 @end
 @interface DrawerDelegate : UIResponder <UIApplicationDelegate>

@@ -118,7 +118,10 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
     return YES;
 }
 @end
-@interface FMManager : NSObject
+@interface FMManager : NSObject {
+    BOOL _isPanning;
+    id _panOrb;
+}
 @property(nonatomic,strong) UIWindow *window,*settingsWindow,*previousKeyWindow;
 @property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,strong) UIView *dimensionsPreview;
@@ -135,6 +138,8 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 - (void)detachFromScene;
 - (void)persistAppsScroll;
 - (void)cancelAppearanceCheck;
+- (void)stopDropletPull;
+- (void)cancelDropletInteraction;
 - (void)draw;
 - (void)refreshUI;
 - (void)requestAppsRefresh;
@@ -150,6 +155,8 @@ static FMManager *Manager;
 + (instancetype)shared { return Manager; }
 - (void)persistAppsScroll {}
 - (void)cancelAppearanceCheck {}
+- (void)stopDropletPull {}
+- (void)cancelDropletInteraction {}
 - (void)draw {}
 - (void)refreshUI {}
 - (void)requestAppsRefresh {}

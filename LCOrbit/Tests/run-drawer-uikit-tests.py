@@ -16,6 +16,10 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[2])
 parser.add_argument('--device', default=os.environ.get('ORBIT_SIMULATOR_DEVICE'))
 parser.add_argument('--output-dir', type=Path)
+focus = parser.add_mutually_exclusive_group()
+focus.add_argument('--performance-only', action='store_true', help='Run drawer input/read-budget regressions only')
+focus.add_argument('--water-popup-only', action='store_true', help='Run water-only slide and capsule/input regressions')
+focus.add_argument('--droplet-drag-only', action='store_true', help='Run droplet tracking, fast-pull and water-popup regressions')
 args = parser.parse_args()
 root = args.source_root.resolve()
 output = (args.output_dir or root / '.omx/artifacts/drawer-uikit').resolve()
@@ -72,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix='orbit-drawer-uikit-') as temporary:
     subprocess.run(['xcrun', 'simctl', 'uninstall', udid, bundle_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     command('xcrun', 'simctl', 'install', udid, app)
     container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, bundle_id, 'data'))
-    command('xcrun', 'simctl', 'launch', udid, bundle_id)
+    command('xcrun', 'simctl', 'launch', udid, bundle_id, *(['--droplet-drag-only'] if args.droplet_drag_only else ['--water-popup-only'] if args.water_popup_only else ['--drawer-performance'] if args.performance_only else []))
     report = container / 'Documents/DrawerEvidence/result.json'
     deadline = time.monotonic() + 45
     while not report.exists() and time.monotonic() < deadline:
