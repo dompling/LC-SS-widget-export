@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36"
+#define FM_MENU_VERSION @"1.0.37"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -1562,6 +1562,22 @@ static UIView *FMGlassContent(UIView *surface) {
         if([child isKindOfClass:UIVisualEffectView.class])
             return ((UIVisualEffectView *)child).contentView;
     return surface;
+}
+static UIImage *FMLogoBadgeImage(CGFloat diameter) {
+    if(diameter<=0) return nil;
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(diameter,diameter)];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGContextRef c=context.CGContext;
+        CGContextSetFillColorWithColor(c,[UIColor colorWithRed:130/255.0 green:82/255.0 blue:190/255.0 alpha:1.0].CGColor);
+        CGContextFillEllipseInRect(c,CGRectMake(0,0,diameter,diameter));
+        UIImageSymbolConfiguration *conf=[UIImageSymbolConfiguration
+            configurationWithPointSize:round(diameter*.5) weight:UIImageSymbolWeightBold];
+        UIImage *bolt=[UIImage systemImageNamed:@"bolt.fill" withConfiguration:conf];
+        bolt=[bolt imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+        if(!bolt) return;
+        CGSize size=bolt.size;
+        [bolt drawInRect:CGRectMake((diameter-size.width)*.5,(diameter-size.height)*.5,size.width,size.height)];
+    }];
 }
 static UIImage *FMGuestIcon(NSDictionary *app) {
     NSString *folder=app[@"folder"];
@@ -4596,7 +4612,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL compact=BoolPref(@"compactMode",NO);
     NSMutableArray<NSArray*> *items=[NSMutableArray array];
     if(compact) {
-        [items addObject:@[@"house.fill",NSStringFromSelector(@selector(compactReturnHome)),@"返回首页"]];
+        [items addObject:@[@"fm.logo",NSStringFromSelector(@selector(compactReturnHome)),@"返回首页"]];
         // AVKit's PiP close affordance varies across iOS versions. Give the
         // compact drawer an explicit stop control only while PiP is active.
         if([LCOrbitMultitask isPiPActive])
@@ -6414,6 +6430,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
             detail=@"App 已隐藏无法开启，请解除隐藏状态或去 LiveContainer 验证启用";
         } else if([app[@"locked"] boolValue]) {
             detail=@"App 已上锁，请在 LiveContainer 解除锁定状态";
+        } else if([detail isEqualToString:@"需要 JIT"]) {
+            detail=@"已启用 JIT 模式，请在 LCFloatingMenu 启用";
         }
         [self showMessage:@"暂不可切换" details:detail];
         return;
@@ -7557,7 +7575,9 @@ static UIView *FMDockCard(UIStackView *rows) {
     tile.layer.shadowRadius=3;
     UIImageSymbolConfiguration *configuration=[UIImageSymbolConfiguration
         configurationWithPointSize:compact?23:22 weight:UIImageSymbolWeightSemibold];
-    UIImageView *glyph=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:configuration]];
+    UIImage *image=[symbol isEqualToString:@"fm.logo"]?FMLogoBadgeImage(26):
+        [UIImage systemImageNamed:symbol withConfiguration:configuration];
+    UIImageView *glyph=[[UIImageView alloc] initWithImage:image];
     glyph.frame=CGRectInset(tile.bounds,compact?12:7,compact?12:7);
     glyph.contentMode=UIViewContentModeScaleAspectFit;
     BOOL easterEgg=BoolPref(@"easterEggIOSTheme",NO);
@@ -7600,7 +7620,7 @@ static UIView *FMDockCard(UIStackView *rows) {
         UIView *divider=FMMakeGlowSeparator(CGRectMake(13,0,width-26,1.0));
         [bar addSubview:divider];
         [dividers addObject:divider];
-        UIView *home=[self footerTile:@"house.fill" compact:YES size:50];
+        UIView *home=[self footerTile:@"fm.logo" compact:YES size:50];
         home.center=CGPointMake(width*.5,4+(76-4)*.5);
         [bar addSubview:home];
         [items addObject:home];
