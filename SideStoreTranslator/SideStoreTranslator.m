@@ -160,6 +160,77 @@ static STSegmentMethod STOriginalSegment = NULL;
 static void STHookSegment(UISegmentedControl *self, SEL command, NSString *title, NSInteger index) {
     STOriginalSegment(self, command, STReplace(title), index);
 }
+// Interface Builder can restore static text directly from a Storyboard archive,
+// bypassing UILabel.setText:/UINavigationItem.setTitle:. Correct those values at
+// the end of nib loading and again when a controller is presented.
+static NSAttributedString *STTranslatedAttributed(NSAttributedString *value) {
+    if (!value || value.length == 0) return value;
+    NSString *translated = STTranslation(value.string);
+    if (!translated || [translated isEqualToString:value.string]) return value;
+    // Keep the label's font, color, paragraph style and other first-run styling.
+    NSDictionary *attributes = [value attributesAtIndex:0 effectiveRange:NULL];
+    return [[NSAttributedString alloc] initWithString:translated attributes:attributes];
+}
+static void STLocalizeLabel(UILabel *label) {
+    if (!label || !STTranslationReady()) return;
+    NSString *before = label.text;
+    NSString *after = STTranslation(before);
+    if (!after || [after isEqualToString:before]) return;
+    NSAttributedString *styled = label.attributedText;
+    if (styled.length > 0 && [styled.string isEqualToString:before]) {
+        label.attributedText = STTranslatedAttributed(styled);
+    } else {
+        label.text = after;
+    }
+}
+static void STLocalizeButton(UIButton *button) {
+    if (!button || !STTranslationReady()) return;
+    const UIControlState states[] = {UIControlStateNormal, UIControlStateSelected,
+                                    UIControlStateHighlighted, UIControlStateDisabled};
+    for (NSUInteger i = 0; i < sizeof(states) / sizeof(states[0]); ++i) {
+        NSString *before = [button titleForState:states[i]];
+        NSString *after = STTranslation(before);
+        if (after && ![after isEqualToString:before]) {
+            [button setTitle:after forState:states[i]];
+        }
+    }
+}
+static void STLocalizeViewTree(UIView *view) {
+    if (!view) return;
+    if ([view isKindOfClass:UILabel.class]) {
+        STLocalizeLabel((UILabel *)view);
+    } else if ([view isKindOfClass:UIButton.class]) {
+        STLocalizeButton((UIButton *)view);
+    }
+    for (UIView *child in view.subviews) {
+        STLocalizeViewTree(child);
+    }
+}
+typedef void (*STAwakeMethod)(id, SEL);
+static STAwakeMethod STOriginalLabelAwake = NULL;
+static void STHookLabelAwake(UILabel *self, SEL command) {
+    STOriginalLabelAwake(self, command);
+    STLocalizeLabel(self);
+}
+static STAwakeMethod STOriginalCellAwake = NULL;
+static void STHookCellAwake(UITableViewCell *self, SEL command) {
+    STOriginalCellAwake(self, command);
+    if (STTranslationReady()) STLocalizeViewTree(self.contentView);
+}
+typedef void (*STControllerAppearanceMethod)(id, SEL, BOOL);
+static STControllerAppearanceMethod STOriginalViewWillAppear = NULL;
+static void STHookViewWillAppear(UIViewController *self, SEL command, BOOL animated) {
+    STOriginalViewWillAppear(self, command, animated);
+    if (!STTranslationReady() || !self.isViewLoaded) return;
+    STLocalizeViewTree(self.view);
+    UINavigationItem *navigation = self.navigationItem;
+    if (navigation.title) navigation.title = STReplace(navigation.title);
+    if (self.title) self.title = STReplace(self.title);
+    // Static UITabBarItem titles can also bypass the setter during nib decode.
+    UITabBarItem *tab = self.tabBarItem;
+    if (tab.title) tab.title = STReplace(tab.title);
+}
+
 static BOOL STReplaceMethod(Class klass, SEL selector, IMP replacement, IMP *original) {
     Method method = class_getInstanceMethod(klass, selector);
     if (!method) return NO;
@@ -266,6 +337,14 @@ static void STBootstrap(void) {
                     (IMP)STHookNavigationItem, (IMP *)&STOriginalNavigationItem);
     STReplaceMethod(UISegmentedControl.class, @selector(setTitle:forSegmentAtIndex:),
                     (IMP)STHookSegment, (IMP *)&STOriginalSegment);
+    BOOL labelNibHook = STReplaceMethod(UILabel.class, @selector(awakeFromNib),
+                                      (IMP)STHookLabelAwake, (IMP *)&STOriginalLabelAwake);
+    BOOL cellNibHook = STReplaceMethod(UITableViewCell.class, @selector(awakeFromNib),
+                                     (IMP)STHookCellAwake, (IMP *)&STOriginalCellAwake);
+    BOOL appearanceHook = STReplaceMethod(UIViewController.class, @selector(viewWillAppear:),
+                                        (IMP)STHookViewWillAppear,
+                                        (IMP *)&STOriginalViewWillAppear);
     STInstallHostLaunchHook();
-    NSLog(@"[SideStoreTranslator] Hooks armed; earlyPreload=%d", STPreloadedBeforeLC);
+    NSLog(@"[SideStoreTranslator] Hooks armed; earlyPreload=%d storyboard(label=%d cell=%d appearance=%d)",
+          STPreloadedBeforeLC, labelNibHook, cellNibHook, appearanceHook);
 }

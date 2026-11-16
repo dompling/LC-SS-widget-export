@@ -47,8 +47,14 @@ early `dlopen` in `main.c` produces no error log or translation status because
 the stock preloader ignores its return value. Don't override another app's
 preload file or install unrelated tweaks through this mechanism.
 
-The `NSBundle` localization hook and limited UIKit setters replace only
-exact dictionary matches. SwiftUI literal localization is not guaranteed.
+The `NSBundle` localization hook and UIKit setters replace exact dictionary
+matches. For storyboard strings decoded directly from nibs, `UILabel` and
+`UITableViewCell` `awakeFromNib` hooks localize static labels, while a
+`UIViewController.viewWillAppear:` fallback translates visible view trees,
+navigation titles and tab bar titles (including the built-in Settings screen).
+Existing attributed-label font/color styling is retained. All hooks are gated
+by the built-in SideStore context; other guests and the LC home UI are not
+localized. SwiftUI native literal localization is still not guaranteed.
 
 ## JSON
 
@@ -86,7 +92,7 @@ The CI intentionally does **not** create tags or Releases; builds are Actions ar
 ## Limitations
 
 - No full device run has yet been performed; verify the early preload, injection logs, and My Apps / Settings screens.
-- Most Storyboard titles get localized through UIKit setters; some nib-native or SwiftUI texts require extra integration.
+- Storyboard static labels and navigation titles now have nib/appearance hooks; verify coverage on device, especially native SwiftUI text.
 - Only reviewed keys are translated; the upstream inventory is preserved to support future completion.
 - Never install this plugin as a replacement for `LCFloatingMenu.dylib`; both may coexist independently.
 - Format specifiers (`%@, %d,` etc.) are validated in CI to prevent unsafe format strings.
