@@ -134,7 +134,11 @@ static BOOL STReplaceMethod(Class klass, SEL selector, IMP replacement, IMP *ori
     IMP previous = method_getImplementation(method);
     if (!previous || previous == replacement) return NO;
     *original = previous;
-    method_setImplementation(method, replacement);
+    // When the selector is inherited, install a subclass override instead
+    // of modifying the superclass implementation for every UIKit descendant.
+    if (!class_addMethod(klass, selector, replacement, method_getTypeEncoding(method))) {
+        method_setImplementation(method, replacement);
+    }
     return YES;
 }
 __attribute__((constructor))
