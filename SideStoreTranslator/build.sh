@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
 OUT="${1:-$ROOT/../dist/SideStoreTranslator.dylib}"
 mkdir -p "$(dirname "$OUT")" "$ROOT/.generated"
 
