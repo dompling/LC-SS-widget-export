@@ -10,13 +10,45 @@ Not part of `LCFloatingMenu.dylib`; no floating-menu UI or code changes.
 - `upstream-key-inventory.json`: all extracted source keys, deduplicated, from main `Localizable.xcstrings`, widget, storyboards, and other catalogs.
 - `zh-Hans.json`: **reviewed Chinese mapping**, not machine-generated guesses. Keys without a reviewed translation fall back to English.
 
-## Activation and scope
+## Activation and scope: one-shot preloading (no IPA rebuild)
 
-The plugin checks `+[NSUserDefaults isSideStore]` exported by LC+SS.
-It installs hooks **only when the running guest is LC+SS's built-in SideStore**, and does nothing for LiveContainer host UI or other guests. Import only via LC's existing tweak import/management interface and enable its injection for SideStore.
+The built-in SideStore intentionally has `dontInjectTweakLoader=true`: its regular
+TweakLoader skips Guest tweaks. Instead of changing LC+SS or disabling that guard,
+the plugin uses LC's existing **Release startup preloader** in
+`LiveContainer/main.c`. The host plugin queues its own signed dylib path in
+`<LC host HOME>/Library/preloadLibraries.txt` just before the ordinary
+`builtinSideStore` classic launch/restart. On the next startup, `LiveContainerMainC`
+loads the dylib **before** `LiveContainerShared.framework`, then removes the file
+and continues into the original built-in SideStore startup flow. Other existing
+preload entries are preserved.
 
-The plugin hooks the `NSBundle` localization boundary, plus limited UIKit text setters for storyboard text that bypasses `NSLocalizedString`. It only substitutes **exact dictionary matches**.
-SwiftUI literal localization isn't guaranteed. These are **runtime overrides**, not a replacement for an actual SideStore Chinese build.
+1. Import **SideStoreTranslator.dylib** into the LC host's **private global**
+   `Documents/Tweaks` folder (not only the shared App Group Tweaks folder).
+2. Sign the dylib using LC's existing plugin-signing interface as appropriate.
+3. Enable LC developer setting **Load Tweaks to LiveContainer Itself**
+   (`LCLoadTweaksToSelf`), then fully restart LC into its **home UI**.
+4. Open the built-in SideStore from LC's own list or floating-menu shortcut.
+   Both launch paths call `LCSharedUtils launchToGuestAppWithClassicMode:`.
+5. Check the LC host's `Documents/SideStoreTranslator/status.json`; look for
+   `preloadedBeforeLC: true`, `sideStoreContext: true`, and an active
+   translation dictionary. The preloader itself logs to the system console.
+
+The constructor arms localization hooks before LC's context methods exist.
+Translations only become active once `+[NSUserDefaults isSideStore]` reports
+the built-in SideStore. The host hook only queues this dylib for the
+`builtinSideStore` token and never modifies the bundled plist, executables,
+SideStore data, or floating-menu code.
+
+**Limitations:** The Release binary must actually use `-e _LiveContainerMainC`
+(as in the current `lcss-original` Xcode project), and iOS must accept the
+dylib's code signature during the early `dlopen`. Source review proves the
+preload path exists, **not** that it has passed an iOS device test. A failed
+early `dlopen` in `main.c` produces no error log or translation status because
+the stock preloader ignores its return value. Don't override another app's
+preload file or install unrelated tweaks through this mechanism.
+
+The `NSBundle` localization hook and limited UIKit setters replace only
+exact dictionary matches. SwiftUI literal localization is not guaranteed.
 
 ## JSON
 
@@ -47,13 +79,13 @@ External JSON **replaces** the embedded dictionary. Set `"enabled": false` to di
 
 ## Build without local Mac
 
-Go to **Actions > Build independent SideStore Translator dylib**; run on the `feat/sidestore-translator` branch. Download the `SideStoreTranslator-dylib` artifact, unzip, import `SideStoreTranslator.dylib` into LC+SS, and relaunch the built-in SideStore.
+Go to **Actions > Build independent SideStore Translator dylib**; run on the `feat/sidestore-translator` branch. Download the `SideStoreTranslator-dylib` artifact, unzip, import the dylib into the LC **private global Tweaks** folder, sign if needed, enable host tweaks, and restart LC before opening its built-in SideStore.
 
 The CI intentionally does **not** create tags or Releases; builds are Actions artifacts only.
 
 ## Limitations
 
-- No full device run has yet been performed; verify injection logs and My Apps / Settings screens.
+- No full device run has yet been performed; verify the early preload, injection logs, and My Apps / Settings screens.
 - Most Storyboard titles get localized through UIKit setters; some nib-native or SwiftUI texts require extra integration.
 - Only reviewed keys are translated; the upstream inventory is preserved to support future completion.
 - Never install this plugin as a replacement for `LCFloatingMenu.dylib`; both may coexist independently.

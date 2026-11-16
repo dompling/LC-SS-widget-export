@@ -7,6 +7,7 @@
 #import <objc/runtime.h>
 #import <sys/stat.h>
 #import <stdlib.h>
+#import <dlfcn.h>
 #import <string.h>
 #import "STEmbeddedJSON.h"
 
@@ -16,6 +17,8 @@ static NSString *STOrigin = @"embedded";
 static NSString *STLanguage = @"zh-Hans";
 static void STInitializeDictionary(void);
 static BOOL STTranslationReady(void);
+static void STBootstrap(void);
+static BOOL STPreloadedBeforeLC = NO;
 
 static BOOL STIsBuiltInSideStore(void) {
     SEL selector = NSSelectorFromString(@"isSideStore");
@@ -108,6 +111,7 @@ static void STInitializeDictionary(void) {
                                  @"language": STLanguage ?: @"zh-Hans",
                                  @"translationCount": @(STDictionary.count),
                                  @"externalJSONFound": @(external != nil),
+                                 @"preloadedBeforeLC": @(STPreloadedBeforeLC),
                                  @"checkedAt": @([[NSDate date] timeIntervalSince1970])};
         NSData *statusData = [NSJSONSerialization dataWithJSONObject:status options:NSJSONWritingPrettyPrinted error:nil];
         [statusData writeToFile:[folder stringByAppendingPathComponent:@"status.json"] atomically:YES];
@@ -169,12 +173,81 @@ static BOOL STReplaceMethod(Class klass, SEL selector, IMP replacement, IMP *ori
     }
     return YES;
 }
+
+typedef BOOL (*STClassicLaunchMethod)(id, SEL, NSUInteger);
+static STClassicLaunchMethod STOriginalClassicLaunch = NULL;
+
+// LC's Release entry point, LiveContainerMainC, reads this one-shot file
+// before it loads LiveContainerShared.framework or applies Guest tweak policy.
+// Never change SideStoreApp.framework, the Guest plist, or TweakLoader itself.
+static BOOL STQueueSideStorePreload(void) {
+    const char *homeC = getenv("LC_HOME_PATH");
+    if (!homeC || !homeC[0]) return NO;
+    NSString *home = [[NSString stringWithUTF8String:homeC] stringByResolvingSymlinksInPath];
+    Dl_info image = {0};
+    if (!dladdr((const void *)&STBootstrap, &image) || !image.dli_fname) return NO;
+    NSString *library = [[[NSString stringWithUTF8String:image.dli_fname]
+                          stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    NSString *trustedRoot = [[[home stringByAppendingPathComponent:@"Documents/Tweaks"]
+                             stringByResolvingSymlinksInPath] stringByAppendingString:@"/"];
+    if (!library || ![library hasPrefix:trustedRoot] ||
+        ![library.pathExtension isEqualToString:@"dylib"] ||
+        [library rangeOfString:@"\n"].location != NSNotFound ||
+        [library rangeOfString:@"\r"].location != NSNotFound) return NO;
+    struct stat st;
+    if (lstat(library.fileSystemRepresentation, &st) != 0 || !S_ISREG(st.st_mode)) return NO;
+
+    NSString *file = [home stringByAppendingPathComponent:@"Library/preloadLibraries.txt"];
+    BOOL exists = [NSFileManager.defaultManager fileExistsAtPath:file];
+    NSData *previousData = [NSData dataWithContentsOfFile:file];
+    if (exists && !previousData) return NO;
+    NSString *previous = previousData.length ?
+        [[NSString alloc] initWithData:previousData encoding:NSUTF8StringEncoding] : @"";
+    if (!previous) return NO;
+    // Preserve pre-existing entries, including iOS 26+ MetalANGLE preloads.
+    if ([[previous componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]
+         containsObject:library]) return YES;
+    NSMutableString *next = [previous mutableCopy];
+    if (next.length && ![next hasSuffix:@"\n"]) [next appendString:@"\n"];
+    [next appendFormat:@"%@\n", library];
+    NSData *data = [next dataUsingEncoding:NSUTF8StringEncoding];
+    return [data writeToFile:file options:NSDataWritingAtomic error:nil];
+}
+
+static BOOL STHookClassicLaunch(id self, SEL command, NSUInteger classicMode) {
+    // LC sets this token immediately before restarting into built-in SideStore.
+    if ([[NSUserDefaults.standardUserDefaults stringForKey:@"selected"]
+         isEqualToString:@"builtinSideStore"]) {
+        BOOL queued = STQueueSideStorePreload();
+        NSLog(@"[SideStoreTranslator] Built-in SideStore preload queued=%d", queued);
+    }
+    return STOriginalClassicLaunch(self, command, classicMode);
+}
+
+static void STInstallHostLaunchHook(void) {
+    SEL infoSel = NSSelectorFromString(@"guestAppInfo");
+    SEL sideSel = NSSelectorFromString(@"isSideStore");
+    if (![NSUserDefaults respondsToSelector:infoSel] ||
+        ![NSUserDefaults respondsToSelector:sideSel]) return;
+    id guest = ((id (*)(id, SEL))objc_msgSend)(NSUserDefaults.class, infoSel);
+    BOOL sideStore = ((BOOL (*)(id, SEL))objc_msgSend)(NSUserDefaults.class, sideSel);
+    if (guest || sideStore) return;
+    Class utils = NSClassFromString(@"LCSharedUtils");
+    if (!utils) return;
+    if (STReplaceMethod(object_getClass(utils),
+                        @selector(launchToGuestAppWithClassicMode:),
+                        (IMP)STHookClassicLaunch, (IMP *)&STOriginalClassicLaunch)) {
+        NSLog(@"[SideStoreTranslator] LC classic launch hook ready.");
+    }
+}
 __attribute__((constructor))
 static void STBootstrap(void) {
     // LC may load this dylib in its own host UI before SideStore starts.
     // Install hooks once, even in LC host mode; each hook checks isSideStore
     // at call time and is a no-op for LC UI and unrelated guest applications.
-    if (![NSUserDefaults respondsToSelector:NSSelectorFromString(@"isSideStore")]) return;
+    // This constructor also runs *before* LiveContainerShared is loaded when
+    // main.c preloads the dylib. Do not require isSideStore to exist yet.
+    STPreloadedBeforeLC = ![NSUserDefaults respondsToSelector:NSSelectorFromString(@"isSideStore")];
     if (!STReplaceMethod(NSBundle.class, @selector(localizedStringForKey:value:table:),
                          (IMP)STHookLocalized, (IMP *)&STOriginalLocalized)) {
         NSLog(@"[SideStoreTranslator] Unable to install NSBundle localization hook.");
@@ -193,5 +266,6 @@ static void STBootstrap(void) {
                     (IMP)STHookNavigationItem, (IMP *)&STOriginalNavigationItem);
     STReplaceMethod(UISegmentedControl.class, @selector(setTitle:forSegmentAtIndex:),
                     (IMP)STHookSegment, (IMP *)&STOriginalSegment);
-    NSLog(@"[SideStoreTranslator] Hooks armed; translation activates on SideStore entry.");
+    STInstallHostLaunchHook();
+    NSLog(@"[SideStoreTranslator] Hooks armed; earlyPreload=%d", STPreloadedBeforeLC);
 }
