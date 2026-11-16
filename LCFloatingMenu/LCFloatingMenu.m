@@ -2034,6 +2034,26 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)stopEasterEggSnowEffect;
 - (void)triggerEasterEggConfetti;
 @end
+
+// LCFloatingMenu 品牌徽标：紫色圆底 + 白色闪电，尺寸由 diameter 决定。
+// 用于 App 图标右下角的 JIT 需求角标（与锁定/隐藏徽标同尺寸）。
+static UIImage *FMLogoBadgeImage(CGFloat diameter) {
+    if(diameter<=0) return nil;
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(diameter,diameter)];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGContextRef c=context.CGContext;
+        CGContextSetFillColorWithColor(c,[UIColor colorWithRed:130/255.0 green:82/255.0 blue:190/255.0 alpha:1.0].CGColor);
+        CGContextFillEllipseInRect(c,CGRectMake(0,0,diameter,diameter));
+        UIImageSymbolConfiguration *conf=[UIImageSymbolConfiguration
+            configurationWithPointSize:round(diameter*.52) weight:UIImageSymbolWeightBold];
+        UIImage *bolt=[UIImage systemImageNamed:@"bolt.fill" withConfiguration:conf];
+        bolt=[bolt imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+        if(!bolt) return;
+        CGSize size=bolt.size;
+        [bolt drawInRect:CGRectMake((diameter-size.width)*.5,(diameter-size.height)*.5,size.width,size.height)];
+    }];
+}
+
 @implementation FMManager {
     CGPoint _panStartPoint;
     CGPoint _panOriginalCenter;
