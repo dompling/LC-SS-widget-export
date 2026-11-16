@@ -1,0 +1,42 @@
+name: Build independent SideStore Translator dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [lcss-original, feat/sidestore-translator]
+    paths:
+      - 'SideStoreTranslator/**'
+      - '.github/workflows/sidestore-translator.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate official keys and translation JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 SideStoreTranslator/scripts/validate_and_embed.py \
+            SideStoreTranslator/zh-Hans.json \
+            SideStoreTranslator/upstream-key-inventory.json \
+            SideStoreTranslator/.generated/STEmbeddedJSON.h
+      - name: Compile standalone arm64 iOS dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash SideStoreTranslator/build.sh dist/SideStoreTranslator.dylib
+          xcrun vtool -show-build dist/SideStoreTranslator.dylib
+      - name: Upload Actions artifact only (never publish Release on branch push)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SideStoreTranslator-dylib
+          path: |
+            dist/SideStoreTranslator.dylib
+            SideStoreTranslator/zh-Hans.json
+          if-no-files-found: error
+          retention-days: 14
