@@ -9,7 +9,7 @@ import re
 import sys
 from pathlib import Path
 
-FORMAT = re.compile(r"%(?:\\d+\\$)?[-+#0 ']*(?:\\d+|\\*)?(?:\\.(?:\\d+|\\*))?(?:hh|ll|h|l|z|t|j|L)?[@dDuUxXfFeEgGaAcCsSpPoO%]")
+FORMAT = re.compile(r"%(?:\d+\$)?[-+#0 ']*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|ll|h|l|z|t|j|L)?[@dDuUxXfFeEgGaAcCsSpPoO%]")
 
 
 def placeholder_signature(text):
