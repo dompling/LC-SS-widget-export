@@ -14,6 +14,8 @@ static NSDictionary<NSString *, NSString *> *STDictionary;
 static BOOL STEnabled = NO;
 static NSString *STOrigin = @"embedded";
 static NSString *STLanguage = @"zh-Hans";
+static void STInitializeDictionary(void);
+static BOOL STTranslationReady(void);
 
 static BOOL STIsBuiltInSideStore(void) {
     SEL selector = NSSelectorFromString(@"isSideStore");
@@ -21,7 +23,7 @@ static BOOL STIsBuiltInSideStore(void) {
     return ((BOOL (*)(id,SEL))objc_msgSend)(NSUserDefaults.class, selector);
 }
 static NSString *STTranslation(NSString *key) {
-    if (!STEnabled || ![key isKindOfClass:NSString.class] || key.length == 0) return nil;
+    if (!STTranslationReady() || ![key isKindOfClass:NSString.class] || key.length == 0) return nil;
     return STDictionary[key];
 }
 static NSString *STReplace(NSString *key) {
@@ -93,6 +95,32 @@ static void STInitializeDictionary(void) {
     STLanguage = parsed[@"language"];
     NSLog(@"[SideStoreTranslator] %@ lang=%@ keys=%lu enabled=%d",
           STOrigin, STLanguage, (unsigned long)STDictionary.count, STEnabled);
+    // Diagnostic available in the Files app, only after SideStore actually starts.
+    const char *home = getenv("LC_HOME_PATH");
+    if (home && home[0]) {
+        NSString *folder = [[NSString stringWithUTF8String:home]
+                            stringByAppendingPathComponent:@"Documents/SideStoreTranslator"];
+        [NSFileManager.defaultManager createDirectoryAtPath:folder
+                                withIntermediateDirectories:YES attributes:nil error:nil];
+        NSDictionary *status = @{@"status": STEnabled ? @"active" : @"disabled",
+                                 @"sideStoreContext": @YES,
+                                 @"source": STOrigin,
+                                 @"language": STLanguage ?: @"zh-Hans",
+                                 @"translationCount": @(STDictionary.count),
+                                 @"externalJSONFound": @(external != nil),
+                                 @"checkedAt": @([[NSDate date] timeIntervalSince1970])};
+        NSData *statusData = [NSJSONSerialization dataWithJSONObject:status options:NSJSONWritingPrettyPrinted error:nil];
+        [statusData writeToFile:[folder stringByAppendingPathComponent:@"status.json"] atomically:YES];
+    }
+}
+
+static BOOL STTranslationReady(void) {
+    // The LC host may preload this dylib *before* it switches to SideStore.
+    // Always leave hooks armed and activate them dynamically on SideStore entry.
+    if (!STIsBuiltInSideStore()) return NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ STInitializeDictionary(); });
+    return STEnabled;
 }
 
 typedef NSString *(*STLocalizedMethod)(id,SEL,NSString *,NSString *,NSString *);
@@ -100,7 +128,7 @@ static STLocalizedMethod STOriginalLocalized = NULL;
 static NSString *STHookLocalized(id self, SEL command, NSString *key,
                                  NSString *value, NSString *table) {
     NSString *original = STOriginalLocalized(self, command, key, value, table);
-    if (!STEnabled || !STBundleIsAllowed((NSBundle *)self)) return original;
+    if (!STTranslationReady() || !STBundleIsAllowed((NSBundle *)self)) return original;
     NSString *translated = STTranslation(key);
     if (!translated) translated = STTranslation(original);
     return translated ?: original;
@@ -143,11 +171,10 @@ static BOOL STReplaceMethod(Class klass, SEL selector, IMP replacement, IMP *ori
 }
 __attribute__((constructor))
 static void STBootstrap(void) {
-    // This is intentionally unavailable in LC's host UI, regular guests,
-    // standalone SideStore, and LiveProcess unless LC marks them as SideStore.
-    if (!STIsBuiltInSideStore()) return;
-    STInitializeDictionary();
-    if (!STEnabled) return;
+    // LC may load this dylib in its own host UI before SideStore starts.
+    // Install hooks once, even in LC host mode; each hook checks isSideStore
+    // at call time and is a no-op for LC UI and unrelated guest applications.
+    if (![NSUserDefaults respondsToSelector:NSSelectorFromString(@"isSideStore")]) return;
     if (!STReplaceMethod(NSBundle.class, @selector(localizedStringForKey:value:table:),
                          (IMP)STHookLocalized, (IMP *)&STOriginalLocalized)) {
         NSLog(@"[SideStoreTranslator] Unable to install NSBundle localization hook.");
@@ -166,5 +193,5 @@ static void STBootstrap(void) {
                     (IMP)STHookNavigationItem, (IMP *)&STOriginalNavigationItem);
     STReplaceMethod(UISegmentedControl.class, @selector(setTitle:forSegmentAtIndex:),
                     (IMP)STHookSegment, (IMP *)&STOriginalSegment);
-    NSLog(@"[SideStoreTranslator] Hooks ready (SideStore only).");
+    NSLog(@"[SideStoreTranslator] Hooks armed; translation activates on SideStore entry.");
 }
