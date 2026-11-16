@@ -2,6 +2,7 @@
 // Copyright (c) 2026. See repository LICENSE.
 // Never loads floating-menu code or changes LC/SideStore binaries.
 #import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -126,6 +127,54 @@ static BOOL STTranslationReady(void) {
     dispatch_once(&once, ^{ STInitializeDictionary(); });
     return STEnabled;
 }
+
+
+// SwiftUI Text("literal") resolves a LocalizedStringKey through the app's
+// localization table, typically at the CoreFoundation resource boundary.
+// This is intentionally a best-effort dyld interpose. It is installed before
+// SideStore startup by LC's one-shot preload mechanism. It never touches guest
+// apps other than built-in SideStore and it never replaces non-matching keys.
+//
+// Note: Text(title), where title is a String variable, is *verbatim* in SwiftUI.
+// It cannot be translated merely by changing the localization table.
+// We retain UIKit hooks for storyboard content and use this bridge only for
+// APIs that actually request localization.
+typedef CFStringRef (*STCFBundleLocalizedFunction)(CFBundleRef, CFStringRef, CFStringRef, CFStringRef);
+static CFStringRef STCFBundleCopyLocalizedString(CFBundleRef bundle,
+                                                CFStringRef key,
+                                                CFStringRef value,
+                                                CFStringRef tableName) {
+    // Avoid translating lookups belonging to unrelated system frameworks.
+    BOOL appBundle = bundle && (bundle == CFBundleGetMainBundle() ||
+        (CFBundleGetIdentifier(bundle) &&
+         CFEqual(CFBundleGetIdentifier(bundle), CFSTR("com.SideStore.SideStore"))));
+    if (STIsBuiltInSideStore() && appBundle && key &&
+        CFGetTypeID(key) == CFStringGetTypeID() &&
+        (!tableName || (CFGetTypeID(tableName) == CFStringGetTypeID() &&
+                        CFEqual(tableName, CFSTR("Localizable")))) &&
+        STTranslationReady()) {
+        NSString *replacement = STDictionary[(__bridge NSString *)key];
+        if (replacement.length > 0) {
+            static dispatch_once_t logged;
+            dispatch_once(&logged, ^{
+                NSLog(@"[SideStoreTranslator] CFBundle localization bridge hit.");
+            });
+            // CFBundleCopyLocalizedString follows the Create Rule.
+            return (__bridge_retained CFStringRef)replacement;
+        }
+    }
+    // dyld leaves calls originating in this interposing image bound to the
+    // original implementation; all other code paths remain untouched.
+    return CFBundleCopyLocalizedString(bundle, key, value, tableName);
+}
+__attribute__((used, section("__DATA,__interpose")))
+static const struct {
+    STCFBundleLocalizedFunction replacement;
+    STCFBundleLocalizedFunction original;
+} STCFBundleInterpose = {
+    STCFBundleCopyLocalizedString,
+    CFBundleCopyLocalizedString
+};
 
 typedef NSString *(*STLocalizedMethod)(id,SEL,NSString *,NSString *,NSString *);
 static STLocalizedMethod STOriginalLocalized = NULL;

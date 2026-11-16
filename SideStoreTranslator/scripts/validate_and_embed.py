@@ -24,9 +24,17 @@ def run(dictionary_path, inventory_path, output_path):
     assert isinstance(data["enabled"], bool), "enabled must be boolean"
     translations = data["translations"]
     assert isinstance(translations, dict) and translations, "no translations"
-    keys = set(inventory["keys"])
-    assert len(keys) == inventory["keyCount"], "upstream inventory count mismatch"
-    assert not (set(translations) - keys), "translations contain unknown upstream keys"
+    original_keys = set(inventory["keys"])
+    assert len(original_keys) == inventory["keyCount"], "upstream inventory count mismatch"
+    # Additional text verified directly against the current SideStore fork.
+    # Preserve the historical upstream PR inventory and its original count.
+    supplemental = inventory.get("supplementalKeys", {})
+    assert isinstance(supplemental, dict), "invalid supplemental key manifest"
+    assert all(isinstance(k, str) and k and isinstance(v, str) and v
+               for k, v in supplemental.items()), "invalid supplemental source mapping"
+    assert not (set(supplemental) & original_keys), "duplicate original key in supplement"
+    keys = original_keys | set(supplemental)
+    assert not (set(translations) - keys), "translations contain unknown SideStore source keys"
     for source, target in translations.items():
         assert isinstance(source, str) and source and isinstance(target, str) and target
         assert source != target, f"unchanged translation: {source}"

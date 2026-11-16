@@ -15,7 +15,7 @@ xcrun clang -arch arm64 -isysroot "$SDK" \
   -Wall -Wextra -Werror \
   -I"$ROOT/.generated" \
   -dynamiclib \
-  -framework Foundation -framework UIKit \
+  -framework Foundation -framework UIKit -framework CoreFoundation \
   -install_name "@rpath/SideStoreTranslator.dylib" \
   "$ROOT/SideStoreTranslator.m" -o "$OUT"
 

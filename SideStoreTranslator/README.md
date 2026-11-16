@@ -89,6 +89,30 @@ Go to **Actions > Build independent SideStore Translator dylib**; run on the `fe
 
 The CI intentionally does **not** create tags or Releases; builds are Actions artifacts only.
 
+## SwiftUI localization bridge (experimental)
+
+The standalone dylib adds a `CFBundleCopyLocalizedString` dyld interpose, loaded
+*before* the built-in SideStore executable. It attempts to translate SwiftUI
+`Text("literal")` entries when SwiftUI queries its CoreFoundation
+`Localizable` strings table. Only exact keys from the reviewed dictionary,
+lookups for the main app or the SideStore framework, and the SideStore guest
+context are eligible. Successful interception logs
+`[SideStoreTranslator] CFBundle localization bridge hit.`
+
+**Limits:** This is not a verified SwiftUI universal hook. Depending on
+the iOS version SwiftUI might resolve strings without this API. SwiftUI
+`Text(title)` with a runtime `String`, used by many settings rows in
+`UserCustomizationsView`, displays verbatim text and does not request
+localization at all. A bundle lookup hook cannot translate those rows.
+Full support would require modifying the SideStore SwiftUI source or
+a separately validated Swift ABI hook; this release does neither.
+
+The extra settings keys are kept in `upstream-key-inventory.json` under
+`supplementalKeys` (key-to-source-path mapping), validated against
+SideStore `LiveContainerSupport` source. The original 1,726-key source
+inventory and `keyCount` remain untouched. JSON source verification does not
+imply all entries can be intercepted at runtime.
+
 ## Limitations
 
 - No full device run has yet been performed; verify the early preload, injection logs, and My Apps / Settings screens.
