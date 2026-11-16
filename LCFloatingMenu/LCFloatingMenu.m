@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.36"
+#define FM_MENU_VERSION @"1.0.38"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -3878,12 +3878,12 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         }
         [box addSubview:mark];
     } else if(blocked) {
-        CGFloat side=MIN(size*.45,MAX(13,MIN(18,size*.36)));
-        UIImageView *mark=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"exclamationmark.circle.fill"]];
-        mark.frame=CGRectMake(size-side-1,size-side-1,side,side);
-        mark.backgroundColor=FMThemeColor(FMColorSurface);
-        mark.tintColor=FMThemeColor(FMColorSecondary);
-        mark.layer.cornerRadius=side*.5;mark.clipsToBounds=YES;
+        // JIT 需求角标：改用 LCFloatingMenu 紫色圆形闪电徽标（fm.logo），
+        // 尺寸与左侧锁定/隐藏徽标完全一致，替换原来的灰色感叹号。
+        CGFloat side=MIN(16,MAX(14,size*.34));
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        mark.contentMode=UIViewContentModeScaleAspectFit;
+        mark.image=FMLogoBadgeImage(side);
         mark.userInteractionEnabled=NO;
         [box addSubview:mark];
     }
@@ -6414,6 +6414,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
             detail=@"App 已隐藏无法开启，请解除隐藏状态或去 LiveContainer 验证启用";
         } else if([app[@"locked"] boolValue]) {
             detail=@"App 已上锁，请在 LiveContainer 解除锁定状态";
+        } else if([detail isEqualToString:@"需要 JIT"]) {
+            detail=@"已开启 JIT，请在 LiveContainer 主页启用";
         }
         [self showMessage:@"暂不可切换" details:detail];
         return;
