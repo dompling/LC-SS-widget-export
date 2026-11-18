@@ -5,7 +5,7 @@ run-name: FloatingMenu ${{ github.ref_type == 'tag' && 'release' || 'build' }} -
 # A semantic-version tag is pushed only when a formal release is requested.
 on:
   push:
-    branches: [lcss-original, feat/uikit-guest-safe-area]
+    branches: [lcss-original, feat/uikit-guest-safe-area, feat/instagram-safe-area-probe]
     tags:
       - '*.*.*'
     paths:
@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: floating-menu-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_name == 'feat/uikit-guest-safe-area' }}
+  cancel-in-progress: ${{ contains(fromJSON('["feat/uikit-guest-safe-area","feat/instagram-safe-area-probe"]'), github.ref_name) }}
 
 jobs:
   build:
