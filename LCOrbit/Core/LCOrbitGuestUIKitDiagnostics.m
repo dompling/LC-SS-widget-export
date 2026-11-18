@@ -1,5 +1,6 @@
 #import "LCOrbitGuestUIKitDiagnostics.h"
 #import "LCOrbitHost.h"
+#import "LCOrbitStorage.h"
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <sys/file.h>
@@ -13,6 +14,28 @@
 // image data, URL contents, view descriptions, or interaction payloads.
 static const NSUInteger GuestLogLimit=131072;
 static NSUInteger GuestSamples=0;
+// Reflow is opt-in per Guest. Never move/resize the remote scene and never
+// add a second safe-area inset on top of UIKit's already-correct value.
+static BOOL GuestRelayoutEnabled=NO;
+static BOOL GuestRelayoutPolling=NO;
+static __weak UIWindow *GuestRelayoutWindow;
+static __weak UIViewController *GuestRelayoutRoot;
+static CGFloat GuestRepairedTop=-1;
+
+static BOOL GuestUIKitModeSelected(void) {
+    // LiveProcess passes LC's relative installation path in "selected".
+    // The host's preference is keyed by this path, NOT CFBundleIdentifier.
+    id selected=[[LCOrbitHost hostDefaults] objectForKey:@"selected"];
+    if(![selected isKindOfClass:NSString.class] || ![selected length] ||
+       ![LCOrbitHost guestInfo]) return NO;
+    NSString *path=selected;
+    id physical=[LCOrbitStorage objectForKey:
+        [@"guestOwnTopInset." stringByAppendingString:path] module:@"LCFloatingMenu"];
+    id uikit=[LCOrbitStorage objectForKey:
+        [@"uikitTopInset." stringByAppendingString:path] module:@"LCFloatingMenu"];
+    return !([physical isKindOfClass:NSNumber.class] && [physical boolValue]) &&
+        [uikit isKindOfClass:NSNumber.class] && [uikit boolValue];
+}
 
 static NSString *GuestDiagnosticDirectory(void) {
     NSString *group=[LCOrbitHost appGroupPath];
@@ -117,6 +140,47 @@ static void GuestTopControls(UIView *view,UIWindow *window,
         GuestTopControls(child,window,controls,depth+1);
     }
 }
+// Diagnostic geometry only: include container and navigation-bar frames even
+// when an app uses custom UIView subclasses rather than UILabel / UIControl.
+static void GuestTopViews(UIView *view,UIWindow *window,
+                          NSMutableArray<NSDictionary *> *views,NSUInteger depth) {
+    if(depth>12 || views.count>=24 || view.hidden || view.alpha<.05 ||
+       view.bounds.size.width<=0 || view.bounds.size.height<=0) return;
+    CGRect frame=[view convertRect:view.bounds toView:window];
+    CGRect region=CGRectMake(0,0,window.bounds.size.width,160);
+    if(!CGRectIntersectsRect(frame,region)) return;
+    BOOL useful=depth>0 && (depth<=3 || CGRectGetHeight(frame)<140 ||
+        [view isKindOfClass:UINavigationBar.class] ||
+        [view isKindOfClass:UIControl.class]);
+    if(useful) [views addObject:@{@"class":NSStringFromClass(view.class),
+        @"frame":NSStringFromCGRect(frame),@"depth":@(depth),
+        @"safeAreaInsets":NSStringFromUIEdgeInsets(view.safeAreaInsets)}];
+    for(UIView *child in view.subviews) {
+        if(views.count>=24) break;
+        GuestTopViews(child,window,views,depth+1);
+    }
+}
+static NSDictionary *GuestNavigationGeometry(UIWindow *window) {
+    UIViewController *root=window.rootViewController;
+    UINavigationController *nav=[root isKindOfClass:UINavigationController.class]?
+        (UINavigationController *)root:root.navigationController;
+    if(!nav) return @{};
+    NSMutableDictionary *info=[@{@"navigationClass":NSStringFromClass(nav.class),
+        @"navigationBarHidden":@(nav.navigationBarHidden)} mutableCopy];
+    UIView *bar=nav.navigationBar;
+    if(bar && bar.window==window)
+        info[@"navigationBarFrame"]=NSStringFromCGRect([bar convertRect:bar.bounds toView:window]);
+    UIViewController *visible=nav.visibleViewController;
+    if(visible) {
+        info[@"visibleClass"]=NSStringFromClass(visible.class);
+        UIView *view=visible.viewIfLoaded;
+        if(view && view.window==window) {
+            info[@"visibleFrame"]=NSStringFromCGRect([view convertRect:view.bounds toView:window]);
+            info[@"visibleSafeInsets"]=NSStringFromUIEdgeInsets(view.safeAreaInsets);
+        }
+    }
+    return info;
+}
 static UIWindow *GuestVisibleWindow(void) {
     UIApplication *app=UIApplication.sharedApplication;
     if(!app) return nil;
@@ -135,6 +199,73 @@ static UIWindow *GuestVisibleWindow(void) {
            window.bounds.size.width>40 && window.bounds.size.height>40) return window;
     return nil;
 }
+// A remote scene can be activated with 0pt insets and acquire its real
+// Dynamic-Island safe area one UIKit pass later. Some custom navigation
+// controllers retain the first geometry. Re-request layout once the Guest's
+// OWN UIWindow and root view report a nonzero inset. Never fake insets.
+static void GuestSafeAreaRepairTick(void) {
+    if(!GuestRelayoutEnabled || !NSThread.isMainThread) return;
+    UIApplication *app=UIApplication.sharedApplication;
+    if(!app || app.applicationState!=UIApplicationStateActive) return;
+    UIWindow *window=GuestVisibleWindow();
+    UIViewController *root=window.rootViewController;
+    UIView *view=root.viewIfLoaded;
+    if(!window || !root || !view || view.window!=window) return;
+    UIWindowScene *scene=window.windowScene;
+    if(!scene || !UIInterfaceOrientationIsPortrait(scene.interfaceOrientation)) return;
+    if(GuestRelayoutWindow!=window || GuestRelayoutRoot!=root) {
+        GuestRelayoutWindow=window;GuestRelayoutRoot=root;GuestRepairedTop=-1;
+    }
+    CGFloat top=window.safeAreaInsets.top;
+    CGFloat rootTop=view.safeAreaInsets.top;
+    if(!isfinite(top) || !isfinite(rootTop) || top<1 || rootTop<1 ||
+       fabs(top-rootTop)>2 || fabs(top-GuestRepairedTop)<.5) return;
+    GuestRepairedTop=top;
+    __weak UIWindow *weakWindow=window;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *strongWindow=weakWindow;
+        if(!strongWindow || strongWindow!=GuestRelayoutWindow ||
+           strongWindow.rootViewController!=root || view.window!=strongWindow ||
+           fabs(view.safeAreaInsets.top-top)>2) return;
+        UINavigationController *nav=[root isKindOfClass:UINavigationController.class]?
+            (UINavigationController *)root:root.navigationController;
+        UIView *bar=nav.navigationBar;
+        UIView *visible=nav.visibleViewController.viewIfLoaded;
+        NSDictionary *before=GuestNavigationGeometry(strongWindow);
+        [view setNeedsUpdateConstraints];
+        [view setNeedsLayout];
+        if(bar && bar.window==strongWindow) {
+            [bar setNeedsUpdateConstraints];
+            [bar setNeedsLayout];
+        }
+        if(visible && visible.window==strongWindow) {
+            [visible setNeedsUpdateConstraints];
+            [visible setNeedsLayout];
+        }
+        [view layoutIfNeeded];
+        if([LCOrbitGuestUIKitDiagnostics isEnabled])
+            GuestWriteEvent(@"guest-uikit-safe-area-relayout",@{
+                @"windowSafeInsets":NSStringFromUIEdgeInsets(strongWindow.safeAreaInsets),
+                @"rootSafeInsets":NSStringFromUIEdgeInsets(view.safeAreaInsets),
+                @"navigationBefore":before,
+                @"navigationAfter":GuestNavigationGeometry(strongWindow)});
+    });
+}
+static void GuestScheduleSafeAreaRepair(void) {
+    if(!GuestRelayoutEnabled || GuestRelayoutPolling) return;
+    GuestRelayoutPolling=YES;
+    // Bounded startup/foreground probes. No permanent timer or global hook.
+    NSArray<NSNumber *> *delays=@[@0.0,@0.2,@0.5,@1.0,@1.8,@3.0];
+    for(NSUInteger index=0;index<delays.count;index++) {
+        NSNumber *delay=delays[index];
+        BOOL last=index==delays.count-1;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+            (int64_t)(delay.doubleValue*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            GuestSafeAreaRepairTick();
+            if(last) GuestRelayoutPolling=NO;
+        });
+    }
+}
 static void GuestTakeSnapshot(NSString *reason) {
     if(!NSThread.isMainThread || ![LCOrbitGuestUIKitDiagnostics isEnabled] ||
        ![LCOrbitHost guestInfo] || GuestSamples>=12) return;
@@ -149,8 +280,11 @@ static void GuestTakeSnapshot(NSString *reason) {
     UIView *rootView=root.viewIfLoaded;
     UIWindowScene *scene=window.windowScene;
     NSMutableArray<NSDictionary *> *topControls=[NSMutableArray array];
-    if(rootView && rootView.window==window)
+    NSMutableArray<NSDictionary *> *topViews=[NSMutableArray array];
+    if(rootView && rootView.window==window) {
         GuestTopControls(rootView,window,topControls,0);
+        GuestTopViews(rootView,window,topViews,0);
+    }
     NSMutableDictionary *details=[@{
         @"reason":reason?:@"unknown",@"sample":@(GuestSamples),
         @"windowReady":@YES,
@@ -164,6 +298,9 @@ static void GuestTakeSnapshot(NSString *reason) {
         @"rootSafeInsets":rootView?NSStringFromUIEdgeInsets(rootView.safeAreaInsets):@"unloaded",
         @"rootSafeRect":rootView?NSStringFromCGRect(rootView.safeAreaLayoutGuide.layoutFrame):@"unloaded",
         @"topControls":topControls,
+        @"topViews":topViews,
+        @"navigation":GuestNavigationGeometry(window),
+        @"uikitRelayoutEnabled":@(GuestRelayoutEnabled),
         @"orientation":@(scene?scene.interfaceOrientation:0),
         @"statusBarHidden":@(scene?scene.statusBarManager.statusBarHidden:YES),
         @"statusBarFrame":scene?NSStringFromCGRect(scene.statusBarManager.statusBarFrame):@"unknown"
@@ -203,13 +340,18 @@ static void GuestTakeSnapshot(NSString *reason) {
 }
 + (void)startInLiveProcess {
     // LiveProcess intentionally never starts LCOrbitCore / FloatingMenu.
-    // Only geometry diagnostics run here, and ONLY after explicit opt-in.
+    // The repair is gated by this Guest's per-App UIKit selection; independent
+    // geometry logging still requires the explicit diagnostic switch.
     SEL selector=NSSelectorFromString(@"isLiveProcess");
     if(![NSUserDefaults respondsToSelector:selector] ||
-       !((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,selector) ||
-       ![self isEnabled]) return;
+       !((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,selector)) return;
+    GuestRelayoutEnabled=GuestUIKitModeSelected();
+    BOOL diagnostics=[self isEnabled];
+    if(!GuestRelayoutEnabled && !diagnostics) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        GuestWriteEvent(@"guest-uikit-diagnostic-loaded",@{@"status":@"waiting-for-ui"});
+        if(diagnostics) GuestWriteEvent(@"guest-uikit-diagnostic-loaded",
+            @{@"status":@"waiting-for-ui",
+              @"uikitRelayoutEnabled":@(GuestRelayoutEnabled)});
         NSNotificationCenter *center=NSNotificationCenter.defaultCenter;
         NSArray<NSString *> *notifications=@[
             UIApplicationDidBecomeActiveNotification,
@@ -221,11 +363,17 @@ static void GuestTakeSnapshot(NSString *reason) {
         for(NSString *name in notifications)
             [center addObserverForName:name object:nil queue:NSOperationQueue.mainQueue
                             usingBlock:^(NSNotification *notification) {
-                GuestTakeSnapshot(name);
+                if(diagnostics) GuestTakeSnapshot(name);
+                if(GuestRelayoutEnabled) {
+                    // Recheck foreground transitions even if the next app
+                    // window reuses its previous UIWindow instance.
+                    if([name isEqualToString:UIApplicationWillEnterForegroundNotification])
+                        GuestRepairedTop=-1;
+                    GuestScheduleSafeAreaRepair();
+                }
             }];
-        // The first UIKit scene may appear after TweakLoader. Sample without
-        // forcing UIKit layout or intercepting any of the Guest's callbacks.
-        for(NSNumber *delay in @[@1.0,@3.0,@6.0])
+        if(GuestRelayoutEnabled) GuestScheduleSafeAreaRepair();
+        if(diagnostics) for(NSNumber *delay in @[@1.0,@3.0,@6.0])
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(delay.doubleValue*NSEC_PER_SEC)),
                            dispatch_get_main_queue(),^{
                 GuestTakeSnapshot([NSString stringWithFormat:@"startup+%.1fs",delay.doubleValue]);

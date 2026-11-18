@@ -22,8 +22,8 @@ checks = {
         core.index("if([NSUserDefaults respondsToSelector:process]"),
     "guest diagnostics do not bootstrap the FloatingMenu UI":
         "LCFloatingMenuRegisterWithOrbit" in core and "return;" in core,
-    "requires explicit user opt in":
-        "+ (BOOL)isEnabled" in diag and "![self isEnabled]" in diag and
+    "diagnostic snapshots require explicit user opt in":
+        "+ (BOOL)isEnabled" in diag and "if(diagnostics) GuestTakeSnapshot" in diag and
         "if(![LCOrbitGuestUIKitDiagnostics isEnabled]) return;" in diag,
     "only collects in an actual Guest":
         "[LCOrbitHost guestInfo]" in diag and "isLiveProcess" in diag,
@@ -33,6 +33,25 @@ checks = {
     "top controls record types and frames not text":
         "NSStringFromCGRect" in diag and "NSStringFromClass" in diag and
         ".text" not in diag and "drawViewHierarchy" not in diag,
+    "safe-area repair scoped to the selected UIKit-mode Guest":
+        'objectForKey:@"selected"' in diag and
+        'uikitTopInset.' in diag and 'guestOwnTopInset.' in diag and
+        "GuestRelayoutEnabled=GuestUIKitModeSelected()" in diag,
+    "repair only after window and root report real insets":
+        "if(!isfinite(top) || !isfinite(rootTop) || top<1 || rootTop<1" in diag and
+        "fabs(top-rootTop)>2" in diag and
+        "GuestRepairedTop=top" in diag,
+    "no window shrinking, additional safe inset, or permanent scene hook":
+        "GuestSafeAreaRepairTick" in diag and
+        "[view setNeedsLayout]" in diag and
+        "additionalSafeAreaInsets" not in diag and
+        "setFrame:" not in diag and
+        "method_exchangeImplementations" not in diag,
+    "records actual navigation and upper subview geometry":
+        "GuestNavigationGeometry" in diag and
+        "GuestTopViews" in diag and
+        '@"navigationBefore"' in diag and
+        '@"navigationAfter"' in diag,
     "bounded synchronized output shared between processes":
         "flock(" in diag and "O_NOFOLLOW" in diag and "GuestUIKit" in diag,
     "host runtime export includes Guest measurements":
