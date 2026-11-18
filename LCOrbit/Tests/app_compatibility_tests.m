@@ -31,6 +31,8 @@ static NSArray *Windows;
 @interface LCOrbitMultitask (Compatibility)
 + (BOOL)usesAppTopInsetForBundle:(NSString *)bundle;
 + (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle;
++ (NSInteger)topInsetModeForBundle:(NSString *)bundle;
++ (void)setTopInsetMode:(NSInteger)mode forBundle:(NSString *)bundle;
 @end
 @implementation LCOrbitMultitask
 + (NSArray *)windows { return Windows; }
@@ -69,6 +71,36 @@ int main(void) {
         Windows=@[a,b];[LCOrbitMultitask setUsesAppTopInset:YES forBundle:@"A.app"];
         EXPECT(!objc_getAssociatedObject(a,&GeometryLogKey),"enabled App refreshes geometry diagnostics");
         EXPECT(objc_getAssociatedObject(b,&GeometryLogKey)!=nil,"other App diagnostics are preserved");
+        // New UIKit mode must coexist with the existing physical policy,
+        // not silently reinterpret old persisted per-app switches.
+        EXPECT([LCOrbitMultitask topInsetModeForBundle:@"B.app"]==0,
+            "unconfigured guest uses default full-window policy");
+        EXPECT([LCOrbitMultitask topInsetModeForBundle:@"A.app"]==2,
+            "legacy compatibility switch remains physical-avoidance mode");
+        [LCOrbitMultitask setTopInsetMode:1 forBundle:@"A.app"];
+        EXPECT([LCOrbitMultitask topInsetModeForBundle:@"A.app"]==1,
+            "UIKit mode is an independent third policy");
+        EXPECT(GuestOwnsTopInset(@"A.app") && UIKitTopInsetEnhanced(@"A.app"),
+            "UIKit mode reserves full Guest viewport without physical shrink");
+        EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"A.app"],
+            "UIKit mode does not keep the old physical-avoidance flag");
+        EXPECT([Preferences[@"LCFloatingMenu.uikitTopInset.A.app"] boolValue],
+            "UIKit mode persists under a per-guest key");
+        [LCOrbitMultitask setTopInsetMode:0 forBundle:@"A.app"];
+        EXPECT([LCOrbitMultitask topInsetModeForBundle:@"A.app"]==0 &&
+               !UIKitTopInsetEnhanced(@"A.app"),
+            "default mode clears UIKit enhancement without resizing");
+        [LCOrbitMultitask setTopInsetMode:2 forBundle:@"A.app"];
+        EXPECT([LCOrbitMultitask topInsetModeForBundle:@"A.app"]==2 &&
+               !UIKitTopInsetEnhanced(@"A.app") && !GuestOwnsTopInset(@"A.app"),
+            "physical mode restores old behavior without stale UIKit enhancement");
+        NSUInteger previous=Preferences.count;
+        [LCOrbitMultitask setTopInsetMode:1 forBundle:@""];
+        [LCOrbitMultitask setTopInsetMode:9 forBundle:@"A.app"];
+        EXPECT(Preferences.count==previous && [LCOrbitMultitask topInsetModeForBundle:@"A.app"]==2,
+            "empty guest or invalid mode does not change settings");
+        EXPECT([LCOrbitMultitask topInsetModeForBundle:@"B.app"]==0,
+            "another guest is not changed by per-app mode selection");
         printf("App compatibility: %u assertions, %u failures\n",assertions,failures);
         return failures?1:0;
     }
