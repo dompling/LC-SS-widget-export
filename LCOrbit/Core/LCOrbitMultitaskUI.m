@@ -240,7 +240,7 @@ static BOOL OrbitInsetsInViewport(CGRect safeRect,CGRect viewport,UIEdgeInsets *
 // guide / status bar have already resolved. Only the opt-in UIKit policy uses
 // this fallback; the default and old physical mode stay byte-for-byte alike.
 static UIEdgeInsets HostUIKitSafeInsets(UIWindow *host) {
-    if(!host) return UIEdgeInsetsZero;
+    if(!host) return UIEdgeInsetsMake(0,0,0,0);
     UIEdgeInsets safe=host.safeAreaInsets;
     CGRect bounds=host.bounds;
     if(!OrbitValidFrame(bounds)) return safe;
