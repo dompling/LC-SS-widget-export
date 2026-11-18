@@ -7,7 +7,7 @@
 static UIViewController *SceneController(UIViewController *window) { return window; }
 static char GeometryLogKey;
 static NSMutableDictionary *Preferences;
-static NSUInteger Refreshes;
+static NSUInteger Refreshes, ModeSyncs;
 static NSDictionary *LastEvent;
 @interface LCOrbitStorage : NSObject
 + (id)objectForKey:(NSString *)key module:(NSString *)module;
@@ -16,6 +16,12 @@ static NSDictionary *LastEvent;
 @implementation LCOrbitStorage
 + (id)objectForKey:(NSString *)key module:(NSString *)module { return Preferences[[module stringByAppendingFormat:@".%@",key]]; }
 + (void)setObject:(id)value forKey:(NSString *)key module:(NSString *)module { Preferences[[module stringByAppendingFormat:@".%@",key]]=value; }
+@end
+@interface LCOrbitGuestUIKitDiagnostics : NSObject
++ (void)synchronizeUIKitModesToGuests;
+@end
+@implementation LCOrbitGuestUIKitDiagnostics
++ (void)synchronizeUIKitModesToGuests { ModeSyncs++; }
 @end
 @interface LCOrbitLog : NSObject
 + (void)appendEvent:(NSString *)event details:(NSDictionary *)details kind:(NSString *)kind;
@@ -84,6 +90,7 @@ int main(void) {
             "UIKit mode reserves full Guest viewport without physical shrink");
         EXPECT(![LCOrbitMultitask usesAppTopInsetForBundle:@"A.app"],
             "UIKit mode does not keep the old physical-avoidance flag");
+        EXPECT(ModeSyncs>0,"changing a compatibility mode refreshes the Guest mirror");
         EXPECT([Preferences[@"LCFloatingMenu.uikitTopInset.A.app"] boolValue],
             "UIKit mode persists under a per-guest key");
         [LCOrbitMultitask setTopInsetMode:0 forBundle:@"A.app"];
