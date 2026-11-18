@@ -432,6 +432,85 @@ static void GuestScheduleSafeAreaRepair(void) {
         });
     }
 }
+// Instagram keeps its feed collection view fullscreen. Diagnose scrolling and
+// supplementary/header geometry before considering any content-inset mutation.
+static void GuestInstagramHeaderCandidates(UIView *node,UIWindow *window,
+        NSMutableArray<NSDictionary *> *results,NSUInteger depth,NSUInteger *visited) {
+    if(!node || depth>18 || ++(*visited)>1400 || results.count>=12 ||
+       node.hidden || node.alpha<.05 || node.window!=window) return;
+    NSString *name=NSStringFromClass(node.class);
+    if(depth>=4 && ([name hasPrefix:@"IG"] ||
+                     [node isKindOfClass:UICollectionReusableView.class])) {
+        CGRect frame=[node convertRect:node.bounds toView:window];
+        CGRect topRegion=CGRectMake(0,0,window.bounds.size.width,180);
+        if(CGRectIntersectsRect(frame,topRegion) && CGRectGetWidth(frame)>30 &&
+           CGRectGetHeight(frame)>10 && CGRectGetHeight(frame)<200)
+            [results addObject:@{@"class":name,
+                @"frame":NSStringFromCGRect(frame),
+                @"safeAreaInsets":NSStringFromUIEdgeInsets(node.safeAreaInsets),
+                @"depth":@(depth)}];
+    }
+    for(UIView *child in node.subviews) {
+        if(results.count>=12 || *visited>=1400) break;
+        GuestInstagramHeaderCandidates(child,window,results,depth+1,visited);
+    }
+}
+static UIScrollView *GuestInstagramFeedScroll(UIView *node,NSUInteger depth,
+                                            NSUInteger *visited) {
+    if(!node || depth>18 || ++(*visited)>1400) return nil;
+    if([NSStringFromClass(node.class) isEqualToString:
+            @"IGGestureCoordinatingCollectionView"] &&
+       [node isKindOfClass:UIScrollView.class]) return (UIScrollView *)node;
+    for(UIView *child in node.subviews) {
+        UIScrollView *found=GuestInstagramFeedScroll(child,depth+1,visited);
+        if(found) return found;
+    }
+    return nil;
+}
+static NSDictionary *GuestInstagramScrollGeometry(UIWindow *window) {
+    if(![GuestInstallPath() isEqualToString:@"com.burbn.instagram.app"] ||
+       ![NSStringFromClass(window.rootViewController.class)
+           isEqualToString:@"IGRootViewController"]) return nil;
+    UIView *root=window.rootViewController.viewIfLoaded;
+    NSUInteger visited=0;
+    UIScrollView *scroll=GuestInstagramFeedScroll(root,0,&visited);
+    if(!scroll || scroll.window!=window)
+        return @{@"feedFound":@NO,@"searchedViews":@(visited)};
+    CGRect scrollFrame=[scroll convertRect:scroll.bounds toView:window];
+    NSMutableDictionary *result=[@{
+        @"feedFound":@YES,
+        @"scrollClass":NSStringFromClass(scroll.class),
+        @"frame":NSStringFromCGRect(scrollFrame),
+        @"safeInsets":NSStringFromUIEdgeInsets(scroll.safeAreaInsets),
+        @"contentInset":NSStringFromUIEdgeInsets(scroll.contentInset),
+        @"adjustedContentInset":NSStringFromUIEdgeInsets(scroll.adjustedContentInset),
+        @"contentInsetAdjustmentBehavior":@(scroll.contentInsetAdjustmentBehavior),
+        @"contentOffset":NSStringFromCGPoint(scroll.contentOffset),
+        @"contentSize":NSStringFromCGSize(scroll.contentSize),
+        @"clipsToBounds":@(scroll.clipsToBounds),
+        @"rootAdditionalSafeAreaInsets":NSStringFromUIEdgeInsets(
+            window.rootViewController.additionalSafeAreaInsets)
+    } mutableCopy];
+    if([scroll isKindOfClass:UICollectionView.class]) {
+        UICollectionView *collection=(UICollectionView *)scroll;
+        result[@"layoutClass"]=NSStringFromClass(collection.collectionViewLayout.class);
+        NSMutableArray *cells=[NSMutableArray array];
+        for(UICollectionViewCell *cell in collection.visibleCells) {
+            CGRect frame=[cell convertRect:cell.bounds toView:window];
+            if(CGRectIntersectsRect(frame,CGRectMake(0,0,window.bounds.size.width,180)) &&
+               cells.count<8)
+                [cells addObject:@{@"class":NSStringFromClass(cell.class),
+                    @"frame":NSStringFromCGRect(frame)}];
+        }
+        result[@"topVisibleCells"]=cells;
+    }
+    NSMutableArray *headers=[NSMutableArray array];
+    visited=0;
+    GuestInstagramHeaderCandidates(root,window,headers,0,&visited);
+    result[@"topHeaderCandidates"]=headers;
+    result[@"visitedViews"]=@(visited);
+    return result;
+}
 static void GuestTakeSnapshot(NSString *reason) {
     if(!NSThread.isMainThread || ![LCOrbitGuestUIKitDiagnostics isEnabled] ||
        ![LCOrbitHost guestInfo] || GuestSamples>=12) return;
@@ -474,6 +553,8 @@ static void GuestTakeSnapshot(NSString *reason) {
     } mutableCopy];
     if(rootView && rootView.window==window)
         details[@"rootFrameInWindow"]=NSStringFromCGRect([rootView convertRect:rootView.bounds toView:window]);
+    NSDictionary *instagram=GuestInstagramScrollGeometry(window);
+    if(instagram) details[@"instagramScroll"]=instagram;
     GuestWriteEvent(@"guest-uikit-snapshot",details);
 }
 @implementation LCOrbitGuestUIKitDiagnostics
