@@ -290,6 +290,38 @@ int main(void) {
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
             readyFrame.size.height==785 && readyInsets.top==0,
             @"changing another App preserves the enabled physical avoidance policy");
+        // Regression: UIKit-safe-area mode must recover the host window's
+        // real visible inset without replacing the Guest's full screen.
+        scene.bundleId=@"uikit.app";
+        LayoutPreferences[@"uikitTopInset.uikit.app"]=@YES;
+        LayoutPreferences[@"guestOwnTopInset.uikit.app"]=@NO;
+        host.safeAreaInsets=(UIEdgeInsets){0,0,34,0};
+        host.safeAreaLayoutGuide=[OrbitLayoutGuide new];
+        host.safeAreaLayoutGuide.layoutFrame=CGRectMake(0,59,390,751);
+        Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
+            readyFrame.size.height==844 && readyInsets.top==59 && readyInsets.bottom==34,
+            @"UIKit mode recovers top safe area from window layout guide without compressing Guest");
+        // This catches the case where UIKit has not yet settled the guide.
+        host.safeAreaLayoutGuide.layoutFrame=CGRectMake(0,0,390,810);
+        Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
+            readyFrame.size.height==844 && readyInsets.top==54,
+            @"UIKit mode can use visible portrait status bar during zero-inset startup");
+        host.windowScene.statusBarManager.statusBarHidden=YES;
+        Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
+            readyInsets.top==0 && readyFrame.size.height==844,
+            @"hidden status bar does not add bogus top inset");
+        host.windowScene.statusBarManager.statusBarHidden=NO;
+        host.frame=CGRectMake(0,0,844,390);
+        host.windowScene.interfaceOrientation=UIInterfaceOrientationLandscapeLeft;
+        host.safeAreaInsets=(UIEdgeInsets){0,59,21,59};
+        host.safeAreaLayoutGuide.layoutFrame=CGRectMake(59,0,726,369);
+        Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
+            readyInsets.top==0 && readyInsets.left==59 && readyFrame.size.width==390,
+            @"UIKit mode preserves landscape cutout edges, never inserts portrait status bar at top");
+        host.frame=CGRectMake(0,0,390,844);
+        host.windowScene.interfaceOrientation=UIInterfaceOrientationPortrait;
+        host.safeAreaInsets=(UIEdgeInsets){59,0,34,0};
+        host.safeAreaLayoutGuide=nil;
         LayoutPreferences=nil;scene.bundleId=nil;
         objc_setAssociatedObject(window,&ViewportReadyKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UpdateScene(window,nil);
