@@ -45,6 +45,9 @@ static LCOrbitTopSurfaceOffset *GuestInstagramHeaderOffset;
 @end
 static LCOrbitInstagramInsetState *GuestInstagramInset;
 static BOOL GuestInstagramNoScrollReported=NO;
+// Instagram can recreate its header/inset on pull-to-refresh after the bounded
+// startup repair. Observe only this opted-in Guest, never all hosted apps.
+static NSTimer *GuestInstagramWatchTimer;
 
 
 // LC removes the one-shot "selected" default before shared tweaks load.
@@ -456,12 +459,25 @@ static void GuestRepairInstagramInnerScroll(UIWindow *window,
                                               0,&storyVisited);
     UIScrollView *scroll=GuestInstagramInnerScroll(story,window);
     LCOrbitInstagramInsetState *saved=GuestInstagramInset;
-    if(saved && (saved.scroll!=scroll || saved.header!=header ||
-        fabs(scroll.contentInset.top-(saved.originalTop+saved.appliedTop))>1 ||
+    BOOL oldScroll=saved && saved.scroll!=scroll;
+    BOOL oldHeader=saved && saved.header!=header;
+    BOOL insetChanged=saved && !oldScroll &&
+        fabs(scroll.contentInset.top-(saved.originalTop+saved.appliedTop))>1;
+    BOOL headerChanged=saved && !oldHeader && header &&
         !CGAffineTransformEqualToTransform(header.transform,
-                  CGAffineTransformMakeTranslation(0,saved.appliedTop)))) {
+            CGAffineTransformMakeTranslation(0,saved.appliedTop));
+    if(saved && (oldScroll || oldHeader || insetChanged || headerChanged)) {
+        // Instagram legitimately moves this header during a drag/deceleration.
+        // Never reset the user's in-flight gesture to reapply our baseline.
+        if(scroll && (scroll.dragging || scroll.tracking || scroll.decelerating))
+            return;
         GuestRestoreInstagramInset();
         saved=nil;
+        GuestInstagramNoScrollReported=NO;
+        GuestWriteEvent(@"guest-uikit-instagram-layout-reset",
+            @{@"oldScroll":@(oldScroll),@"oldHeader":@(oldHeader),
+              @"insetChanged":@(insetChanged),
+              @"headerChanged":@(headerChanged)});
     }
     if(!header || !story || !scroll) {
         // No app-wide override: only report the missing vertical owner.
@@ -489,13 +505,13 @@ static void GuestRepairInstagramInnerScroll(UIWindow *window,
     BOOL appHeaderInset=isfinite(original.top) &&
         original.top>=30 && original.top<=85 &&
         fabs(original.top-headerHeight)<=5 &&
-        fabs(storyY-original.top)<=5 &&
+        fabs(storyY-original.top)<=1 &&
         fabs(adjusted.top-original.top)<=4 &&
-        fabs(originalOffset.y+adjusted.top)<=4;
+        fabs(originalOffset.y+adjusted.top)<=0.75;
     BOOL geometryReady=isfinite(top) && top>=35 && top<=95 &&
-        isfinite(y) && y>=-3 && y<=MIN(15,top*.3) &&
+        isfinite(y) && fabs(y)<=0.75 &&
         isfinite(storyY) && storyY>=30 && storyY<=110 &&
-        !scroll.dragging && !scroll.decelerating &&
+        !scroll.dragging && !scroll.tracking && !scroll.decelerating &&
         [NSStringFromClass(scroll.class) isEqualToString:
             @"_IGListScrollWhileAnimateCollectionView"];
     if(!appHeaderInset || !geometryReady) {
@@ -551,6 +567,7 @@ static void GuestRepairInstagramInnerScroll(UIWindow *window,
     saved.originalOffsetY=originalOffset.y;
     saved.appliedTop=delta;
     GuestInstagramInset=saved;
+    GuestInstagramNoScrollReported=NO;
     GuestWriteEvent(@"guest-uikit-instagram-inner-scroll-corrected",
         @{@"scrollClass":NSStringFromClass(scroll.class),
           @"originalInset":NSStringFromUIEdgeInsets(original),
@@ -629,6 +646,26 @@ static void GuestSafeAreaRepairTick(void) {
                 @"navigationBefore":before,
                 @"navigationAfter":GuestNavigationGeometry(strongWindow)});
     });
+}
+// Instagram updates its home feed geometry again during refresh/reload. A
+// normal-mode, low-rate watcher resumes the top-only fix AFTER scrolling settles.
+// It is disabled during UIKit touch tracking, suspended when backgrounded, and
+// exists only for Instagram with the per-App UIKit compatibility mode enabled.
+static void GuestStartInstagramWatch(void) {
+    if(!GuestRelayoutEnabled ||
+       ![GuestInstallPath() isEqualToString:@"com.burbn.instagram.app"] ||
+       GuestInstagramWatchTimer) return;
+    GuestInstagramWatchTimer=[NSTimer timerWithTimeInterval:0.75 repeats:YES
+        block:^(NSTimer *timer) {
+            if(UIApplication.sharedApplication.applicationState==
+               UIApplicationStateActive) GuestSafeAreaRepairTick();
+        }];
+    [[NSRunLoop mainRunLoop] addTimer:GuestInstagramWatchTimer
+                            forMode:NSDefaultRunLoopMode];
+}
+static void GuestStopInstagramWatch(void) {
+    [GuestInstagramWatchTimer invalidate];
+    GuestInstagramWatchTimer=nil;
 }
 static void GuestScheduleSafeAreaRepair(void) {
     if(!GuestRelayoutEnabled || GuestRelayoutPolling) return;
@@ -887,6 +924,14 @@ static void GuestTakeSnapshot(NSString *reason) {
             UIWindowDidBecomeVisibleNotification,
             @"UIApplicationDidChangeStatusBarOrientationNotification"
         ];
+        if(GuestRelayoutEnabled &&
+           [GuestInstallPath() isEqualToString:@"com.burbn.instagram.app"]) {
+            [center addObserverForName:UIApplicationDidEnterBackgroundNotification
+                object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *notification) {
+                    GuestStopInstagramWatch();
+                }];
+        }
         for(NSString *name in notifications)
             [center addObserverForName:name object:nil queue:NSOperationQueue.mainQueue
                             usingBlock:^(NSNotification *notification) {
@@ -897,9 +942,13 @@ static void GuestTakeSnapshot(NSString *reason) {
                     if([name isEqualToString:UIApplicationWillEnterForegroundNotification])
                         GuestRepairedTop=-1;
                     GuestScheduleSafeAreaRepair();
+                    GuestStartInstagramWatch();
                 }
             }];
-        if(GuestRelayoutEnabled) GuestScheduleSafeAreaRepair();
+        if(GuestRelayoutEnabled) {
+            GuestScheduleSafeAreaRepair();
+            GuestStartInstagramWatch();
+        }
         if(diagnostics) for(NSNumber *delay in @[@1.0,@3.0,@6.0])
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(delay.doubleValue*NSEC_PER_SEC)),
                            dispatch_get_main_queue(),^{
