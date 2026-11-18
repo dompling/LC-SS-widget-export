@@ -3,6 +3,7 @@
 #import "LCOrbitOverlayManager.h"
 #import "LCOrbitEventBus.h"
 #import "LCOrbitStorage.h"
+#import "LCOrbitGuestUIKitDiagnostics.h"
 #import <objc/message.h>
 
 @implementation LCOrbitContext
@@ -137,6 +138,7 @@ __attribute__((constructor)) static void LCOrbitEntry(void) {
     // the switcher belongs exclusively to the host. LiveProcess has separate
     // defaults, so do not depend on a host preference being present here.
     // Classic single-task Guests are not LiveProcess and still bootstrap.
+    [LCOrbitGuestUIKitDiagnostics startInLiveProcess];
     SEL process=NSSelectorFromString(@"isLiveProcess");
     if([NSUserDefaults respondsToSelector:process] &&
        ((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,process)) return;
