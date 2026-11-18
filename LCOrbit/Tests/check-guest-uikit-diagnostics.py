@@ -99,6 +99,18 @@ checks = {
         'saved.header=header' in diag and
         'GuestRestoreTopSurface(&GuestInstagramHeaderOffset)' in diag and
         'GuestInstagramInnerScroll(story,window)' in diag,
+    "Instagram keeps its app-owned 50pt header spacing and restores it":
+        'fabs(original.top-headerHeight)<=5' in diag and
+        'fabs(storyY-original.top)<=5' in diag and
+        'fabs(adjusted.top-original.top)<=4' in diag and
+        'fabs(originalOffset.y+adjusted.top)<=4' in diag and
+        'changed.top+=delta' in diag and
+        'originalOffset.y-delta' in diag and
+        'saved.originalTop=original.top' in diag and
+        'saved.originalOffsetY=originalOffset.y' in diag and
+        'story-did-not-follow-feed-scroll' in diag and
+        'app-header-inset-or-geometry-mismatch' in diag and
+        'scroll.contentInset=inset' in diag,
     "records actual navigation and upper subview geometry":
         "GuestNavigationGeometry" in diag and
         "GuestTopViews" in diag and
