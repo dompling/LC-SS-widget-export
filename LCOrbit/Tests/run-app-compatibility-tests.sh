@@ -9,13 +9,13 @@ import sys
 root,work=map(Path,sys.argv[1:])
 source=(root/'LCOrbit/Core/LCOrbitMultitaskUI.m').read_text()
 parts=[]
-for signature in ['static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL GuestOwnsTopInset(', '+ (BOOL)usesAppTopInsetForBundle:', '+ (void)setUsesAppTopInset:']:
+for signature in ['static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL GuestOwnsTopInset(', 'static BOOL UIKitTopInsetEnhanced(', '+ (BOOL)usesAppTopInsetForBundle:', '+ (void)setUsesAppTopInset:', '+ (NSInteger)topInsetModeForBundle:', '+ (void)setTopInsetMode:']:
     if signature not in source:
         raise SystemExit('Missing compatibility API: '+signature)
     start=source.index(signature)
-    end=source.index('}',start)+1 if signature.startswith('+ (BOOL)') else source.index('\n}',start)+2
+    end=source.index('\n}',start)+2
     parts.append(source[start:end])
-(work/'compatibility.inc').write_text('\n'.join(parts[:2])+'\n@implementation LCOrbitMultitask (Compatibility)\n'+'\n'.join(parts[2:])+'\n@end\n')
+(work/'compatibility.inc').write_text('\n'.join(parts[:3])+'\n@implementation LCOrbitMultitask (Compatibility)\n'+'\n'.join(parts[3:])+'\n@end\n')
 menu=(root/'LCFloatingMenu/LCFloatingMenu.m').read_text()
 start=menu.index('- (void)compatibilityPage:(UIStackView *)stack {')
 page=menu[start:menu.index('\n}',start)+2]
@@ -23,7 +23,7 @@ assert 'InstalledApps()' in page and 'iconViewForApp:app' in page and 'app[@"tit
 assert 'app[@"path"]' in page and 'app[@"bundle"]' not in page, 'Scene bundleId is the relative install path'
 for gate in ['activeWindow', 'isManagingWindows', 'isEnabled', 'visibleApps', 'launchable', 'hidden', 'locked']:
     assert gate not in page, 'Compatibility inventory must not be gated by '+gate
-assert 'usesAppTopInsetForBundle:' in page and 'guestTopInsetChanged:' in page
+assert 'topInsetModeForBundle:' in page and 'guestTopInsetModeChanged:' in page
 assert '@"应用兼容性"' in menu and '@selector(openCompatibility)' in menu
 assert '@"compatibility":@"应用兼容性"' in menu
 assert '当前 App 顶部布局' not in menu
