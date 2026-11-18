@@ -101,9 +101,9 @@ checks = {
         'GuestInstagramInnerScroll(story,window)' in diag,
     "Instagram keeps its app-owned 50pt header spacing and restores it":
         'fabs(original.top-headerHeight)<=5' in diag and
-        'fabs(storyY-original.top)<=5' in diag and
+        'fabs(storyY-original.top)<=1' in diag and
         'fabs(adjusted.top-original.top)<=4' in diag and
-        'fabs(originalOffset.y+adjusted.top)<=4' in diag and
+        'fabs(originalOffset.y+adjusted.top)<=0.75' in diag and
         'changed.top+=delta' in diag and
         'originalOffset.y-delta' in diag and
         'saved.originalTop=original.top' in diag and
