@@ -5886,7 +5886,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 
 - (void)compatibilityPage:(UIStackView *)stack {
-    [self section:@"应用兼容性" sub:@"开启后以兼容性方式启动，由 App 自行避让顶部。关闭时保持默认行为。部分 App 需重新启动后生效。" in:stack];
+    [self section:@"应用兼容性" sub:@"默认：完整窗口由 App 自行避让；UIKit：实验性同步宿主安全区，不压缩 App 画面；物理：将窗口避开顶部，可能压缩部分内容。部分 App 需关闭任务后重启。" in:stack];
     NSArray<NSDictionary *> *apps=InstalledApps();
     NSMutableArray<UIView *> *rows=[NSMutableArray arrayWithCapacity:apps.count];
     for(NSDictionary *app in apps) {
@@ -5903,16 +5903,15 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         name.numberOfLines=1;
         name.lineBreakMode=NSLineBreakByTruncatingTail;
         [row addSubview:name];
-        UISwitch *control=[UISwitch new];
-        control.translatesAutoresizingMaskIntoConstraints=NO;
-        control.onTintColor=FMSwitchGreen();
-        control.on=[LCOrbitMultitask usesAppTopInsetForBundle:bundle];
-        control.enabled=bundle.length>0;
-        control.accessibilityLabel=[title stringByAppendingString:@"，兼容性方式启动"];
-        [control setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-        objc_setAssociatedObject(control,@selector(guestTopInsetChanged:),bundle,OBJC_ASSOCIATION_COPY_NONATOMIC);
-        [control addTarget:self action:@selector(guestTopInsetChanged:) forControlEvents:UIControlEventValueChanged];
-        [row addSubview:control];
+        UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"默认",@"UIKit",@"物理"]];
+        mode.translatesAutoresizingMaskIntoConstraints=NO;
+        mode.selectedSegmentIndex=[LCOrbitMultitask topInsetModeForBundle:bundle];
+        mode.enabled=bundle.length>0;
+        mode.accessibilityLabel=[title stringByAppendingString:@"，顶部安全区模式"];
+        [mode setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        objc_setAssociatedObject(mode,@selector(guestTopInsetModeChanged:),bundle,OBJC_ASSOCIATION_COPY_NONATOMIC);
+        [mode addTarget:self action:@selector(guestTopInsetModeChanged:) forControlEvents:UIControlEventValueChanged];
+        [row addSubview:mode];
         [NSLayoutConstraint activateConstraints:@[
             [row.heightAnchor constraintEqualToConstant:68],
             [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:15],
@@ -5921,9 +5920,10 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
             [icon.heightAnchor constraintEqualToConstant:42],
             [name.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:11],
             [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [name.trailingAnchor constraintLessThanOrEqualToAnchor:control.leadingAnchor constant:-10],
-            [control.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-15],
-            [control.centerYAnchor constraintEqualToAnchor:row.centerYAnchor]
+            [name.trailingAnchor constraintLessThanOrEqualToAnchor:mode.leadingAnchor constant:-8],
+            [mode.widthAnchor constraintEqualToConstant:174],
+            [mode.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
+            [mode.centerYAnchor constraintEqualToAnchor:row.centerYAnchor]
         ]];
         [rows addObject:row];
     }
@@ -5931,9 +5931,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(card) [stack addArrangedSubview:card];
     if(!apps.count) [self note:@"暂无已安装的应用" in:stack];
 }
-- (void)guestTopInsetChanged:(UISwitch *)control {
-    NSString *bundle=objc_getAssociatedObject(control,@selector(guestTopInsetChanged:));
-    if(bundle.length) [LCOrbitMultitask setUsesAppTopInset:control.isOn forBundle:bundle];
+- (void)guestTopInsetModeChanged:(UISegmentedControl *)control {
+    NSString *bundle=objc_getAssociatedObject(control,@selector(guestTopInsetModeChanged:));
+    if(bundle.length) [LCOrbitMultitask setTopInsetMode:control.selectedSegmentIndex forBundle:bundle];
 }
 
 - (void)perAppPage:(UIStackView*)s {
