@@ -44,6 +44,7 @@ xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version
     -framework CoreGraphics -framework Security -install_name '@rpath/LCFloatingMenu.dylib' \
     "$ROOT/LCOrbit/Core/LCOrbitCore.m" \
     "$ROOT/LCOrbit/Core/LCOrbitHost.m" \
+    "$ROOT/LCOrbit/Core/LCOrbitGuestUIKitDiagnostics.m" \
     "$ROOT/LCOrbit/Core/LCOrbitGuestService.m" \
     "$ROOT/LCOrbit/Core/LCOrbitMultitask.m" \
     "$ROOT/LCOrbit/Core/LCOrbitAutomaticPiP.m" \
