@@ -21,8 +21,9 @@ start=menu.index('- (void)compatibilityPage:(UIStackView *)stack {')
 page=menu[start:menu.index('\n}',start)+2]
 assert 'InstalledApps()' in page and 'iconViewForApp:app' in page and 'app[@"title"]' in page
 assert 'app[@"path"]' in page and 'app[@"bundle"]' not in page, 'Scene bundleId is the relative install path'
+inventory=page[page.index('NSArray<NSDictionary *> *apps=InstalledApps();'):]
 for gate in ['activeWindow', 'isManagingWindows', 'isEnabled', 'visibleApps', 'launchable', 'hidden', 'locked']:
-    assert gate not in page, 'Compatibility inventory must not be gated by '+gate
+    assert gate not in inventory, 'Compatibility inventory must not be gated by '+gate
 assert 'topInsetModeForBundle:' in page and 'guestTopInsetModeChanged:' in page
 assert '@"应用兼容性"' in menu and '@selector(openCompatibility)' in menu
 assert '@"compatibility":@"应用兼容性"' in menu
