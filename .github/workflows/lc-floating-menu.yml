@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: floating-menu-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref_name == 'feat/uikit-guest-safe-area' }}
 
 jobs:
   build:
