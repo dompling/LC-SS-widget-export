@@ -16,6 +16,14 @@ def placeholder_signature(text):
     return sorted(m.group(0) for m in FORMAT.finditer(text) if m.group(0) != "%%")
 
 
+def implicit_placeholder_order(text):
+    # printf consumes non-positional arguments in appearance order. Sorting
+    # alone accepts unsafe swaps such as %d/%@ -> %@/%d. Explicit %1$...
+    # specifiers name their arguments and may safely move with the sentence.
+    return [m.group(0) for m in FORMAT.finditer(text)
+            if m.group(0) != "%%" and not re.match(r"%\d+\$", m.group(0))]
+
+
 def run(dictionary_path, inventory_path, output_path):
     data = json.loads(dictionary_path.read_text(encoding="utf-8"))
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
@@ -40,6 +48,9 @@ def run(dictionary_path, inventory_path, output_path):
         assert source != target, f"unchanged translation: {source}"
         assert placeholder_signature(source) == placeholder_signature(target), (
             f"placeholder mismatch: {source!r} -> {target!r}"
+        )
+        assert implicit_placeholder_order(source) == implicit_placeholder_order(target), (
+            f"placeholder argument order mismatch: {source!r} -> {target!r}"
         )
         assert "\x00" not in source and "\x00" not in target
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

@@ -21,6 +21,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m unittest discover -s SideStoreTranslator/scripts -p 'test_*.py' -v
           python3 SideStoreTranslator/scripts/validate_and_embed.py \
             SideStoreTranslator/zh-Hans.json \
             SideStoreTranslator/upstream-key-inventory.json \
@@ -31,6 +32,8 @@ jobs:
           set -euo pipefail
           bash SideStoreTranslator/build.sh dist/SideStoreTranslator.dylib
           xcrun vtool -show-build dist/SideStoreTranslator.dylib
+      - name: Verify SwiftUI guest imports through actual dlopen loading
+        run: bash SideStoreTranslator/tests/run-swiftui-tests.sh
       - name: Upload Actions artifact only (never publish Release on branch push)
         uses: actions/upload-artifact@v4
         with:

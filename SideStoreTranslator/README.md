@@ -5,6 +5,10 @@ Not part of `LCFloatingMenu.dylib`; no floating-menu UI or code changes.
 
 ## Sources and coverage
 
+See [the source comparison and remaining runtime gaps](SOURCE_COMPARISON.md)
+for the current LC-integrated SideStore baseline, semantic review, and the
+reproducible offline audit command. Dictionary coverage is not screen coverage.
+
 - Upstream: [SideStore/SideStore](https://github.com/SideStore/SideStore), branch `develop`.
 - Key inventory: [SideStore localization PR #1495](https://github.com/SideStore/SideStore/pull/1495), commit `a8bfc4945a444d4b844bc1aff2e0c2ae097a2d95`. It was **closed without merge** and contains Korean localization, but no Chinese.
 - `upstream-key-inventory.json`: all extracted source keys, deduplicated, from main `Localizable.xcstrings`, widget, storyboards, and other catalogs.
@@ -54,7 +58,7 @@ matches. For storyboard strings decoded directly from nibs, `UILabel` and
 navigation titles and tab bar titles (including the built-in Settings screen).
 Existing attributed-label font/color styling is retained. All hooks are gated
 by the built-in SideStore context; other guests and the LC home UI are not
-localized. SwiftUI native literal localization is still not guaranteed.
+localized. SwiftUI settings text also has the guest import bridge described below.
 
 ## JSON
 
@@ -89,7 +93,7 @@ Go to **Actions > Build independent SideStore Translator dylib**; run on the `fe
 
 The CI intentionally does **not** create tags or Releases; builds are Actions artifacts only.
 
-## SwiftUI localization bridge (experimental)
+## SwiftUI settings text bridge
 
 The standalone dylib adds a `CFBundleCopyLocalizedString` dyld interpose, loaded
 *before* the built-in SideStore executable. It attempts to translate SwiftUI
@@ -99,13 +103,39 @@ lookups for the main app or the SideStore framework, and the SideStore guest
 context are eligible. Successful interception logs
 `[SideStoreTranslator] CFBundle localization bridge hit.`
 
-**Limits:** This is not a verified SwiftUI universal hook. Depending on
-the iOS version SwiftUI might resolve strings without this API. SwiftUI
-`Text(title)` with a runtime `String`, used by many settings rows in
-`UserCustomizationsView`, displays verbatim text and does not request
-localization at all. A bundle lookup hook cannot translate those rows.
-Full support would require modifying the SideStore SwiftUI source or
-a separately validated Swift ABI hook; this release does neither.
+The CoreFoundation hook alone misses runtime `Text(title)` / `Text(subtitle)`
+and SwiftUI internal localization paths. The settings fix adds Swift wrappers
+for `Text.init<S: StringProtocol>` and the literal/value `LocalizedStringKey`
+initializers. Swift compiles the wrappers with consuming (`__owned`) parameters;
+no Objective-C code calls a Swift function using a C calling convention.
+
+LC uses `dlopen` for its preloader, which does **not** activate a newly loaded
+static `__interpose` table. The fix therefore reuses the repository's litehook
+rebinder to rewrite the three imports in **SideStoreApp.framework only**.
+A dyld image callback visits existing and future images. The plugin's own
+imports stay original, preserving native fallback calls and avoiding recursion.
+The bundled litehook copy has hidden symbols to avoid colliding with LC's copy.
+All lookups still use the SideStore context gate and exact reviewed dictionary.
+
+`status.json` includes `swiftUITextBridgeVersion: 1`; after a successful match,
+`swiftUITextBridgeHit: true` and `swiftUITextBridgeFirstKey` confirm execution.
+The version alone does not prove a successful match or full page coverage.
+
+The regression runner uses real macOS SwiftUI and the production bridge through
+`dlopen(plugin)` then `dlopen(guest)`, in optimized/unoptimized builds, plus
+reverse load order, inactive-context, unrelated-image and repeated ownership
+checks. It does not substitute for an iOS device test. Interpolated keys,
+inlined `Text(verbatim:)`, attributed text and future SwiftUI ABI changes remain
+outside this fix's guarantees. There are no SwiftUI view replacements or IPA
+source modifications.
+
+The same optimized bridge/guest `dlopen` probe also passed on an arm64 iOS 18.6
+simulator with active and inactive translation contexts. This is a runtime check
+of the imported initializers, not an end-to-end LC/SideStore device test.
+
+```sh
+bash SideStoreTranslator/tests/run-swiftui-tests.sh
+```
 
 The extra settings keys are kept in `upstream-key-inventory.json` under
 `supplementalKeys` (key-to-source-path mapping), validated against

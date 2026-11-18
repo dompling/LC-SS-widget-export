@@ -11,6 +11,7 @@
 #import <dlfcn.h>
 #import <string.h>
 #import "STEmbeddedJSON.h"
+#import "STSwiftUIBridge.h"
 
 static NSDictionary<NSString *, NSString *> *STDictionary;
 static BOOL STEnabled = NO;
@@ -33,6 +34,27 @@ static NSString *STTranslation(NSString *key) {
 static NSString *STReplace(NSString *key) {
     NSString *translation = STTranslation(key);
     return translation ?: key;
+}
+NSString *STSwiftUITranslation(NSString *source) {
+    NSString *translated = STTranslation(source);
+    if (!translated) return nil;
+    static dispatch_once_t logged;
+    dispatch_once(&logged, ^{
+        NSLog(@"[SideStoreTranslator] SwiftUI text initializer bridge hit.");
+        const char *home = getenv("LC_HOME_PATH");
+        if (!home || !home[0]) return;
+        NSString *file = [[NSString stringWithUTF8String:home]
+            stringByAppendingPathComponent:@"Documents/SideStoreTranslator/status.json"];
+        NSData *data = [NSData dataWithContentsOfFile:file];
+        id parsed = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![parsed isKindOfClass:NSDictionary.class]) return;
+        NSMutableDictionary *status = [parsed mutableCopy];
+        status[@"swiftUITextBridgeHit"] = @YES;
+        status[@"swiftUITextBridgeFirstKey"] = source;
+        NSData *updated = [NSJSONSerialization dataWithJSONObject:status options:NSJSONWritingPrettyPrinted error:nil];
+        [updated writeToFile:file atomically:YES];
+    });
+    return translated;
 }
 static BOOL STBundleIsAllowed(NSBundle *bundle) {
     if (!bundle) return NO;
@@ -113,6 +135,7 @@ static void STInitializeDictionary(void) {
                                  @"translationCount": @(STDictionary.count),
                                  @"externalJSONFound": @(external != nil),
                                  @"preloadedBeforeLC": @(STPreloadedBeforeLC),
+                                 @"swiftUITextBridgeVersion": @1,
                                  @"checkedAt": @([[NSDate date] timeIntervalSince1970])};
         NSData *statusData = [NSJSONSerialization dataWithJSONObject:status options:NSJSONWritingPrettyPrinted error:nil];
         [statusData writeToFile:[folder stringByAppendingPathComponent:@"status.json"] atomically:YES];
