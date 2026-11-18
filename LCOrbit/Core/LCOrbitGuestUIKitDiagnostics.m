@@ -479,13 +479,40 @@ static void GuestRepairInstagramInnerScroll(UIWindow *window,
     CGFloat y=CGRectGetMinY(beforeHeader);
     CGFloat storyY=CGRectGetMinY(beforeStory);
     UIEdgeInsets original=scroll.contentInset;
+    UIEdgeInsets adjusted=scroll.adjustedContentInset;
     CGPoint originalOffset=scroll.contentOffset;
-    if(!isfinite(top) || top<35 || top>95 || !isfinite(y) ||
-       y< -3 || y>MIN(15,top*.3) ||
-       !isfinite(storyY) || storyY<30 || storyY>110 ||
-       scroll.dragging || scroll.decelerating ||
-       !isfinite(original.top) || original.top>top*.45 ||
-       fabs(originalOffset.y+scroll.adjustedContentInset.top)>4) return;
+    CGFloat headerHeight=CGRectGetHeight(beforeHeader);
+    // Instagram already reserves the 50pt fixed header in the feed's OWN
+    // contentInset (normally top=50, offsetY=-50). This is app-owned spacing,
+    // not a safe-area inset, and must be retained before adding the 59pt gap.
+    // A small/zero top inset here would indicate a different layout entirely.
+    BOOL appHeaderInset=isfinite(original.top) &&
+        original.top>=30 && original.top<=85 &&
+        fabs(original.top-headerHeight)<=5 &&
+        fabs(storyY-original.top)<=5 &&
+        fabs(adjusted.top-original.top)<=4 &&
+        fabs(originalOffset.y+adjusted.top)<=4;
+    BOOL geometryReady=isfinite(top) && top>=35 && top<=95 &&
+        isfinite(y) && y>=-3 && y<=MIN(15,top*.3) &&
+        isfinite(storyY) && storyY>=30 && storyY<=110 &&
+        !scroll.dragging && !scroll.decelerating &&
+        [NSStringFromClass(scroll.class) isEqualToString:
+            @"_IGListScrollWhileAnimateCollectionView"];
+    if(!appHeaderInset || !geometryReady) {
+        if(!GuestInstagramNoScrollReported && isfinite(top) && top>30) {
+            GuestInstagramNoScrollReported=YES;
+            GuestWriteEvent(@"guest-uikit-instagram-inner-scroll-skipped",
+                @{@"reason":@"app-header-inset-or-geometry-mismatch",
+                  @"scrollClass":NSStringFromClass(scroll.class),
+                  @"header":NSStringFromCGRect(beforeHeader),
+                  @"story":NSStringFromCGRect(beforeStory),
+                  @"originalInset":NSStringFromUIEdgeInsets(original),
+                  @"adjustedInset":NSStringFromUIEdgeInsets(adjusted),
+                  @"offset":NSStringFromCGPoint(originalOffset),
+                  @"expectedSafeTop":@(top)});
+        }
+        return;
+    }
     CGFloat delta=top-y;
     NSDictionary *headerChange=GuestCorrectTopSurface(header,window,top,
         @"instagram-home-header",&GuestInstagramHeaderOffset);
