@@ -17,8 +17,8 @@ build = (root / "LCOrbit/Build/build.sh").read_text()
 
 checks = {
     "LiveProcess constructor starts diagnostics before returning":
-        "[LCOrbitGuestUIKitDiagnostics startInLiveProcess]" in core and
-        core.index("[LCOrbitGuestUIKitDiagnostics startInLiveProcess]") <
+        'NSClassFromString(@"LCOrbitGuestUIKitDiagnostics")' in core and
+        core.index('NSSelectorFromString(@"startInLiveProcess")') <
         core.index("if([NSUserDefaults respondsToSelector:process]"),
     "guest diagnostics do not bootstrap the FloatingMenu UI":
         "LCFloatingMenuRegisterWithOrbit" in core and "return;" in core,
@@ -35,7 +35,8 @@ checks = {
     "bounded synchronized output shared between processes":
         "flock(" in diag and "O_NOFOLLOW" in diag and "GuestUIKit" in diag,
     "host runtime export includes Guest measurements":
-        "[LCOrbitGuestUIKitDiagnostics events]" in logger,
+        'NSSelectorFromString(@"events")' in logger and
+        'NSClassFromString(@"LCOrbitGuestUIKitDiagnostics")' in logger,
     "user can enable on host":
         "guestUIKitDiagnosticsChanged:" in menu and
         "[LCOrbitGuestUIKitDiagnostics isEnabled]" in menu,
