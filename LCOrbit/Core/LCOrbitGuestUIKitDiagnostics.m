@@ -247,7 +247,7 @@ static BOOL GuestIsBaiduTopRepair(UIViewController *root) {
         [root isKindOfClass:UINavigationController.class] &&
         [NSStringFromClass(root.class) isEqualToString:@"BDSNavigationController"];
 }
-static void GuestRestoreTopSurface(LCOrbitTopSurfaceOffset **slot) {
+static void GuestRestoreTopSurface(LCOrbitTopSurfaceOffset *__strong *slot) {
     LCOrbitTopSurfaceOffset *saved=*slot;
     UIView *view=saved.view;
     if(view && CGAffineTransformEqualToTransform(view.transform,
@@ -288,7 +288,7 @@ static UIView *GuestBaiduHeaderContainer(UIView *menu,UIView *root,UIWindow *win
 }
 static NSDictionary *GuestCorrectTopSurface(UIView *surface,UIWindow *window,
                                              CGFloat top,NSString *name,
-                                             LCOrbitTopSurfaceOffset **slot) {
+                                             LCOrbitTopSurfaceOffset *__strong *slot) {
     if((*slot).view!=surface) GuestRestoreTopSurface(slot);
     if(!surface || surface.window!=window) {
         GuestRestoreTopSurface(slot);
