@@ -33,10 +33,13 @@ static CGFloat GuestRepairedTop=-1;
 @end
 static LCOrbitTopSurfaceOffset *GuestHeaderOffset;
 static LCOrbitTopSurfaceOffset *GuestNavigationOffset;
+static LCOrbitTopSurfaceOffset *GuestInstagramHeaderOffset;
 @interface LCOrbitInstagramInsetState : NSObject
 @property(nonatomic,weak) UIScrollView *scroll;
 @property(nonatomic,assign) CGFloat originalTop;
 @property(nonatomic,assign) CGFloat appliedTop;
+@property(nonatomic,assign) CGFloat originalOffsetY;
+@property(nonatomic,weak) UIView *header;
 @end
 @implementation LCOrbitInstagramInsetState
 @end
@@ -364,7 +367,8 @@ static void GuestRepairBaiduTopSurfaces(UIWindow *window,
 }
 // Instagram's outer IGGestureCoordinatingCollectionView is a horizontal pager
 // (e.g. offset {393,0}, size {786,852}). It must never receive a vertical inset.
-// Instead, correct an *inner* vertical scroll view that owns the homepage header.
+// The fixed home header is a sibling of the feed. Locate the story tray's
+// vertical scroll owner independently and move only both top components.
 static UIView *GuestFindInstagramHeader(UIView *node,UIWindow *window,
         NSUInteger depth,NSUInteger *visited) {
     if(!node || depth>24 || ++(*visited)>1400 || node.hidden ||
@@ -399,8 +403,21 @@ static BOOL GuestIsVerticalInstagramScroll(UIScrollView *scroll) {
                  ((UICollectionView *)scroll).collectionViewLayout).scrollDirection==
                     UICollectionViewScrollDirectionVertical));
 }
-static UIScrollView *GuestInstagramInnerScroll(UIView *header,UIWindow *window) {
-    for(UIView *ancestor=header.superview;ancestor && ancestor!=window;
+static UIView *GuestFindInstagramStoryTray(UIView *node,UIWindow *window,
+        NSUInteger depth,NSUInteger *visited) {
+    if(!node || depth>24 || ++(*visited)>1800 || node.hidden ||
+       node.alpha<.05 || node.window!=window) return nil;
+    if([NSStringFromClass(node.class) isEqualToString:
+            @"IGStoryTrayCollectionViewCell"]) return node;
+    for(UIView *child in node.subviews) {
+        UIView *found=GuestFindInstagramStoryTray(child,window,depth+1,visited);
+        if(found) return found;
+    }
+    return nil;
+}
+static UIScrollView *GuestInstagramInnerScroll(UIView *story,UIWindow *window) {
+    if(!story) return nil;
+    for(UIView *ancestor=story.superview;ancestor && ancestor!=window;
         ancestor=ancestor.superview)
         if([ancestor isKindOfClass:UIScrollView.class] &&
            GuestIsVerticalInstagramScroll((UIScrollView *)ancestor))
@@ -408,20 +425,23 @@ static UIScrollView *GuestInstagramInnerScroll(UIView *header,UIWindow *window) 
     return nil;
 }
 static void GuestRestoreInstagramInset(void) {
+    GuestRestoreTopSurface(&GuestInstagramHeaderOffset);
     LCOrbitInstagramInsetState *saved=GuestInstagramInset;
     GuestInstagramInset=nil;
     UIScrollView *scroll=saved.scroll;
     if(!scroll) return;
     CGFloat expected=saved.originalTop+saved.appliedTop;
-    // Respect app-owned modifications made after our correction.
+    // Respect app-owned modifications after the correction.
     if(fabs(scroll.contentInset.top-expected)>1) return;
     UIEdgeInsets inset=scroll.contentInset;
     inset.top=saved.originalTop;
-    [UIView performWithoutAnimation:^{scroll.contentInset=inset;}];
-    if(!scroll.dragging && !scroll.decelerating &&
-       fabs(scroll.contentOffset.y+expected)<3)
-        [scroll setContentOffset:CGPointMake(scroll.contentOffset.x,-inset.top)
-                       animated:NO];
+    [UIView performWithoutAnimation:^{
+        scroll.contentInset=inset;
+        if(!scroll.dragging && !scroll.decelerating &&
+           fabs(scroll.contentOffset.y-(saved.originalOffsetY-saved.appliedTop))<3)
+            [scroll setContentOffset:CGPointMake(
+                scroll.contentOffset.x,saved.originalOffsetY) animated:NO];
+    }];
 }
 static void GuestRepairInstagramInnerScroll(UIWindow *window,
                                             UIViewController *root,CGFloat top) {
@@ -431,74 +451,87 @@ static void GuestRepairInstagramInnerScroll(UIWindow *window,
     if(!enabled) {GuestRestoreInstagramInset();return;}
     NSUInteger visited=0;
     UIView *header=GuestFindInstagramHeader(root.viewIfLoaded,window,0,&visited);
-    if(!header) return;  // Not the home tab, or content still loading.
-    UIScrollView *scroll=GuestInstagramInnerScroll(header,window);
-    if(GuestInstagramInset && GuestInstagramInset.scroll!=scroll)
+    NSUInteger storyVisited=0;
+    UIView *story=GuestFindInstagramStoryTray(root.viewIfLoaded,window,
+                                              0,&storyVisited);
+    UIScrollView *scroll=GuestInstagramInnerScroll(story,window);
+    LCOrbitInstagramInsetState *saved=GuestInstagramInset;
+    if(saved && (saved.scroll!=scroll || saved.header!=header ||
+        fabs(scroll.contentInset.top-(saved.originalTop+saved.appliedTop))>1 ||
+        !CGAffineTransformEqualToTransform(header.transform,
+                  CGAffineTransformMakeTranslation(0,saved.appliedTop)))) {
         GuestRestoreInstagramInset();
-    if(!scroll) {
-        if(!GuestInstagramNoScrollReported) {
+        saved=nil;
+    }
+    if(!header || !story || !scroll) {
+        // No app-wide override: only report the missing vertical owner.
+        if(!GuestInstagramNoScrollReported && header && story) {
             GuestInstagramNoScrollReported=YES;
             GuestWriteEvent(@"guest-uikit-instagram-inner-scroll-skipped",
-                            @{@"reason":@"no-vertical-header-ancestor",
-                              @"visited":@(visited)});
+                @{@"reason":@"no-vertical-story-ancestor",
+                  @"headerVisited":@(visited),@"storyVisited":@(storyVisited)});
         }
         return;
     }
-    if(GuestInstagramInset) {
-        // Keep the fix only while the app retains our inset unchanged.
-        CGFloat expected=GuestInstagramInset.originalTop+
-                         GuestInstagramInset.appliedTop;
-        if(fabs(scroll.contentInset.top-expected)>1) GuestInstagramInset=nil;
-        return;
-    }
-    CGRect before=[header convertRect:header.bounds toView:window];
-    CGFloat y=CGRectGetMinY(before);
-    if(!isfinite(top) || top<35 || top>95 || !isfinite(y) || y< -3 ||
-       y>MIN(15,top*.3) || scroll.dragging || scroll.decelerating ||
-       !isfinite(scroll.contentInset.top) ||
-       scroll.contentInset.top>top*.45 ||
-       fabs(scroll.contentOffset.y+scroll.adjustedContentInset.top)>4) return;
-    CGFloat delta=top-y;
+    if(saved) return;
+    CGRect beforeHeader=[header convertRect:header.bounds toView:window];
+    CGRect beforeStory=[story convertRect:story.bounds toView:window];
+    CGFloat y=CGRectGetMinY(beforeHeader);
+    CGFloat storyY=CGRectGetMinY(beforeStory);
     UIEdgeInsets original=scroll.contentInset;
-    CGPoint offset=scroll.contentOffset;
+    CGPoint originalOffset=scroll.contentOffset;
+    if(!isfinite(top) || top<35 || top>95 || !isfinite(y) ||
+       y< -3 || y>MIN(15,top*.3) ||
+       !isfinite(storyY) || storyY<30 || storyY>110 ||
+       scroll.dragging || scroll.decelerating ||
+       !isfinite(original.top) || original.top>top*.45 ||
+       fabs(originalOffset.y+scroll.adjustedContentInset.top)>4) return;
+    CGFloat delta=top-y;
+    NSDictionary *headerChange=GuestCorrectTopSurface(header,window,top,
+        @"instagram-home-header",&GuestInstagramHeaderOffset);
+    if(!headerChange) return;
     UIEdgeInsets changed=original;
     changed.top+=delta;
     [UIView performWithoutAnimation:^{
         scroll.contentInset=changed;
+        [scroll setContentOffset:CGPointMake(originalOffset.x,
+                originalOffset.y-delta) animated:NO];
         [scroll layoutIfNeeded];
-        // UIKit might or might not adjust the current offset after inset changes.
-        CGFloat now=CGRectGetMinY([header convertRect:header.bounds toView:window]);
-        CGFloat residual=top-now;
-        if(isfinite(residual) && fabs(residual)>1 && fabs(residual)<top+5)
-            [scroll setContentOffset:
-                CGPointMake(scroll.contentOffset.x,scroll.contentOffset.y-residual)
-                animated:NO];
     }];
-    CGRect after=[header convertRect:header.bounds toView:window];
-    if(!isfinite(CGRectGetMinY(after)) ||
-       fabs(CGRectGetMinY(after)-top)>4) {
-        // If header is fixed outside scroll content, do not leave a broken inset.
+    CGRect afterHeader=[header convertRect:header.bounds toView:window];
+    CGRect afterStory=[story convertRect:story.bounds toView:window];
+    if(!isfinite(CGRectGetMinY(afterStory)) ||
+       fabs(CGRectGetMinY(afterHeader)-top)>4 ||
+       fabs((CGRectGetMinY(afterStory)-storyY)-delta)>4) {
+        // Never leave a half-applied fix or a shifted tab/pager.
         [UIView performWithoutAnimation:^{
             scroll.contentInset=original;
-            [scroll setContentOffset:offset animated:NO];
+            [scroll setContentOffset:originalOffset animated:NO];
         }];
+        GuestRestoreTopSurface(&GuestInstagramHeaderOffset);
         GuestWriteEvent(@"guest-uikit-instagram-inner-scroll-skipped",
-                        @{@"reason":@"header-did-not-follow-scroll",
-                          @"before":NSStringFromCGRect(before),
-                          @"after":NSStringFromCGRect(after)});
+            @{@"reason":@"story-did-not-follow-feed-scroll",
+              @"storyBefore":NSStringFromCGRect(beforeStory),
+              @"storyAfter":NSStringFromCGRect(afterStory),
+              @"headerBefore":NSStringFromCGRect(beforeHeader),
+              @"headerAfter":NSStringFromCGRect(afterHeader)});
         return;
     }
-    LCOrbitInstagramInsetState *saved=[LCOrbitInstagramInsetState new];
+    saved=[LCOrbitInstagramInsetState new];
     saved.scroll=scroll;
+    saved.header=header;
     saved.originalTop=original.top;
+    saved.originalOffsetY=originalOffset.y;
     saved.appliedTop=delta;
     GuestInstagramInset=saved;
     GuestWriteEvent(@"guest-uikit-instagram-inner-scroll-corrected",
         @{@"scrollClass":NSStringFromClass(scroll.class),
           @"originalInset":NSStringFromUIEdgeInsets(original),
           @"adjustedInset":NSStringFromUIEdgeInsets(scroll.adjustedContentInset),
-          @"before":NSStringFromCGRect(before),
-          @"after":NSStringFromCGRect(after),
+          @"headerBefore":NSStringFromCGRect(beforeHeader),
+          @"headerAfter":NSStringFromCGRect(afterHeader),
+          @"storyBefore":NSStringFromCGRect(beforeStory),
+          @"storyAfter":NSStringFromCGRect(afterStory),
           @"windowSafeTop":@(top)});
 }
 // A remote scene can be activated with 0pt insets and acquire its real
@@ -681,7 +714,29 @@ static NSDictionary *GuestInstagramScrollGeometry(UIWindow *window) {
             [chain addObject:entry];
         }
         result[@"homeHeaderAncestors"]=chain;
-        result[@"innerVerticalScrollFound"]=@(GuestInstagramInnerScroll(header,window)!=nil);
+    }
+    NSUInteger storyVisited=0;
+    UIView *story=GuestFindInstagramStoryTray(root,window,0,&storyVisited);
+    if(story) {
+        NSMutableArray *storyChain=[NSMutableArray array];
+        for(UIView *node=story;node && node!=window &&
+            storyChain.count<16;node=node.superview) {
+            NSMutableDictionary *entry=[@{
+                @"class":NSStringFromClass(node.class),
+                @"frame":NSStringFromCGRect(
+                    [node convertRect:node.bounds toView:window])
+            } mutableCopy];
+            if([node isKindOfClass:UIScrollView.class]) {
+                UIScrollView *sv=(UIScrollView *)node;
+                entry[@"contentSize"]=NSStringFromCGSize(sv.contentSize);
+                entry[@"contentOffset"]=NSStringFromCGPoint(sv.contentOffset);
+                entry[@"adjustedInset"]=NSStringFromUIEdgeInsets(sv.adjustedContentInset);
+                entry[@"verticalCandidate"]=@(GuestIsVerticalInstagramScroll(sv));
+            }
+            [storyChain addObject:entry];
+        }
+        result[@"storyTrayAncestors"]=storyChain;
+        result[@"innerVerticalScrollFound"]=@(GuestInstagramInnerScroll(story,window)!=nil);
     }
 
     return result;
