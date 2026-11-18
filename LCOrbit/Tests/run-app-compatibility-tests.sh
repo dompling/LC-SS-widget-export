@@ -13,7 +13,7 @@ for signature in ['static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL Guest
     if signature not in source:
         raise SystemExit('Missing compatibility API: '+signature)
     start=source.index(signature)
-    end=source.index('\n}',start)+2
+    end=source.index('}',start)+1 if signature.startswith('+ (BOOL)') or signature.startswith('+ (NSInteger)') else source.index('\n}',start)+2
     parts.append(source[start:end])
 (work/'compatibility.inc').write_text('\n'.join(parts[:3])+'\n@implementation LCOrbitMultitask (Compatibility)\n'+'\n'.join(parts[3:])+'\n@end\n')
 menu=(root/'LCFloatingMenu/LCFloatingMenu.m').read_text()
