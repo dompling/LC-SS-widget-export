@@ -7,8 +7,10 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 core = (root / "LCOrbit/Core/LCOrbitCore.m").read_text()
-diag = (root / "LCOrbit/Core/LCOrbitGuestUIKitDiagnostics.m").read_text()
-header = (root / "LCOrbit/Core/LCOrbitGuestUIKitDiagnostics.h").read_text()
+diag_file = root / "LCOrbit/Core/LCOrbitGuestUIKitDiagnostics.m"
+header_file = root / "LCOrbit/Core/LCOrbitGuestUIKitDiagnostics.h"
+diag = diag_file.read_text() if diag_file.exists() else ""
+header = header_file.read_text() if header_file.exists() else ""
 logger = (root / "LCOrbit/Core/LCOrbitLog.m").read_text()
 menu = (root / "LCFloatingMenu/LCFloatingMenu.m").read_text()
 build = (root / "LCOrbit/Build/build.sh").read_text()
