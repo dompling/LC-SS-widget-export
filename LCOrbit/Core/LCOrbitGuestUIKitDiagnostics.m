@@ -22,6 +22,18 @@ static __weak UIWindow *GuestRelayoutWindow;
 static __weak UIViewController *GuestRelayoutRoot;
 static CGFloat GuestRepairedTop=-1;
 
+// Per-Guest, per-visible-view corrections. Keep weak references so navigation
+// transitions can discard their views. The original transforms are restored
+// on rotation, replacement, or when UIKit itself starts honoring safe areas.
+@interface LCOrbitTopSurfaceOffset : NSObject
+@property(nonatomic,weak) UIView *view;
+@property(nonatomic,assign) CGFloat applied;
+@end
+@implementation LCOrbitTopSurfaceOffset
+@end
+static LCOrbitTopSurfaceOffset *GuestHeaderOffset;
+static LCOrbitTopSurfaceOffset *GuestNavigationOffset;
+
 // LC removes the one-shot "selected" default before shared tweaks load.
 // The installed app folder remains available after NSBundle is replaced.
 static NSString *GuestInstallPath(void) {
@@ -226,6 +238,120 @@ static UIWindow *GuestVisibleWindow(void) {
            window.bounds.size.width>40 && window.bounds.size.height>40) return window;
     return nil;
 }
+// Baidu's custom tab/header is absolutely positioned at y=0 even though its
+// UIWindow and child views report a 59pt safe top. Changing the whole scene
+// compresses content; only correct these observed top-only surfaces.
+static BOOL GuestIsBaiduTopRepair(UIViewController *root) {
+    return GuestRelayoutEnabled &&
+        [GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"] &&
+        [root isKindOfClass:UINavigationController.class] &&
+        [NSStringFromClass(root.class) isEqualToString:@"BDSNavigationController"];
+}
+static void GuestRestoreTopSurface(LCOrbitTopSurfaceOffset **slot) {
+    LCOrbitTopSurfaceOffset *saved=*slot;
+    UIView *view=saved.view;
+    if(view && CGAffineTransformEqualToTransform(view.transform,
+           CGAffineTransformMakeTranslation(0,saved.applied))) {
+        [UIView performWithoutAnimation:^{view.transform=CGAffineTransformIdentity;}];
+    }
+    *slot=nil;
+}
+static void GuestRestoreBaiduSurfaces(void) {
+    GuestRestoreTopSurface(&GuestHeaderOffset);
+    GuestRestoreTopSurface(&GuestNavigationOffset);
+}
+static UIView *GuestFindBaiduSlideMenu(UIView *node,UIWindow *window,
+                                       NSUInteger depth,NSUInteger *visited) {
+    if(!node || depth>17 || ++(*visited)>900 || node.hidden ||
+       node.alpha<.05 || node.window!=window) return nil;
+    if([NSStringFromClass(node.class) isEqualToString:@"BDSSlideMenuMain"])
+        return node;
+    for(UIView *child in node.subviews) {
+        UIView *found=GuestFindBaiduSlideMenu(child,window,depth+1,visited);
+        if(found) return found;
+    }
+    return nil;
+}
+static UIView *GuestBaiduHeaderContainer(UIView *menu,UIView *root,UIWindow *window) {
+    // Reuse the same corrected ancestor after its visual frame moves to y=59.
+    UIView *saved=GuestHeaderOffset.view;
+    for(UIView *node=menu;node && node!=root;node=node.superview)
+        if(node==saved) return saved;
+    UIView *best=nil;
+    for(UIView *node=menu;node && node!=root;node=node.superview) {
+        CGRect frame=[node convertRect:node.bounds toView:window];
+        if(CGRectGetHeight(frame)>=30 && CGRectGetHeight(frame)<=85 &&
+           CGRectGetWidth(frame)>=window.bounds.size.width*.85 &&
+           fabs(CGRectGetMinY(frame))<=5) best=node;
+    }
+    return best;
+}
+static NSDictionary *GuestCorrectTopSurface(UIView *surface,UIWindow *window,
+                                             CGFloat top,NSString *name,
+                                             LCOrbitTopSurfaceOffset **slot) {
+    if((*slot).view!=surface) GuestRestoreTopSurface(slot);
+    if(!surface || surface.window!=window) {
+        GuestRestoreTopSurface(slot);
+        return nil;
+    }
+    LCOrbitTopSurfaceOffset *saved=*slot;
+    CGAffineTransform expected=saved?
+        CGAffineTransformMakeTranslation(0,saved.applied):CGAffineTransformIdentity;
+    // Never overwrite transforms owned by app transitions/animations.
+    if(!CGAffineTransformEqualToTransform(surface.transform,expected)) {
+        *slot=nil;
+        return nil;
+    }
+    CGRect before=[surface convertRect:surface.bounds toView:window];
+    CGFloat baseY=CGRectGetMinY(before)-(saved?saved.applied:0);
+    // Correct only full-width top strips (44/48pt), not the body of the app.
+    BOOL eligible=isfinite(top) && top>=30 && top<=90 && isfinite(baseY) &&
+        baseY>=-5 && baseY<=MIN(22,top*.4) &&
+        CGRectGetHeight(before)>=30 && CGRectGetHeight(before)<=85 &&
+        CGRectGetWidth(before)>=window.bounds.size.width*.85;
+    if(!eligible) {
+        GuestRestoreTopSurface(slot);
+        return nil;
+    }
+    CGFloat offset=top-baseY;
+    if(saved && fabs(saved.applied-offset)<.5) return nil;
+    if(!saved) {
+        saved=[LCOrbitTopSurfaceOffset new];
+        saved.view=surface;
+        *slot=saved;
+    }
+    saved.applied=offset;
+    [UIView performWithoutAnimation:^{
+        surface.transform=CGAffineTransformMakeTranslation(0,offset);
+    }];
+    return @{@"component":name,@"safeTop":@(top),@"offset":@(offset),
+        @"before":NSStringFromCGRect(before),
+        @"after":NSStringFromCGRect([surface convertRect:surface.bounds toView:window]),
+        @"class":NSStringFromClass(surface.class)};
+}
+static void GuestRepairBaiduTopSurfaces(UIWindow *window,
+                                       UIViewController *root,CGFloat top) {
+    if(!GuestIsBaiduTopRepair(root)) {
+        GuestRestoreBaiduSurfaces();
+        return;
+    }
+    NSUInteger visited=0;
+    UIView *menu=GuestFindBaiduSlideMenu(root.viewIfLoaded,window,0,&visited);
+    UIView *header=menu?GuestBaiduHeaderContainer(menu,root.viewIfLoaded,window):nil;
+    UINavigationBar *bar=((UINavigationController *)root).navigationBar;
+    if(bar.window!=window || bar.hidden ||
+       ((UINavigationController *)root).navigationBarHidden) bar=nil;
+    NSMutableArray *changes=[NSMutableArray arrayWithCapacity:2];
+    NSDictionary *headerChange=GuestCorrectTopSurface(header,window,top,
+        @"baidu-slide-menu-header",&GuestHeaderOffset);
+    if(headerChange) [changes addObject:headerChange];
+    NSDictionary *barChange=GuestCorrectTopSurface(bar,window,top,
+        @"baidu-navigation-bar",&GuestNavigationOffset);
+    if(barChange) [changes addObject:barChange];
+    if(changes.count) GuestWriteEvent(@"guest-uikit-top-surfaces-corrected",
+        @{@"changes":changes,@"windowSafeInsets":
+            NSStringFromUIEdgeInsets(window.safeAreaInsets)});
+}
 // A remote scene can be activated with 0pt insets and acquire its real
 // Dynamic-Island safe area one UIKit pass later. Some custom navigation
 // controllers retain the first geometry. Re-request layout once the Guest's
@@ -237,16 +363,28 @@ static void GuestSafeAreaRepairTick(void) {
     UIWindow *window=GuestVisibleWindow();
     UIViewController *root=window.rootViewController;
     UIView *view=root.viewIfLoaded;
-    if(!window || !root || !view || view.window!=window) return;
+    if(!window || !root || !view || view.window!=window) {
+        GuestRestoreBaiduSurfaces();
+        return;
+    }
     UIWindowScene *scene=window.windowScene;
-    if(!scene || !UIInterfaceOrientationIsPortrait(scene.interfaceOrientation)) return;
+    if(!scene || !UIInterfaceOrientationIsPortrait(scene.interfaceOrientation)) {
+        GuestRestoreBaiduSurfaces();
+        return;
+    }
     if(GuestRelayoutWindow!=window || GuestRelayoutRoot!=root) {
         GuestRelayoutWindow=window;GuestRelayoutRoot=root;GuestRepairedTop=-1;
     }
     CGFloat top=window.safeAreaInsets.top;
     CGFloat rootTop=view.safeAreaInsets.top;
     if(!isfinite(top) || !isfinite(rootTop) || top<1 || rootTop<1 ||
-       fabs(top-rootTop)>2 || fabs(top-GuestRepairedTop)<.5) return;
+       fabs(top-rootTop)>2) return;
+    // A later app layout may recreate its custom header without changing the
+    // safe-area number; the short bounded polling still checks for new views.
+    if(fabs(top-GuestRepairedTop)<.5) {
+        GuestRepairBaiduTopSurfaces(window,root,top);
+        return;
+    }
     GuestRepairedTop=top;
     __weak UIWindow *weakWindow=window;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -270,6 +408,7 @@ static void GuestSafeAreaRepairTick(void) {
             [visible setNeedsLayout];
         }
         [view layoutIfNeeded];
+        GuestRepairBaiduTopSurfaces(strongWindow,root,top);
         if([LCOrbitGuestUIKitDiagnostics isEnabled])
             GuestWriteEvent(@"guest-uikit-safe-area-relayout",@{
                 @"windowSafeInsets":NSStringFromUIEdgeInsets(strongWindow.safeAreaInsets),
@@ -282,7 +421,7 @@ static void GuestScheduleSafeAreaRepair(void) {
     if(!GuestRelayoutEnabled || GuestRelayoutPolling) return;
     GuestRelayoutPolling=YES;
     // Bounded startup/foreground probes. No permanent timer or global hook.
-    NSArray<NSNumber *> *delays=@[@0.0,@0.2,@0.5,@1.0,@1.8,@3.0];
+    NSArray<NSNumber *> *delays=@[@0.0,@0.2,@0.5,@1.0,@1.8,@3.0,@5.0];
     for(NSUInteger index=0;index<delays.count;index++) {
         NSNumber *delay=delays[index];
         BOOL last=index==delays.count-1;
