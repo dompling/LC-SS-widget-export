@@ -5,7 +5,7 @@ run-name: FloatingMenu ${{ github.ref_type == 'tag' && 'release' || 'build' }} -
 # A semantic-version tag is pushed only when a formal release is requested.
 on:
   push:
-    branches: [lcss-original]
+    branches: [lcss-original, feat/uikit-guest-safe-area]
     tags:
       - '*.*.*'
     paths:
