@@ -1,6 +1,7 @@
 #import "LCOrbitMultitask.h"
 #import "LCOrbitHost.h"
 #import "LCOrbitLog.h"
+#import "LCOrbitGuestUIKitDiagnostics.h"
 #import "LCOrbitStorage.h"
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
@@ -861,6 +862,7 @@ static void PiPStopped(id manager,SEL selector,id controller) {
     for(UIViewController *window in [self windows])
         if([[(id)SceneController(window) bundleId] isEqual:bundle])
             objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [LCOrbitGuestUIKitDiagnostics synchronizeUIKitModesToGuests];
     [LCOrbitLog appendEvent:@"guest-top-inset-mode"
                    details:@{@"guestBundle":bundle,@"mode":@(mode),
                        @"physicalTopAvoidanceEnabled":@(mode==2),
@@ -875,6 +877,7 @@ static void PiPStopped(id manager,SEL selector,id controller) {
     for(UIViewController *window in [self windows])
         if([[(id)SceneController(window) bundleId] isEqual:bundle])
             objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [LCOrbitGuestUIKitDiagnostics synchronizeUIKitModesToGuests];
     [LCOrbitLog appendEvent:@"guest-top-inset-mode" details:@{@"guestBundle":bundle,@"physicalTopAvoidanceEnabled":@(enabled),@"appOwnsTopInset":@(GuestOwnsTopInset(bundle))} kind:@"runtime"];
     [self refreshPresentation];
 }

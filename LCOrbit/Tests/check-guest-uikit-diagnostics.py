@@ -14,6 +14,7 @@ header = header_file.read_text() if header_file.exists() else ""
 logger = (root / "LCOrbit/Core/LCOrbitLog.m").read_text()
 menu = (root / "LCFloatingMenu/LCFloatingMenu.m").read_text()
 build = (root / "LCOrbit/Build/build.sh").read_text()
+ui = (root / "LCOrbit/Core/LCOrbitMultitaskUI.m").read_text()
 
 checks = {
     "LiveProcess constructor starts diagnostics before returning":
@@ -33,10 +34,18 @@ checks = {
     "top controls record types and frames not text":
         "NSStringFromCGRect" in diag and "NSStringFromClass" in diag and
         ".text" not in diag and "drawViewHierarchy" not in diag,
-    "safe-area repair scoped to the selected UIKit-mode Guest":
-        'objectForKey:@"selected"' in diag and
+    "safe-area repair uses installed App folder after selected is removed":
+        "NSBundle.mainBundle.bundlePath.lastPathComponent" in diag and
+        'objectForKey:@"selected"' not in diag and
         'uikitTopInset.' in diag and 'guestOwnTopInset.' in diag and
         "GuestRelayoutEnabled=GuestUIKitModeSelected()" in diag,
+    "host synchronizes enabled UIKit App modes to LiveProcess":
+        "synchronizeUIKitModesToGuests" in diag and
+        "synchronizeUIKitModesToGuests" in core and
+        "synchronizeUIKitModesToGuests" in ui and
+        "enabledPaths" in diag and
+        "GuestUIKitModeFile()" in diag,
+
     "repair only after window and root report real insets":
         "if(!isfinite(top) || !isfinite(rootTop) || top<1 || rootTop<1" in diag and
         "fabs(top-rootTop)>2" in diag and

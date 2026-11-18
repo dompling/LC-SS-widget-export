@@ -7,6 +7,8 @@ NS_ASSUME_NONNULL_BEGIN
 // User must opt in from LC host settings and restart the guest process.
 @interface LCOrbitGuestUIKitDiagnostics : NSObject
 + (BOOL)isEnabled;
+// Host-only mirror for the sandboxed LiveProcess, containing no personal data.
++ (void)synchronizeUIKitModesToGuests;
 + (void)setEnabled:(BOOL)enabled;
 + (void)startInLiveProcess;
 + (NSArray<NSDictionary *> *)events;

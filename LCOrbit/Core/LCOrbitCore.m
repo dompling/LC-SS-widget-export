@@ -147,6 +147,8 @@ __attribute__((constructor)) static void LCOrbitEntry(void) {
        ((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,process)) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         LCOrbitCore *core=[LCOrbitCore sharedCore];
+        if([LCOrbitHost isHostUI])
+            [LCOrbitGuestUIKitDiagnostics synchronizeUIKitModesToGuests];
         LCFloatingMenuRegisterWithOrbit(core);
         [core start];
     });

@@ -22,13 +22,40 @@ static __weak UIWindow *GuestRelayoutWindow;
 static __weak UIViewController *GuestRelayoutRoot;
 static CGFloat GuestRepairedTop=-1;
 
+// LC removes the one-shot "selected" default before shared tweaks load.
+// The installed app folder remains available after NSBundle is replaced.
+static NSString *GuestInstallPath(void) {
+    NSString *name=NSBundle.mainBundle.bundlePath.lastPathComponent;
+    return [name isKindOfClass:NSString.class] && [name hasSuffix:@".app"]?name:nil;
+}
+static NSString *GuestUIKitModeFile(void) {
+    NSString *group=[LCOrbitHost appGroupPath];
+    return group.length?[[group stringByAppendingPathComponent:@"LiveContainer/LCOrbit"]
+        stringByAppendingPathComponent:@"guest-uikit-modes.json"]:nil;
+}
 static BOOL GuestUIKitModeSelected(void) {
-    // LiveProcess passes LC's relative installation path in "selected".
-    // The host's preference is keyed by this path, NOT CFBundleIdentifier.
-    id selected=[[LCOrbitHost hostDefaults] objectForKey:@"selected"];
-    if(![selected isKindOfClass:NSString.class] || ![selected length] ||
-       ![LCOrbitHost guestInfo]) return NO;
-    NSString *path=selected;
+    if(![LCOrbitHost guestInfo]) return NO;
+    NSString *path=GuestInstallPath();
+    if(!path.length) return NO;
+    // A LiveProcess sandbox must not read the host's private Documents.
+    // Only opt-in installation names are mirrored into the shared App Group.
+    NSString *file=GuestUIKitModeFile();
+    struct stat state;
+    if(file.length && lstat(file.fileSystemRepresentation,&state)==0 &&
+       S_ISREG(state.st_mode) && state.st_size>0 && state.st_size<=65536) {
+        NSData *data=[NSData dataWithContentsOfFile:file];
+        NSDictionary *doc=data?[NSJSONSerialization JSONObjectWithData:data
+            options:0 error:nil]:nil;
+        if([doc isKindOfClass:NSDictionary.class] &&
+           [doc[@"schemaVersion"] isEqual:@1] &&
+           [doc[@"enabledPaths"] isKindOfClass:NSDictionary.class]) {
+            id enabled=doc[@"enabledPaths"][path];
+            return [enabled isKindOfClass:NSNumber.class] && [enabled boolValue];
+        }
+        return NO;
+    }
+    // Older installations without the mirror can still read a shared host
+    // configuration if their container permissions happen to allow it.
     id physical=[LCOrbitStorage objectForKey:
         [@"guestOwnTopInset." stringByAppendingString:path] module:@"LCFloatingMenu"];
     id uikit=[LCOrbitStorage objectForKey:
@@ -301,6 +328,7 @@ static void GuestTakeSnapshot(NSString *reason) {
         @"topViews":topViews,
         @"navigation":GuestNavigationGeometry(window),
         @"uikitRelayoutEnabled":@(GuestRelayoutEnabled),
+        @"installPath":GuestInstallPath()?:@"unknown",
         @"orientation":@(scene?scene.interfaceOrientation:0),
         @"statusBarHidden":@(scene?scene.statusBarManager.statusBarHidden:YES),
         @"statusBarFrame":scene?NSStringFromCGRect(scene.statusBarManager.statusBarFrame):@"unknown"
@@ -310,6 +338,28 @@ static void GuestTakeSnapshot(NSString *reason) {
     GuestWriteEvent(@"guest-uikit-snapshot",details);
 }
 @implementation LCOrbitGuestUIKitDiagnostics
++ (void)synchronizeUIKitModesToGuests {
+    if(![LCOrbitHost isHostUI] || !GuestEnsureDirectory()) return;
+    NSDictionary *prefs=[[LCOrbitStorage preferences] dictionaryRepresentation];
+    NSString *prefix=@"LCFloatingMenu.uikitTopInset.";
+    NSMutableDictionary<NSString *,NSNumber *> *enabled=[NSMutableDictionary dictionary];
+    for(id key in prefs) {
+        if(![key isKindOfClass:NSString.class] || ![key hasPrefix:prefix]) continue;
+        NSString *path=[key substringFromIndex:prefix.length];
+        id value=prefs[key];
+        if(!path.length || ![path hasSuffix:@".app"] ||
+           ![value isKindOfClass:NSNumber.class] || ![value boolValue]) continue;
+        id physical=prefs[ [@"LCFloatingMenu.guestOwnTopInset." stringByAppendingString:path] ];
+        if(!([physical isKindOfClass:NSNumber.class] && [physical boolValue]))
+            enabled[path]=@YES;
+    }
+    NSData *data=[NSJSONSerialization dataWithJSONObject:
+        @{@"schemaVersion":@1,@"enabledPaths":enabled}
+        options:NSJSONWritingSortedKeys error:nil];
+    if(data.length && data.length<=65536)
+        [data writeToFile:GuestUIKitModeFile()
+            options:NSDataWritingAtomic error:nil];
+}
 + (BOOL)isEnabled {
     return GuestIsRegularFile(GuestDiagnosticEnablePath());
 }
