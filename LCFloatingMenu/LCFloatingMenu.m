@@ -18,6 +18,7 @@
 #import "../LCOrbit/Core/LCOrbitTweakSync.h"
 #import "../LCOrbit/Core/LCOrbitSharedTweaksViewController.h"
 #import "../LCOrbit/Core/LCOrbitLogViewer.h"
+#import "../LCOrbit/Core/LCOrbitGuestUIKitDiagnostics.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -5887,6 +5888,16 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 
 - (void)compatibilityPage:(UIStackView *)stack {
     [self section:@"应用兼容性" sub:@"默认：完整窗口由 App 自行避让；UIKit：实验性同步宿主安全区，不压缩 App 画面；物理：将窗口避开顶部，可能压缩部分内容。部分 App 需关闭任务后重启。" in:stack];
+    [self spacer:stack size:10];
+    [self section:@"Guest UIKit 诊断" sub:@"仅用于排查多任务 App 的真实安全区。开启后重启目标 App；需要目标 App 已加载共享微珠 dylib。只记录窗口、控件类型和几何信息，不记录页面文字。" in:stack];
+    UISegmentedControl *guestDiag=[[UISegmentedControl alloc] initWithItems:@[@"关闭",@"记录"]];
+    guestDiag.selectedSegmentIndex=[LCOrbitGuestUIKitDiagnostics isEnabled]?1:0;
+    guestDiag.accessibilityLabel=@"LiveProcess UIKit 布局诊断";
+    [guestDiag addTarget:self action:@selector(guestUIKitDiagnosticsChanged:)
+            forControlEvents:UIControlEventValueChanged];
+    [self addRow:guestDiag height:40 to:stack];
+    [self spacer:stack size:14];
+
     NSArray<NSDictionary *> *apps=InstalledApps();
     NSMutableArray<UIView *> *rows=[NSMutableArray arrayWithCapacity:apps.count];
     for(NSDictionary *app in apps) {
@@ -5930,6 +5941,10 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     UIView *card=FMCreateGroupedCard(rows,68);
     if(card) [stack addArrangedSubview:card];
     if(!apps.count) [self note:@"暂无已安装的应用" in:stack];
+}
+- (void)guestUIKitDiagnosticsChanged:(UISegmentedControl *)control {
+    [LCOrbitGuestUIKitDiagnostics setEnabled:control.selectedSegmentIndex==1];
+    control.selectedSegmentIndex=[LCOrbitGuestUIKitDiagnostics isEnabled]?1:0;
 }
 - (void)guestTopInsetModeChanged:(UISegmentedControl *)control {
     NSString *bundle=objc_getAssociatedObject(control,@selector(guestTopInsetModeChanged:));
