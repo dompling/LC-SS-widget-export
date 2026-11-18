@@ -1,6 +1,7 @@
 #import "LCOrbitLog.h"
 #import "LCOrbitStorage.h"
 #import "LCOrbitHost.h"
+#import "LCOrbitGuestUIKitDiagnostics.h"
 #import <sys/file.h>
 #import <sys/stat.h>
 #import <fcntl.h>
@@ -165,6 +166,17 @@ static NSMutableArray *CurrentEvents(NSString *path) {
             ImportLegacy(path,kind);
             NSMutableArray *events=[NSMutableArray arrayWithArray:ReadEvents(OldPath(path))?:@[]];
             [events addObjectsFromArray:ReadEvents(path)?:@[]];
+            if([kind isEqualToString:@"runtime"] && [LCOrbitHost isHostUI]) {
+                // Merge read-only measurements recorded by LiveProcess into
+                // LC host export. Never assume a Guest log exists: many Apps
+                // do not load shared tweaks.
+                [events addObjectsFromArray:[LCOrbitGuestUIKitDiagnostics events]];
+                [events sortUsingComparator:^NSComparisonResult(NSDictionary *left,NSDictionary *right) {
+                    NSString *a=left[@"timestamp"]?:@"";
+                    NSString *b=right[@"timestamp"]?:@"";
+                    return [a compare:b];
+                }];
+            }
             return Encode(events)?:Encode(@[]);
         } @finally { Unlock(descriptor); }
     } } @catch(NSException *exception) { return Encode(@[]); }
