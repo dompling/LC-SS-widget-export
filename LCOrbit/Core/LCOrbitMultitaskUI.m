@@ -196,6 +196,14 @@ static BOOL PhysicalTopAvoidanceEnabled(NSString *bundle) {
 static BOOL GuestOwnsTopInset(NSString *bundle) {
     return !PhysicalTopAvoidanceEnabled(bundle);
 }
+// An opt-in alternative to physical viewport shrinkage. The preference is
+// scoped to LC's relative Guest installation path, not CFBundleIdentifier.
+static BOOL UIKitTopInsetEnhanced(NSString *bundle) {
+    if(!bundle.length || PhysicalTopAvoidanceEnabled(bundle)) return NO;
+    id value=[LCOrbitStorage objectForKey:[@"uikitTopInset." stringByAppendingString:bundle]
+                                 module:@"LCFloatingMenu"];
+    return [value isKindOfClass:NSNumber.class] && [value boolValue];
+}
 // Keep launch dimensions intact; physical avoidance begins after mounting.
 static CGRect GuestViewport(CGRect bounds,UIEdgeInsets safe,BOOL ready) {
     if(!OrbitValidFrame(bounds) || !isfinite(safe.top) || !isfinite(safe.left) ||
@@ -227,6 +235,37 @@ static BOOL OrbitInsetsInViewport(CGRect safeRect,CGRect viewport,UIEdgeInsets *
         CGRectGetMaxY(viewport)-CGRectGetMaxY(visible),
         CGRectGetMaxX(viewport)-CGRectGetMaxX(visible));
     return YES;
+}
+// UIKit can report a transient zero safeAreaInsets while its UIWindow layout
+// guide / status bar have already resolved. Only the opt-in UIKit policy uses
+// this fallback; the default and old physical mode stay byte-for-byte alike.
+static UIEdgeInsets HostUIKitSafeInsets(UIWindow *host) {
+    if(!host) return UIEdgeInsetsZero;
+    UIEdgeInsets safe=host.safeAreaInsets;
+    CGRect bounds=host.bounds;
+    if(!OrbitValidFrame(bounds)) return safe;
+    CGRect guide=host.safeAreaLayoutGuide.layoutFrame;
+    if(OrbitValidFrame(guide) && CGRectContainsRect(bounds,guide)) {
+        safe.top=MAX(safe.top,CGRectGetMinY(guide)-CGRectGetMinY(bounds));
+        safe.left=MAX(safe.left,CGRectGetMinX(guide)-CGRectGetMinX(bounds));
+        safe.bottom=MAX(safe.bottom,CGRectGetMaxY(bounds)-CGRectGetMaxY(guide));
+        safe.right=MAX(safe.right,CGRectGetMaxX(bounds)-CGRectGetMaxX(guide));
+    }
+    UIWindowScene *scene=host.windowScene;
+    UIStatusBarManager *manager=scene.statusBarManager;
+    UIInterfaceOrientation direction=scene.interfaceOrientation;
+    // The portrait status bar is a fallback, not an extra additive inset.
+    // Do not create a spurious 54pt strip in landscape or immersive UI.
+    if(manager && !manager.statusBarHidden &&
+       (direction==UIInterfaceOrientationPortrait ||
+        direction==UIInterfaceOrientationPortraitUpsideDown)) {
+        CGRect bar=[host convertRect:manager.statusBarFrame fromCoordinateSpace:scene.coordinateSpace];
+        if(OrbitValidFrame(bar) && CGRectGetMinY(bar)<=CGRectGetMinY(bounds)+1) {
+            bar=CGRectIntersection(bar,bounds);
+            if(OrbitValidFrame(bar)) safe.top=MAX(safe.top,CGRectGetMaxY(bar)-CGRectGetMinY(bounds));
+        }
+    }
+    return safe;
 }
 static BOOL HostedSafeArea(UIViewController *window,CGRect frame,
                           UIInterfaceOrientation orientation,UIEdgeInsets *insets) {
@@ -263,12 +302,14 @@ static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfac
     UIInterfaceOrientation direction=scene.interfaceOrientation;
     if(!host || !scene || !OrbitValidFrame(bounds) || direction<UIInterfaceOrientationPortrait ||
        direction>UIInterfaceOrientationLandscapeRight) return NO;
-    UIEdgeInsets safe=host.safeAreaInsets;
+    NSString *bundle=[(id)SceneController(window) bundleId];
+    BOOL enhanced=UIKitTopInsetEnhanced(bundle);
+    UIEdgeInsets safe=enhanced?HostUIKitSafeInsets(host):host.safeAreaInsets;
     if(!isfinite(safe.top) || !isfinite(safe.left) || !isfinite(safe.bottom) || !isfinite(safe.right) ||
        safe.top<0 || safe.left<0 || safe.bottom<0 || safe.right<0 ||
        safe.top+safe.bottom>bounds.size.height || safe.left+safe.right>bounds.size.width) return NO;
     BOOL ready=InitialSceneWindow!=window && [objc_getAssociatedObject(window,&ViewportReadyKey) boolValue];
-    CGRect viewport=GuestViewport(bounds,safe,ready && !GuestOwnsTopInset([(id)SceneController(window) bundleId]));
+    CGRect viewport=GuestViewport(bounds,safe,ready && !GuestOwnsTopInset(bundle));
     if(!OrbitValidFrame(viewport)) return NO;
     *frame=(CGRect){CGPointZero,viewport.size};
     if(UIInterfaceOrientationIsLandscape(direction)) frame->size=CGSizeMake(viewport.size.height,viewport.size.width);
@@ -276,7 +317,9 @@ static BOOL FullscreenGeometry(UIViewController *window,CGRect *frame,UIInterfac
         CGRect physicalSafe=CGRectMake(bounds.origin.x+safe.left,bounds.origin.y+safe.top,
             bounds.size.width-safe.left-safe.right,bounds.size.height-safe.top-safe.bottom);
         if(!OrbitInsetsInViewport(physicalSafe,viewport,&safe)) return NO;
-    } else {
+    } else if(!enhanced) {
+        // UIKit mode prefers the physical UIWindow inset at startup. A stale
+        // hosted parent must not erase its top inset before the Guest lays out.
         HostedSafeArea(window,*frame,direction,&safe);
     }
     *orientation=direction;*insets=safe;
@@ -298,6 +341,10 @@ static void RecordGeometry(NSString *stage,UIViewController *window,id settings)
     UIWindow *host=window.view.window ?: window.parentViewController.view.window;
     NSMutableDictionary *details=[@{@"stage":stage,@"sample":@(count+1),
         @"geometryPolicy":@"per-app-viewport-v6",
+        @"uikitSafeAreaExperiment":@(UIKitTopInsetEnhanced([(id)scene bundleId])),
+        @"effectiveHostInsets":NSStringFromUIEdgeInsets(
+            UIKitTopInsetEnhanced([(id)scene bundleId]) && host?
+            HostUIKitSafeInsets(host):host?host.safeAreaInsets:UIEdgeInsetsZero),
         @"viewportReady":@([objc_getAssociatedObject(window,&ViewportReadyKey) boolValue]),
         @"appOwnsTopInset":@(GuestOwnsTopInset([(id)scene bundleId])),
         @"decoratedFrame":NSStringFromCGRect(window.view.frame),
@@ -315,7 +362,8 @@ static void RecordGeometry(NSString *stage,UIViewController *window,id settings)
         @"orientation":@(host.windowScene.interfaceOrientation)} mutableCopy];
     CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
     if(FullscreenGeometry(window,&frame,&orientation,&insets)) {
-        details[@"insetSource"]=HostedSafeArea(window,frame,orientation,&insets)?@"hosting-viewport":@"host-fallback";
+        details[@"insetSource"]=UIKitTopInsetEnhanced([(id)scene bundleId])?@"uikit-window":
+            (HostedSafeArea(window,frame,orientation,&insets)?@"hosting-viewport":@"host-fallback");
         details[@"resolvedInsets"]=NSStringFromUIEdgeInsets(insets);
     }
     if(hosting && parent && host && hosting.window==host && parent.window==host)
@@ -796,6 +844,30 @@ static void PiPStopped(id manager,SEL selector,id controller) {
 
 @implementation LCOrbitMultitask (Presentation)
 // Historical UI API reports the switch, not whether the Guest owns the inset.
++ (NSInteger)topInsetModeForBundle:(NSString *)bundle {
+    if(PhysicalTopAvoidanceEnabled(bundle)) return 2;
+    return UIKitTopInsetEnhanced(bundle)?1:0;
+}
++ (void)setTopInsetMode:(NSInteger)mode forBundle:(NSString *)bundle {
+    if(!bundle.length || mode<0 || mode>2) return;
+    // Mutually exclusive modes: default, full-window UIKit recovery, legacy
+    // physical avoidance. Never change settings for unrelated installations.
+    [LCOrbitStorage setObject:@(mode==2)
+                      forKey:[@"guestOwnTopInset." stringByAppendingString:bundle]
+                      module:@"LCFloatingMenu"];
+    [LCOrbitStorage setObject:@(mode==1)
+                      forKey:[@"uikitTopInset." stringByAppendingString:bundle]
+                      module:@"LCFloatingMenu"];
+    for(UIViewController *window in [self windows])
+        if([[(id)SceneController(window) bundleId] isEqual:bundle])
+            objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [LCOrbitLog appendEvent:@"guest-top-inset-mode"
+                   details:@{@"guestBundle":bundle,@"mode":@(mode),
+                       @"physicalTopAvoidanceEnabled":@(mode==2),
+                       @"uikitSafeAreaExperiment":@(mode==1),
+                       @"appOwnsTopInset":@(mode!=2)} kind:@"runtime"];
+    [self refreshPresentation];
+}
 + (BOOL)usesAppTopInsetForBundle:(NSString *)bundle { return PhysicalTopAvoidanceEnabled(bundle); }
 + (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle {
     if(!bundle.length) return;
