@@ -487,9 +487,7 @@ static NSDictionary *GuestInstagramScrollGeometry(UIWindow *window) {
         @"contentInsetAdjustmentBehavior":@(scroll.contentInsetAdjustmentBehavior),
         @"contentOffset":NSStringFromCGPoint(scroll.contentOffset),
         @"contentSize":NSStringFromCGSize(scroll.contentSize),
-        @"clipsToBounds":@(scroll.clipsToBounds),
-        @"rootAdditionalSafeAreaInsets":NSStringFromUIEdgeInsets(
-            window.rootViewController.additionalSafeAreaInsets)
+        @"clipsToBounds":@(scroll.clipsToBounds)
     } mutableCopy];
     if([scroll isKindOfClass:UICollectionView.class]) {
         UICollectionView *collection=(UICollectionView *)scroll;
