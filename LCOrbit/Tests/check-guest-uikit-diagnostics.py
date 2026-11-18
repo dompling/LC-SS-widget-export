@@ -17,6 +17,7 @@ build = (root / "LCOrbit/Build/build.sh").read_text()
 
 checks = {
     "LiveProcess constructor starts diagnostics before returning":
+        "[LCOrbitGuestUIKitDiagnostics startInLiveProcess]" in core and
         core.index("[LCOrbitGuestUIKitDiagnostics startInLiveProcess]") <
         core.index("if([NSUserDefaults respondsToSelector:process]"),
     "guest diagnostics do not bootstrap the FloatingMenu UI":
