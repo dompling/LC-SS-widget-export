@@ -23,7 +23,8 @@ checks = {
     "guest diagnostics do not bootstrap the FloatingMenu UI":
         "LCFloatingMenuRegisterWithOrbit" in core and "return;" in core,
     "requires explicit user opt in":
-        "+ (BOOL)isEnabled" in diag and "if(![self isEnabled]) return;" in diag,
+        "+ (BOOL)isEnabled" in diag and "![self isEnabled]" in diag and
+        "if(![LCOrbitGuestUIKitDiagnostics isEnabled]) return;" in diag,
     "only collects in an actual Guest":
         "[LCOrbitHost guestInfo]" in diag and "isLiveProcess" in diag,
     "logs only metadata and geometry":
