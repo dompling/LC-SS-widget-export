@@ -34,6 +34,17 @@ static CGFloat GuestRepairedTop=-1;
 static LCOrbitTopSurfaceOffset *GuestHeaderOffset;
 static LCOrbitTopSurfaceOffset *GuestNavigationOffset;
 static LCOrbitTopSurfaceOffset *GuestInstagramHeaderOffset;
+// Per-visible-controller workaround for a 44pt nav bar that sits below the
+// system safe top, while UIKit still reports only the 59pt system inset.
+@interface LCOrbitBaiduContentSafeState : NSObject
+@property(nonatomic,weak) UIViewController *controller;
+@property(nonatomic,assign) CGFloat originalTop;
+@property(nonatomic,assign) CGFloat addedTop;
+@end
+@implementation LCOrbitBaiduContentSafeState
+@end
+static LCOrbitBaiduContentSafeState *GuestBaiduContentSafe;
+static NSTimer *GuestBaiduContentWatchTimer;
 @interface LCOrbitInstagramInsetState : NSObject
 @property(nonatomic,weak) UIScrollView *scroll;
 @property(nonatomic,assign) CGFloat originalTop;
@@ -228,6 +239,19 @@ static NSDictionary *GuestNavigationGeometry(UIWindow *window) {
     UIViewController *visible=nav.visibleViewController;
     if(visible) {
         info[@"visibleClass"]=NSStringFromClass(visible.class);
+        info[@"visibleAdditionalSafeInsets"]=NSStringFromUIEdgeInsets(visible.additionalSafeAreaInsets);
+        if([visible isKindOfClass:UITabBarController.class]) {
+            UIViewController *selected=((UITabBarController *)visible).selectedViewController;
+            if(selected) {
+                info[@"selectedClass"]=NSStringFromClass(selected.class);
+                UIView *selectedView=selected.viewIfLoaded;
+                if(selectedView && selectedView.window==window) {
+                    info[@"selectedFrame"]=NSStringFromCGRect(
+                        [selectedView convertRect:selectedView.bounds toView:window]);
+                    info[@"selectedSafeInsets"]=NSStringFromUIEdgeInsets(selectedView.safeAreaInsets);
+                }
+            }
+        }
         UIView *view=visible.viewIfLoaded;
         if(view && view.window==window) {
             info[@"visibleFrame"]=NSStringFromCGRect([view convertRect:view.bounds toView:window]);
@@ -272,9 +296,23 @@ static void GuestRestoreTopSurface(LCOrbitTopSurfaceOffset *__strong *slot) {
     }
     *slot=nil;
 }
+static void GuestRestoreBaiduContentSafeArea(void) {
+    LCOrbitBaiduContentSafeState *saved=GuestBaiduContentSafe;
+    GuestBaiduContentSafe=nil;
+    UIViewController *controller=saved.controller;
+    if(!controller) return;
+    UIEdgeInsets extra=controller.additionalSafeAreaInsets;
+    if(fabs(extra.top-(saved.originalTop+saved.addedTop))>.75) return;
+    extra.top=saved.originalTop;
+    [UIView performWithoutAnimation:^{
+        controller.additionalSafeAreaInsets=extra;
+        [controller.viewIfLoaded setNeedsLayout];
+    }];
+}
 static void GuestRestoreBaiduSurfaces(void) {
     GuestRestoreTopSurface(&GuestHeaderOffset);
     GuestRestoreTopSurface(&GuestNavigationOffset);
+    GuestRestoreBaiduContentSafeArea();
 }
 static UIView *GuestFindBaiduSlideMenu(UIView *node,UIWindow *window,
                                        NSUInteger depth,NSUInteger *visited) {
@@ -367,6 +405,83 @@ static void GuestRepairBaiduTopSurfaces(UIWindow *window,
     if(changes.count) GuestWriteEvent(@"guest-uikit-top-surfaces-corrected",
         @{@"changes":changes,@"windowSafeInsets":
             NSStringFromUIEdgeInsets(window.safeAreaInsets)});
+}
+// A custom BDSNavigationController sometimes positions its navigation bar
+// at ~54pt, whereas the child controller's reported safe top stays at 59pt.
+// Add only the measured uncovered strip (usually ~39pt) to that child VC's
+// safe layout. Never change its view frame, the window, or the video surface.
+static void GuestRepairBaiduContentSafeArea(UIWindow *window,
+                                            UIViewController *root,CGFloat top) {
+    if(!GuestIsBaiduTopRepair(root)) {
+        GuestRestoreBaiduContentSafeArea();
+        return;
+    }
+    UINavigationController *nav=(UINavigationController *)root;
+    UIViewController *child=nav.visibleViewController;
+    UIView *childView=child.viewIfLoaded;
+    UINavigationBar *bar=nav.navigationBar;
+    LCOrbitBaiduContentSafeState *saved=GuestBaiduContentSafe;
+    if(saved && saved.controller!=child) {
+        GuestRestoreBaiduContentSafeArea();
+        saved=nil;
+    }
+    if(!child || !childView || childView.window!=window || !bar ||
+       bar.window!=window || nav.navigationBarHidden || bar.hidden) {
+        GuestRestoreBaiduContentSafeArea();
+        return;
+    }
+    // UIKit / the app owns its navigation transitions. Wait until settled.
+    if(nav.transitionCoordinator || child.transitionCoordinator) return;
+    UIEdgeInsets extra=child.additionalSafeAreaInsets;
+    if(saved && fabs(extra.top-(saved.originalTop+saved.addedTop))>.75) {
+        GuestBaiduContentSafe=nil;
+        return;
+    }
+    CGRect barRect=[bar convertRect:bar.bounds toView:window];
+    CGRect childRect=[childView convertRect:childView.bounds toView:window];
+    CGFloat baselineSafeTop=childView.safeAreaInsets.top-(saved?saved.addedTop:0);
+    // Only fix a real full-width bar anchored just below the Dynamic Island.
+    // A bar at y=0 (or a hidden/fullscreen video bar) must remain untouched.
+    BOOL qualifies=isfinite(top) && top>=35 && top<=95 &&
+        isfinite(barRect.origin.y) && isfinite(childRect.origin.y) &&
+        isfinite(baselineSafeTop) &&
+        CGRectGetWidth(barRect)>=window.bounds.size.width*.9 &&
+        CGRectGetHeight(barRect)>=38 && CGRectGetHeight(barRect)<=60 &&
+        fabs(CGRectGetMinY(barRect)-top)<=12 &&
+        CGRectGetMinY(childRect)>=-3 && CGRectGetMinY(childRect)<=3 &&
+        CGRectGetHeight(childRect)>=window.bounds.size.height-10;
+    if(!qualifies) {
+        GuestRestoreBaiduContentSafeArea();
+        return;
+    }
+    CGFloat needed=CGRectGetMaxY(barRect)-
+        (CGRectGetMinY(childRect)+baselineSafeTop);
+    if(!isfinite(needed) || needed<=1) {
+        GuestRestoreBaiduContentSafeArea();
+        return;
+    }
+    if(needed>56) return; // Never compensate for an unrelated overlay.
+    if(saved && fabs(saved.addedTop-needed)<.75) return;
+    if(!saved) {
+        saved=[LCOrbitBaiduContentSafeState new];
+        saved.controller=child;
+        saved.originalTop=extra.top;
+        GuestBaiduContentSafe=saved;
+    }
+    saved.addedTop=needed;
+    extra.top=saved.originalTop+needed;
+    [UIView performWithoutAnimation:^{
+        child.additionalSafeAreaInsets=extra;
+        [childView setNeedsUpdateConstraints];
+        [childView setNeedsLayout];
+    }];
+    GuestWriteEvent(@"guest-uikit-baidu-content-safe-area-updated",
+        @{@"controller":NSStringFromClass(child.class),
+          @"navigationBar":NSStringFromCGRect(barRect),
+          @"contentFrame":NSStringFromCGRect(childRect),
+          @"baseSafeTop":@(baselineSafeTop),@"addedTop":@(needed),
+          @"contentSafeInsets":NSStringFromUIEdgeInsets(childView.safeAreaInsets),
+          @"additionalSafeInsets":NSStringFromUIEdgeInsets(extra)});
 }
 // Instagram's outer IGGestureCoordinatingCollectionView is a horizontal pager
 // (e.g. offset {393,0}, size {786,852}). It must never receive a vertical inset.
@@ -617,6 +732,7 @@ static void GuestSafeAreaRepairTick(void) {
     // safe-area number; the short bounded polling still checks for new views.
     if(fabs(top-GuestRepairedTop)<.5) {
         GuestRepairBaiduTopSurfaces(window,root,top);
+        GuestRepairBaiduContentSafeArea(window,root,top);
         GuestRepairInstagramInnerScroll(window,root,top);
         return;
     }
@@ -644,6 +760,7 @@ static void GuestSafeAreaRepairTick(void) {
         }
         [view layoutIfNeeded];
         GuestRepairBaiduTopSurfaces(strongWindow,root,top);
+        GuestRepairBaiduContentSafeArea(strongWindow,root,top);
         GuestRepairInstagramInnerScroll(strongWindow,root,top);
         if([LCOrbitGuestUIKitDiagnostics isEnabled])
             GuestWriteEvent(@"guest-uikit-safe-area-relayout",@{
@@ -652,6 +769,25 @@ static void GuestSafeAreaRepairTick(void) {
                 @"navigationBefore":before,
                 @"navigationAfter":GuestNavigationGeometry(strongWindow)});
     });
+}
+// Observe BDS page transitions while active. No global UIKit hooks or
+// whole-window resizing; Default run-loop mode avoids interfering with touch.
+static void GuestStartBaiduContentWatch(void) {
+    if(!GuestRelayoutEnabled ||
+       ![GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"] ||
+       GuestBaiduContentWatchTimer) return;
+    GuestBaiduContentWatchTimer=[NSTimer timerWithTimeInterval:0.75 repeats:YES
+        block:^(NSTimer *timer) {
+            if(UIApplication.sharedApplication.applicationState==
+               UIApplicationStateActive) GuestSafeAreaRepairTick();
+        }];
+    [[NSRunLoop mainRunLoop] addTimer:GuestBaiduContentWatchTimer
+                            forMode:NSDefaultRunLoopMode];
+}
+static void GuestStopBaiduContentWatch(void) {
+    [GuestBaiduContentWatchTimer invalidate];
+    GuestBaiduContentWatchTimer=nil;
+    GuestRestoreBaiduContentSafeArea();
 }
 // Instagram updates its home feed geometry again during refresh/reload. A
 // normal-mode, low-rate watcher resumes the top-only fix AFTER scrolling settles.
@@ -930,12 +1066,12 @@ static void GuestTakeSnapshot(NSString *reason) {
             UIWindowDidBecomeVisibleNotification,
             @"UIApplicationDidChangeStatusBarOrientationNotification"
         ];
-        if(GuestRelayoutEnabled &&
-           [GuestInstallPath() isEqualToString:@"com.burbn.instagram.app"]) {
+        if(GuestRelayoutEnabled) {
             [center addObserverForName:UIApplicationDidEnterBackgroundNotification
                 object:nil queue:NSOperationQueue.mainQueue
                 usingBlock:^(NSNotification *notification) {
                     GuestStopInstagramWatch();
+                    GuestStopBaiduContentWatch();
                 }];
         }
         for(NSString *name in notifications)
@@ -949,11 +1085,13 @@ static void GuestTakeSnapshot(NSString *reason) {
                         GuestRepairedTop=-1;
                     GuestScheduleSafeAreaRepair();
                     GuestStartInstagramWatch();
+                    GuestStartBaiduContentWatch();
                 }
             }];
         if(GuestRelayoutEnabled) {
             GuestScheduleSafeAreaRepair();
             GuestStartInstagramWatch();
+            GuestStartBaiduContentWatch();
         }
         if(diagnostics) for(NSNumber *delay in @[@1.0,@3.0,@6.0])
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(delay.doubleValue*NSEC_PER_SEC)),
