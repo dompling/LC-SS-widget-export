@@ -90,7 +90,15 @@ checks = {
         'scroll.decelerating' in diag and
         'GuestRestoreInstagramInset' in diag and
         'guest-uikit-instagram-inner-scroll-corrected' in diag and
-        'homeHeaderAncestors' in diag,
+        'homeHeaderAncestors' in diag and
+        'GuestFindInstagramStoryTray' in diag and
+        'storyTrayAncestors' in diag and
+        'no-vertical-story-ancestor' in diag and
+        'GuestCorrectTopSurface(header,window,top' in diag and
+        'story-did-not-follow-feed-scroll' in diag and
+        'saved.header=header' in diag and
+        'GuestRestoreTopSurface(&GuestInstagramHeaderOffset)' in diag and
+        'GuestInstagramInnerScroll(story,window)' in diag,
     "records actual navigation and upper subview geometry":
         "GuestNavigationGeometry" in diag and
         "GuestTopViews" in diag and
