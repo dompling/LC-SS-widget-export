@@ -471,6 +471,12 @@ static void GuestRepairInstagramInnerScroll(UIWindow *window,
         // Never reset the user's in-flight gesture to reapply our baseline.
         if(scroll && (scroll.dragging || scroll.tracking || scroll.decelerating))
             return;
+        // A scrolled-away Instagram header is intentionally hidden. Do not
+        // undo the safe inset merely because Instagram animated its transform.
+        // Reconcile only when the feed returns to its resting top position.
+        if(headerChanged && !oldScroll && !oldHeader && !insetChanged &&
+           fabs(scroll.contentOffset.y+scroll.adjustedContentInset.top)>1)
+            return;
         GuestRestoreInstagramInset();
         saved=nil;
         GuestInstagramNoScrollReported=NO;
