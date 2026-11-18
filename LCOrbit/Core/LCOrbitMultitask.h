@@ -44,5 +44,9 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 // Legacy switch API: YES = v5 physical avoidance; NO = v6 Guest-owned top inset.
 + (BOOL)usesAppTopInsetForBundle:(NSString *)bundle;
 + (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle;
+// Per-App UI mode: 0=default full-window, 1=UIKit-safe-area experiment
+// (full viewport), 2=legacy physical avoidance (shrunk viewport).
++ (NSInteger)topInsetModeForBundle:(NSString *)bundle;
++ (void)setTopInsetMode:(NSInteger)mode forBundle:(NSString *)bundle;
 @end
 NS_ASSUME_NONNULL_END
