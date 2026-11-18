@@ -78,6 +78,19 @@ checks = {
         'GuestRepairBaiduTopSurfaces(window,root,top)' in diag and
         '@5.0' in diag and
         'method_exchangeImplementations' not in diag,
+    "Instagram correction is app-scoped to the inner vertical feed only":
+        'com.burbn.instagram.app' in diag and
+        'IGRootViewController' in diag and
+        'IGHomeFeedHeader.IGHomeFeedHeaderView' in diag and
+        'IGGestureCoordinatingCollectionView' in diag and
+        'GuestIsVerticalInstagramScroll' in diag and
+        'GuestInstagramInnerScroll' in diag and
+        'GuestRepairInstagramInnerScroll' in diag and
+        'scroll.dragging' in diag and
+        'scroll.decelerating' in diag and
+        'GuestRestoreInstagramInset' in diag and
+        'guest-uikit-instagram-inner-scroll-corrected' in diag and
+        'homeHeaderAncestors' in diag,
     "records actual navigation and upper subview geometry":
         "GuestNavigationGeometry" in diag and
         "GuestTopViews" in diag and
