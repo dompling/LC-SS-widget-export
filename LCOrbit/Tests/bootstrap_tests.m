@@ -4,7 +4,7 @@
 
 static NSUserDefaults *Defaults;
 static BOOL LiveProcess;
-static NSUInteger Dispatches, Instances, Registrations, Starts;
+static NSUInteger Dispatches, Instances, Registrations, Starts, ModeSyncs;
 @implementation LCOrbitHost
 + (NSUserDefaults *)hostDefaults { return Defaults; }
 + (NSString *)appGroupPath { return nil; }
@@ -13,6 +13,12 @@ static NSUInteger Dispatches, Instances, Registrations, Starts;
 + (UIWindowScene *)activeScene { return nil; }
 + (BOOL)isHostUI { return !LiveProcess; }
 + (BOOL)isSupportedGuest { return NO; }
+@end
+@interface LCOrbitGuestUIKitDiagnostics : NSObject
++ (void)synchronizeUIKitModesToGuests;
+@end
+@implementation LCOrbitGuestUIKitDiagnostics
++ (void)synchronizeUIKitModesToGuests { ModeSyncs++; }
 @end
 @implementation NSUserDefaults (OrbitProcessFixture)
 + (BOOL)isLiveProcess { return LiveProcess; }
@@ -52,6 +58,7 @@ int main(void) {
         LiveProcess=NO;
         LCOrbitEntry();
         EXPECT(Starts==2 && Registrations==2,"classic single-task plugin behavior remains available without host takeover");
+        EXPECT(ModeSyncs==2,"host startup mirrors UIKit modes; LiveProcess does not");
         [Defaults removePersistentDomainForName:suite];
         fprintf(stdout,"Bootstrap behavior tests: %u assertions, %u failures\n",assertions,failures);
         return failures?1:0;
