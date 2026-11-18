@@ -121,6 +121,7 @@ checks = {
         'fabs(originalOffset.y+adjusted.top)<=0.75' in diag and
         'fabs(y)<=0.75' in diag and
         'guest-uikit-instagram-layout-reset' in diag and
+        'fabs(scroll.contentOffset.y+scroll.adjustedContentInset.top)>1' in diag and
         'GuestInstagramNoScrollReported=NO' in diag and
         'GuestSafeAreaRepairTick();' in diag,
     "records actual navigation and upper subview geometry":
