@@ -50,12 +50,31 @@ checks = {
         "if(!isfinite(top) || !isfinite(rootTop) || top<1 || rootTop<1" in diag and
         "fabs(top-rootTop)>2" in diag and
         "GuestRepairedTop=top" in diag,
-    "no window shrinking, additional safe inset, or permanent scene hook":
+    "no remote window shrinking or permanent UIKit hooks":
         "GuestSafeAreaRepairTick" in diag and
         "[view setNeedsLayout]" in diag and
-        "additionalSafeAreaInsets" not in diag and
         "setFrame:" not in diag and
         "method_exchangeImplementations" not in diag,
+    "Pipixia compensates only measured native navigation overlap":
+        "GuestRepairBaiduContentSafeArea" in diag and
+        "GuestIsBaiduTopRepair(root)" in diag and
+        "GuestBaiduContentSafe" in diag and
+        "child.additionalSafeAreaInsets=extra" in diag and
+        "CGRectGetWidth(barRect)>=window.bounds.size.width*.9" in diag and
+        "fabs(CGRectGetMinY(barRect)-top)<=12" in diag and
+        "CGRectGetHeight(childRect)>=window.bounds.size.height-10" in diag and
+        "needed>56" in diag and
+        "nav.transitionCoordinator || child.transitionCoordinator" in diag and
+        "GuestRestoreBaiduContentSafeArea" in diag and
+        "guest-uikit-baidu-content-safe-area-updated" in diag,
+    "Pipixia page changes rechecked and repaired only while foreground":
+        "GuestStartBaiduContentWatch" in diag and
+        "GuestStopBaiduContentWatch" in diag and
+        "GuestRepairBaiduContentSafeArea(window,root,top)" in diag and
+        "GuestRepairBaiduContentSafeArea(strongWindow,root,top)" in diag and
+        "forMode:NSDefaultRunLoopMode" in diag and
+        "UIApplicationDidEnterBackgroundNotification" in diag,
+
     "Baidu top-only fix is opt-in, class-scoped and not a window resize":
         'GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"' in diag and
         'isEqualToString:@"BDSNavigationController"' in diag and
