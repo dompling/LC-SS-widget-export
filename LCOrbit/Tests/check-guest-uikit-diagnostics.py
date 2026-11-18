@@ -111,6 +111,18 @@ checks = {
         'story-did-not-follow-feed-scroll' in diag and
         'app-header-inset-or-geometry-mismatch' in diag and
         'scroll.contentInset=inset' in diag,
+    "Instagram post-refresh layout is rechecked without touching live drags":
+        'GuestStartInstagramWatch' in diag and
+        'GuestStopInstagramWatch' in diag and
+        'timerWithTimeInterval:0.75 repeats:YES' in diag and
+        'forMode:NSDefaultRunLoopMode' in diag and
+        'UIApplicationDidEnterBackgroundNotification' in diag and
+        'scroll.dragging || scroll.tracking || scroll.decelerating' in diag and
+        'fabs(originalOffset.y+adjusted.top)<=0.75' in diag and
+        'fabs(y)<=0.75' in diag and
+        'guest-uikit-instagram-layout-reset' in diag and
+        'GuestInstagramNoScrollReported=NO' in diag and
+        'GuestSafeAreaRepairTick();' in diag,
     "records actual navigation and upper subview geometry":
         "GuestNavigationGeometry" in diag and
         "GuestTopViews" in diag and
