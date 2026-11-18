@@ -8,8 +8,8 @@ from pathlib import Path
 import sys
 source=(Path(sys.argv[1])/'LCOrbit/Core/LCOrbitMultitaskUI.m').read_text()
 parts=[]
-for signature in ['static BOOL OrbitValidFrame(', 'static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL GuestOwnsTopInset(', 'static CGRect GuestViewport(', 'static CGRect FullscreenHostingFrame(', 'static UIEdgeInsets PortraitInsets(',
-                  'static BOOL OrbitInsetsInViewport(', 'static BOOL HostedSafeArea(',
+for signature in ['static BOOL OrbitValidFrame(', 'static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL GuestOwnsTopInset(', 'static BOOL UIKitTopInsetEnhanced(', 'static CGRect GuestViewport(', 'static CGRect FullscreenHostingFrame(', 'static UIEdgeInsets PortraitInsets(',
+                  'static BOOL OrbitInsetsInViewport(', 'static UIEdgeInsets HostUIKitSafeInsets(', 'static BOOL HostedSafeArea(',
                   'static BOOL FullscreenGeometry(', 'static void ApplyGeometry(',
                   'static void ConfigureSafeArea(', 'static void UpdateScene(',
                   'static void SceneSettings(', 'static void FinalSceneSettings(',
