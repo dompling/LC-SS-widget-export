@@ -448,7 +448,14 @@ static UIWindow *OverviewWindow;
         }
         CGFloat dockContentWidth=x+2;
         CGFloat dockWidth=MIN(width-safe.left-safe.right-28,dockContentWidth);
-        self.dock.frame=CGRectMake((width-dockWidth)/2,dockTop,dockWidth,dockHeight);self.dockScroll.frame=self.dock.bounds;self.dockScroll.contentSize=CGSizeMake(dockContentWidth,dockHeight);
+        // The entrance animation initially translates the Dock by 32pt. Setting
+        // frame while transformed bakes that translation into its base position;
+        // clearing the transform then lifts the visible Dock above its target.
+        // bounds + center describe the untransformed geometry in both states.
+        self.dock.bounds=CGRectMake(0,0,dockWidth,dockHeight);
+        self.dock.center=CGPointMake(width*.5,dockTop+dockHeight*.5);
+        self.dockScroll.frame=self.dock.bounds;
+        self.dockScroll.contentSize=CGSizeMake(dockContentWidth,dockHeight);
     }
     // Reserve a visible 28pt gutter above the Dock, even in a dense deck.
     CGFloat cardBottom=self.dock?dockTop-28:height-safe.bottom-16;
