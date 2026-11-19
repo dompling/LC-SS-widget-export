@@ -143,6 +143,21 @@ checks = {
         'fabs(scroll.contentOffset.y+scroll.adjustedContentInset.top)>1' in diag and
         'GuestInstagramNoScrollReported=NO' in diag and
         'GuestSafeAreaRepairTick();' in diag,
+    "Pipixia diagnoses selected list content, scroll insets and custom header":
+        "GuestBaiduPageScrolls" in diag and
+        "GuestBaiduPageGeometry" in diag and
+        "GuestBaiduPageProbeTick" in diag and
+        "guest-uikit-baidu-page-geometry" in diag and
+        'details[@"baiduPage"]=baiduPage' in diag and
+        "selectedAdditionalSafeInsets" in diag and
+        "adjustedInset" in diag and
+        "topCells" in diag and
+        "GuestFindBaiduSlideMenu" in diag,
+    "Pipixia probes only opt-in foreground geometry without altering view frames":
+        "GuestBaiduProbeCount>=14" in diag and
+        "[LCOrbitGuestUIKitDiagnostics isEnabled]" in diag and
+        "GuestBaiduPageProbeTick();" in diag and
+        "setFrame:" not in diag,
     "records actual navigation and upper subview geometry":
         "GuestNavigationGeometry" in diag and
         "GuestTopViews" in diag and
