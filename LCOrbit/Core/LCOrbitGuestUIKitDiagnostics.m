@@ -213,7 +213,7 @@ static void GuestBaiduListProbe(NSString *reason,NSDictionary *extra) {
        [GuestBaiduListProbeReasons containsObject:reason]) return;
     [GuestBaiduListProbeReasons addObject:reason];
     NSMutableDictionary *payload=[@{@"reason":reason,
-        @"repairVersion":@"pipixia-list-v3"} mutableCopy];
+        @"repairVersion":@"pipixia-list-v4"} mutableCopy];
     if(extra) [payload addEntriesFromDictionary:extra];
     GuestWriteEvent(@"guest-uikit-baidu-list-probe",payload);
 }
@@ -1102,7 +1102,21 @@ static UICollectionView *GuestBaiduForegroundList(UIView *node,UIWindow *window,
     }
     return nil;
 }
+// Two matching unscrolled samples avoid racing Pipixia's own layout pass.
+static __weak UICollectionView *GuestBaiduPendingList;
+static CGFloat GuestBaiduPendingInset=NAN;
+static CGFloat GuestBaiduPendingFirstY=NAN;
+static CGFloat GuestBaiduPendingMenuBottom=NAN;
+static NSTimeInterval GuestBaiduPendingSince=0;
+static void GuestResetBaiduListCandidate(void) {
+    GuestBaiduPendingList=nil;
+    GuestBaiduPendingInset=NAN;
+    GuestBaiduPendingFirstY=NAN;
+    GuestBaiduPendingMenuBottom=NAN;
+    GuestBaiduPendingSince=0;
+}
 static void GuestRestoreBaiduListInset(void) {
+    GuestResetBaiduListCandidate();
     LCOrbitBaiduListInsetState *saved=GuestBaiduListInset;
     if(!saved) return;
     UICollectionView *scroll=saved.scroll;
@@ -1154,87 +1168,10 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
         if(GuestBaiduListInset) return; // Wait for an ongoing drag to stop.
         saved=nil;
     }
-    if(saved) {
-        if(scroll && fabs(scroll.contentInset.top-
-            (saved.originalTop+saved.addedTop))<=1) return;
-        // Pipixia may add its own 48pt menu inset after our 59pt
-        // correction. Its 107pt result is app inset + plugin inset.
-        // Reconcile ONLY this measured top-of-list geometry, never a drag.
-        if(scroll && !scroll.dragging && !scroll.tracking &&
-           !scroll.decelerating &&
-           scroll.contentSize.height>scroll.bounds.size.height*1.05) {
-            NSUInteger menuVisited=0;
-            UIView *menu=GuestFindBaiduSlideMenu(
-                root.viewIfLoaded,window,0,&menuVisited);
-            CGRect menuRect=menu?
-                [menu convertRect:menu.bounds toView:window]:CGRectNull;
-            CGRect listRect=[scroll convertRect:scroll.bounds toView:window];
-            UIEdgeInsets current=scroll.contentInset;
-            CGPoint offset=scroll.contentOffset;
-            CGFloat menuHeight=CGRectGetHeight(menuRect);
-            CGFloat target=CGRectGetMaxY(menuRect)-CGRectGetMinY(listRect);
-            BOOL additive=menu && isfinite(target) &&
-                fabs(CGRectGetMinY(menuRect)-top)<=2 &&
-                menuHeight>=40 && menuHeight<=58 &&
-                CGRectGetMinY(listRect)>=25 &&
-                CGRectGetMinY(listRect)<=70 &&
-                fabs(saved.originalTop+saved.addedTop-target)<=2 &&
-                fabs(current.top-target-menuHeight)<=2 &&
-                fabs(offset.y+current.top)<=2 &&
-                fabs(scroll.adjustedContentInset.top-current.top)<=1 &&
-                scroll.safeAreaInsets.top>2 &&
-                scroll.safeAreaInsets.top<=24;
-            UICollectionViewCell *first=nil;
-            CGFloat firstY=CGFLOAT_MAX;
-            if(additive) for(UICollectionViewCell *cell in scroll.visibleCells) {
-                CGRect rect=[cell convertRect:cell.bounds toView:window];
-                if(CGRectGetWidth(rect)>window.bounds.size.width*.7 &&
-                   CGRectGetMinY(rect)<firstY) {
-                    first=cell;
-                    firstY=CGRectGetMinY(rect);
-                }
-            }
-            if(first && fabs(firstY-
-                (CGRectGetMinY(listRect)+current.top))<=3) {
-                UIEdgeInsets normalized=current;
-                normalized.top=target;
-                [UIView performWithoutAnimation:^{
-                    scroll.contentInset=normalized;
-                    [scroll setContentOffset:CGPointMake(offset.x,-target)
-                                    animated:NO];
-                    [scroll layoutIfNeeded];
-                }];
-                CGRect after=[first convertRect:first.bounds toView:window];
-                BOOL valid=fabs(scroll.contentInset.top-target)<=1 &&
-                    fabs(scroll.contentOffset.y+target)<=2 &&
-                    fabs(CGRectGetMinY(after)-
-                        CGRectGetMaxY(menuRect))<=3;
-                if(valid) {
-                    saved.originalTop=menuHeight;
-                    saved.addedTop=target-menuHeight;
-                    GuestWriteEvent(@"guest-uikit-baidu-list-inset-reconciled",@{
-                        @"repairVersion":@"pipixia-list-v3",
-                        @"insetBefore":NSStringFromUIEdgeInsets(current),
-                        @"insetAfter":NSStringFromUIEdgeInsets(scroll.contentInset),
-                        @"offsetBefore":NSStringFromCGPoint(offset),
-                        @"offsetAfter":NSStringFromCGPoint(scroll.contentOffset),
-                        @"firstBefore":@(firstY),
-                        @"firstAfter":@(CGRectGetMinY(after)),
-                        @"remainingCorrection":@(saved.addedTop)});
-                    return;
-                }
-                [UIView performWithoutAnimation:^{
-                    scroll.contentInset=current;
-                    [scroll setContentOffset:offset animated:NO];
-                }];
-            }
-        }
-        GuestBaiduListProbe(@"app-inset-changed",@{
-            @"observedTop":@(scroll?scroll.contentInset.top:0),
-            @"previousBase":@(saved.originalTop),
-            @"previousCorrection":@(saved.addedTop)});
-        GuestBaiduListInset=nil; // Different app-owned geometry: do not force.
-    }
+    // The inset we wrote is still correct: no repeated layout or scrolling.
+    // If the app has since changed it, remeasure instead of adding 59 again.
+    if(saved && scroll && fabs(scroll.contentInset.top-
+        (saved.originalTop+saved.addedTop))<=1) return;
     if(!scroll) {
         GuestBaiduListProbe(@"list-not-found",@{@"visited":@(visited)});
         return;
@@ -1269,7 +1206,7 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
         CGRectGetHeight(menuFrame)>=40 && CGRectGetHeight(menuFrame)<=58 &&
         fabs(CGRectGetMinX(listFrame))<=3 &&
         CGRectGetMinY(listFrame)>=25 && CGRectGetMinY(listFrame)<=70 &&
-        actual.top>=0 && actual.top<=70 &&
+        actual.top>=0 && actual.top<=130 &&
         fabs(adjusted.top-actual.top)<=1 &&
         fabs(offset.y+adjusted.top)<=1 &&
         listSafeTop>2 && listSafeTop<=24;
@@ -1298,35 +1235,61 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
             @"visibleCount":@(scroll.visibleCells.count)});
         return;
     }
-    CGFloat expectedY=CGRectGetMinY(listFrame)+adjusted.top;
-    CGFloat missing=CGRectGetMaxY(menuFrame)-firstY;
-    // The app alternates between 48pt and 0pt content insets.
-    // Both must end at the same physical menu bottom: 48+11 = 0+59 = 59.
-    // The first cell must still be at the unscrolled origin to qualify.
     CGFloat targetInset=CGRectGetMaxY(menuFrame)-CGRectGetMinY(listFrame);
-    if(fabs(firstY-expectedY)>3 || !isfinite(missing) ||
-       missing<=2 || missing>68 ||
-       fabs(actual.top+missing-targetInset)>3) {
+    CGFloat measuredGap=CGRectGetMaxY(menuFrame)-firstY;
+    CGFloat correction=targetInset-actual.top;
+    // The first cell must be at the unscrolled top of the *actual* list.
+    // Never force a pinned app header or content in the middle of a swipe.
+    if(!isfinite(targetInset) || targetInset<40 || targetInset>80 ||
+       fabs(firstY-(CGRectGetMinY(listFrame)+actual.top))>3 ||
+       fabs(measuredGap-correction)>3 || fabs(correction)>70) {
+        GuestResetBaiduListCandidate();
         GuestBaiduListProbe(@"overlap-guard",@{
             @"first":NSStringFromClass(first.class),
-            @"firstY":@(firstY),@"expectedY":@(expectedY),
-            @"missing":@(missing),@"targetInset":@(targetInset),
-            @"originalTop":@(actual.top)});
+            @"firstY":@(firstY),@"measuredGap":@(measuredGap),
+            @"correction":@(correction),@"targetInset":@(targetInset),
+            @"observedTop":@(actual.top)});
         return;
     }
+    if(fabs(correction)<=1) {
+        GuestResetBaiduListCandidate();
+        return; // The app already positioned the feed correctly.
+    }
+    NSTimeInterval now=[NSDate timeIntervalSinceReferenceDate];
+    BOOL sameCandidate=GuestBaiduPendingList==scroll &&
+        fabs(GuestBaiduPendingInset-actual.top)<=1 &&
+        fabs(GuestBaiduPendingFirstY-firstY)<=1 &&
+        fabs(GuestBaiduPendingMenuBottom-CGRectGetMaxY(menuFrame))<=1;
+    if(!sameCandidate) {
+        GuestBaiduPendingList=scroll;
+        GuestBaiduPendingInset=actual.top;
+        GuestBaiduPendingFirstY=firstY;
+        GuestBaiduPendingMenuBottom=CGRectGetMaxY(menuFrame);
+        GuestBaiduPendingSince=now;
+        return; // Let the app finish its current layout cycle.
+    }
+    if(now-GuestBaiduPendingSince<0.2) return;
+    GuestResetBaiduListCandidate();
+    CGFloat appBaseline=actual.top;
+    CGFloat menuHeight=CGRectGetHeight(menuFrame);
+    // 107 = the app's 48pt inset added over our 59pt correction.
+    // Unwind the duplicate; the app owns 48, we own only the final 11.
+    if(saved && actual.top>targetInset+2 &&
+       fabs(actual.top-(targetInset+menuHeight))<=3)
+        appBaseline=menuHeight;
     UIEdgeInsets changed=actual;
-    changed.top+=missing;
+    changed.top=targetInset; // Absolute measured target, never +=59.
     [UIView performWithoutAnimation:^{
         scroll.contentInset=changed;
-        [scroll setContentOffset:CGPointMake(offset.x,offset.y-missing)
+        [scroll setContentOffset:CGPointMake(offset.x,-targetInset)
                         animated:NO];
         [scroll layoutIfNeeded];
     }];
     CGRect after=[first convertRect:first.bounds toView:window];
-    BOOL moved=isfinite(CGRectGetMinY(after)) &&
-        fabs(CGRectGetMinY(after)-(firstY+missing))<=3 &&
-        fabs(scroll.contentInset.top-changed.top)<=1;
-    if(!moved) {
+    BOOL aligned=fabs(scroll.contentInset.top-targetInset)<=1 &&
+        fabs(scroll.contentOffset.y+targetInset)<=2 &&
+        fabs(CGRectGetMinY(after)-CGRectGetMaxY(menuFrame))<=3;
+    if(!aligned) {
         GuestBaiduListProbe(@"mutation-not-stable",@{
             @"firstBefore":@(firstY),@"firstAfter":@(CGRectGetMinY(after)),
             @"beforeInset":NSStringFromUIEdgeInsets(actual),
@@ -1338,18 +1301,24 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
         }];
         return;
     }
-    saved=[LCOrbitBaiduListInsetState new];
-    saved.scroll=scroll;saved.selected=selected;
-    saved.originalTop=actual.top;saved.addedTop=missing;
+    if(!saved) saved=[LCOrbitBaiduListInsetState new];
+    saved.scroll=scroll;
+    saved.selected=selected;
+    saved.originalTop=appBaseline;
+    saved.addedTop=targetInset-appBaseline;
     GuestBaiduListInset=saved;
     GuestWriteEvent(@"guest-uikit-baidu-list-inset-corrected",@{
-        @"repairVersion":@"pipixia-list-v3",
+        @"repairVersion":@"pipixia-list-v4",
+        @"correctionKind":correction>0?@"missing":@"duplicate",
         @"scrollClass":NSStringFromClass(scroll.class),
         @"menuFrame":NSStringFromCGRect(menuFrame),
         @"listFrame":NSStringFromCGRect(listFrame),
         @"firstCellBefore":@(firstY),
         @"firstCellAfter":@(CGRectGetMinY(after)),
-        @"missing":@(missing),
+        @"measuredGap":@(measuredGap),
+        @"correction":@(correction),
+        @"targetInset":@(targetInset),
+        @"appBaseline":@(appBaseline),
         @"originalInset":NSStringFromUIEdgeInsets(actual),
         @"correctedInset":NSStringFromUIEdgeInsets(scroll.contentInset),
         @"originalOffset":NSStringFromCGPoint(offset),
@@ -1501,7 +1470,7 @@ static void GuestTakeSnapshot(NSString *reason) {
         if(diagnostics) GuestWriteEvent(@"guest-uikit-diagnostic-loaded",
             @{@"status":@"waiting-for-ui",
               @"uikitRelayoutEnabled":@(GuestRelayoutEnabled),
-              @"repairVersion":@"pipixia-list-v3"});
+              @"repairVersion":@"pipixia-list-v4"});
         NSNotificationCenter *center=NSNotificationCenter.defaultCenter;
         NSArray<NSString *> *notifications=@[
             UIApplicationDidBecomeActiveNotification,
