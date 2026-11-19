@@ -18,6 +18,7 @@ static NSUInteger GuestSamples=0;
 // add a second safe-area inset on top of UIKit's already-correct value.
 static BOOL GuestRelayoutEnabled=NO;
 static BOOL GuestRelayoutPolling=NO;
+static NSUInteger GuestRepairGeneration;
 static __weak UIWindow *GuestRelayoutWindow;
 static __weak UIViewController *GuestRelayoutRoot;
 static CGFloat GuestRepairedTop=-1;
@@ -396,7 +397,10 @@ static void GuestSafeAreaRepairTick(void) {
     CGFloat top=window.safeAreaInsets.top;
     CGFloat rootTop=view.safeAreaInsets.top;
     if(!isfinite(top) || !isfinite(rootTop) || top<1 || rootTop<1 ||
-       fabs(top-rootTop)>2) return;
+       fabs(top-rootTop)>2) {
+        GuestRepairedTop=-1;
+        return;
+    }
     // A later app layout may recreate its custom header without changing the
     // safe-area number; the short bounded polling still checks for new views.
     if(fabs(top-GuestRepairedTop)<.5) {
@@ -435,8 +439,9 @@ static void GuestSafeAreaRepairTick(void) {
                 @"navigationAfter":GuestNavigationGeometry(strongWindow)});
     });
 }
-static void GuestScheduleSafeAreaRepair(void) {
-    if(!GuestRelayoutEnabled || GuestRelayoutPolling) return;
+static void GuestScheduleSafeAreaRepair(BOOL restart) {
+    if(!GuestRelayoutEnabled || (GuestRelayoutPolling && !restart)) return;
+    NSUInteger generation=++GuestRepairGeneration;
     GuestRelayoutPolling=YES;
     // Bounded startup/foreground probes. No permanent timer or global hook.
     NSArray<NSNumber *> *delays=@[@0.0,@0.2,@0.5,@1.0,@1.8,@3.0,@5.0];
@@ -445,6 +450,7 @@ static void GuestScheduleSafeAreaRepair(void) {
         BOOL last=index==delays.count-1;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
             (int64_t)(delay.doubleValue*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+            if(generation!=GuestRepairGeneration) return;
             GuestSafeAreaRepairTick();
             if(last) GuestRelayoutPolling=NO;
         });
@@ -581,12 +587,13 @@ static void GuestTakeSnapshot(NSString *reason) {
                 if(GuestRelayoutEnabled) {
                     // Recheck foreground transitions even if the next app
                     // window reuses its previous UIWindow instance.
-                    if([name isEqualToString:UIApplicationWillEnterForegroundNotification])
+                    BOOL pipixia=[GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"];
+                    if(!pipixia && [name isEqualToString:UIApplicationWillEnterForegroundNotification])
                         GuestRepairedTop=-1;
-                    GuestScheduleSafeAreaRepair();
+                    GuestScheduleSafeAreaRepair(pipixia && [name isEqualToString:UIApplicationDidBecomeActiveNotification]);
                 }
             }];
-        if(GuestRelayoutEnabled) GuestScheduleSafeAreaRepair();
+        if(GuestRelayoutEnabled) GuestScheduleSafeAreaRepair(NO);
         if(diagnostics) for(NSNumber *delay in @[@1.0,@3.0,@6.0])
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(delay.doubleValue*NSEC_PER_SEC)),
                            dispatch_get_main_queue(),^{
