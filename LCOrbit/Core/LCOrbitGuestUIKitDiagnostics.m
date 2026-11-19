@@ -50,6 +50,7 @@ static __weak UIViewController *GuestBaiduProbeSelected;
 static NSInteger GuestBaiduProbeBarY=NSIntegerMin;
 static NSInteger GuestBaiduProbeMenuBottom=NSIntegerMin;
 static NSUInteger GuestBaiduProbeCount=0;
+static NSTimeInterval GuestBaiduLastProbeAt=0;
 @interface LCOrbitInstagramInsetState : NSObject
 @property(nonatomic,weak) UIScrollView *scroll;
 @property(nonatomic,assign) CGFloat originalTop;
@@ -799,6 +800,7 @@ static void GuestStopBaiduContentWatch(void) {
     GuestBaiduProbeSelected=nil;
     GuestBaiduProbeBarY=NSIntegerMin;
     GuestBaiduProbeMenuBottom=NSIntegerMin;
+    GuestBaiduLastProbeAt=0;
 }
 // Instagram updates its home feed geometry again during refresh/reload. A
 // normal-mode, low-rate watcher resumes the top-only fix AFTER scrolling settles.
@@ -1065,13 +1067,20 @@ static void GuestBaiduPageProbeTick(void) {
     UIView *menu=GuestFindBaiduSlideMenu(nav.viewIfLoaded,window,0,&visited);
     NSInteger menuBottom=menu?(NSInteger)lround(
         CGRectGetMaxY([menu convertRect:menu.bounds toView:window])):NSIntegerMin;
-    if(selected==GuestBaiduProbeSelected && barY==GuestBaiduProbeBarY &&
-       menuBottom==GuestBaiduProbeMenuBottom) return;
+    BOOL changed=selected!=GuestBaiduProbeSelected ||
+        barY!=GuestBaiduProbeBarY || menuBottom!=GuestBaiduProbeMenuBottom;
+    NSTimeInterval now=[NSDate timeIntervalSinceReferenceDate];
+    // BDS internal category switches may reuse the same selected controller
+    // and top-menu geometry. Keep slow bounded samples to catch those pages.
+    if(!changed && now-GuestBaiduLastProbeAt<4.0) return;
+    GuestBaiduLastProbeAt=now;
     GuestBaiduProbeSelected=selected;
     GuestBaiduProbeBarY=barY;
     GuestBaiduProbeMenuBottom=menuBottom;
     GuestBaiduProbeCount++;
-    GuestWriteEvent(@"guest-uikit-baidu-page-geometry",snapshot);
+    NSMutableDictionary *payload=[snapshot mutableCopy];
+    payload[@"trigger"]=changed?@"controller-or-header-change":@"periodic";
+    GuestWriteEvent(@"guest-uikit-baidu-page-geometry",payload);
 }
 static void GuestTakeSnapshot(NSString *reason) {
     if(!NSThread.isMainThread || ![LCOrbitGuestUIKitDiagnostics isEnabled] ||
