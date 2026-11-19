@@ -18,10 +18,11 @@ static IMP OriginalMinimize;
 @compatibility_alias UIViewController OrbitController;
 static NSArray *ManagedWindows;
 static id Active;
-static NSUInteger GeometryUpdates,FrontCalls;
+static NSUInteger GeometryUpdates,FrontCalls,ActivationWakeups;
 static BOOL OrbitPiPProtectedWindow(UIViewController *window) { return NO; }
 static void SetVisible(UIViewController *window,SEL selector,BOOL visible) { window.view.hidden=!visible; }
 static void UpdateScene(UIViewController *window,id settings) { GeometryUpdates++; }
+static void NotifyReactivatedGuest(UIViewController *window) { ActivationWakeups++; }
 static void NativeFront(id object,SEL selector,id view) { FrontCalls++; }
 static void NativeMinimize(UIViewController *window,SEL selector) { window.view.hidden=YES; }
 static BOOL Fullscreen(void) { return Enabled && !SystemMenu; }
@@ -63,21 +64,21 @@ int main(void) {
         ManagedWindows=@[a,b];OriginalBringToFront=(IMP)NativeFront;
         Enabled=YES;SystemMenu=YES;
         HostingBringToFront(nil,NSSelectorFromString(@"bringSubviewToFront:"),b.view);
-        Expect(Active==b && b.view.hidden && !a.view.hidden && GeometryUpdates==0 && FrontCalls==1,
+        Expect(Active==b && b.view.hidden && !a.view.hidden && GeometryUpdates==0 && FrontCalls==1 && ActivationWakeups==0,
             @"system Dock tracks identity without imposing plugin visibility or fullscreen geometry");
         OriginalMinimize=(IMP)NativeMinimize;
         Minimize(b,NSSelectorFromString(@"minimizeWindow"));
         Expect(Active==nil && b.view.hidden,@"system minimize clears active identity for settings recovery");
         SystemMenu=NO;
         HostingBringToFront(nil,NSSelectorFromString(@"bringSubviewToFront:"),b.view);
-        Expect(Active==b && !b.view.hidden && a.view.hidden && GeometryUpdates==1 && FrontCalls==2,
+        Expect(Active==b && !b.view.hidden && a.view.hidden && GeometryUpdates==1 && FrontCalls==2 && ActivationWakeups==1,
             @"bead mode still reconciles active task and fullscreen geometry");
         OriginalMinimize=(IMP)NativeMinimize;
         Minimize(b,NSSelectorFromString(@"minimizeWindow"));
         Expect(Active==nil && b.view.hidden,@"LC native minimize clears foreground identity");
         Active=b;
         HostingBringToFront(nil,NSSelectorFromString(@"bringSubviewToFront:"),[UIView new]);
-        Expect(Active==b && GeometryUpdates==1 && FrontCalls==3,@"unmanaged views are reordered without task side effects");
+        Expect(Active==b && GeometryUpdates==1 && FrontCalls==3 && ActivationWakeups==1,@"unmanaged views are reordered without task side effects");
         Enabled=NO;
         HostingBringToFront(nil,NSSelectorFromString(@"bringSubviewToFront:"),a.view);
         Expect(Active==b && GeometryUpdates==1 && FrontCalls==4,@"disabled engine preserves native view behavior");
