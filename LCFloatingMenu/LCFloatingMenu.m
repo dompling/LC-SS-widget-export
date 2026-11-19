@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.39"
+#define FM_MENU_VERSION @"1.0.40"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -3845,6 +3845,17 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     if(action) [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return row;
 }
+// The icon plate is a continuous rounded rect with clipsToBounds (that clip is what
+// trims the system icon's 1px highlight ring), so a status badge parked flush in the
+// bottom-right corner gets its outer sliver shaved off by the corner arc. Nudge the
+// badge inside the arc instead of shrinking it: a circular badge of diameter `side`
+// stays clear once its centre sits r*(1-1/sqrt2) further in along both edges, where
+// r = size*.225 is the plate's corner radius.
+static CGFloat FMBadgeCornerInset(CGFloat size,CGFloat side) {
+    CGFloat r=size*.225;
+    CGFloat needed=MAX(0,(r-side*.5))*(1.0-1.0/M_SQRT2);
+    return MAX(0.5,needed+0.5);
+}
 // A restrained emerald status light, not a large success badge.
 // The outer halo breathes subtly; the solid center always stays readable.
 static UIView *FMRunningBreathingLight(CGFloat size) {
@@ -3913,8 +3924,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     BOOL locked=[app[@"locked"] boolValue];
     if(current) {
         CGFloat side=MIN(13,MAX(10,size*.30));
+        CGFloat inset=FMBadgeCornerInset(size,side);
         UIView *light=FMRunningBreathingLight(side);
-        light.frame=CGRectMake(size-side,size-side,side,side);
+        light.frame=CGRectMake(size-side-inset,size-side-inset,side,side);
         light.userInteractionEnabled=NO;
         [box addSubview:light];
     } else if(hidden) {
@@ -3925,9 +3937,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         darkMask.userInteractionEnabled=NO;
         [box addSubview:darkMask];
 
-        // 原生 lock.circle.fill 红底白锁角标
+        // 原生 lock.circle.fill 红底白锁角标。位置需内缩到圆角弧内，否则右下角被裁。
         CGFloat side=MIN(16,MAX(14,size*.34));
-        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        CGFloat inset=FMBadgeCornerInset(size,side);
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side-inset,size-side-inset,side,side)];
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.userInteractionEnabled=NO;
 
@@ -3943,7 +3956,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     } else if(locked) {
         // 单独在 LiveContainer 设置锁定：原生 lock.circle.fill 暖橙黄底白锁角标（与红底白锁同尺寸）
         CGFloat side=MIN(16,MAX(14,size*.34));
-        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        CGFloat inset=FMBadgeCornerInset(size,side);
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side-inset,size-side-inset,side,side)];
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.userInteractionEnabled=NO;
 
@@ -3960,8 +3974,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     } else if(blocked) {
         // JIT 需求角标：改用 LCFloatingMenu 紫色圆形闪电徽标（fm.logo），
         // 尺寸与左侧锁定/隐藏徽标完全一致，替换原来的灰色感叹号。
+        // 该徽标是近方形自绘图形，四角都是实的，更需要避开圆角裁切。
         CGFloat side=MIN(16,MAX(14,size*.34));
-        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        CGFloat inset=FMBadgeCornerInset(size,side);
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side-inset,size-side-inset,side,side)];
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.image=FMLogoBadgeImage(side);
         mark.userInteractionEnabled=NO;
