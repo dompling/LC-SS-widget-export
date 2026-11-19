@@ -143,34 +143,35 @@ checks = {
         'fabs(scroll.contentOffset.y+scroll.adjustedContentInset.top)>1' in diag and
         'GuestInstagramNoScrollReported=NO' in diag and
         'GuestSafeAreaRepairTick();' in diag,
-    "Pipixia fixes only measured foreground vertical list overlap":
+    "Pipixia v4 normalizes the foreground feed in both directions":
         "GuestRepairBaiduListScroll" in diag and
         "GuestBaiduForegroundList" in diag and
         "BDSVerticalUICollectionView" in diag and
         'BDSMixedListContainerV3ViewController' in diag and
-        "firstCellBefore" in diag and
-        "firstCellAfter" in diag and
+        "CGFloat targetInset=CGRectGetMaxY(menuFrame)-CGRectGetMinY(listFrame)" in diag and
+        "CGFloat correction=targetInset-actual.top" in diag and
+        "CGFloat measuredGap=CGRectGetMaxY(menuFrame)-firstY" in diag and
+        "fabs(measuredGap-correction)>3" in diag and
+        "fabs(correction)>70" in diag and
+        'actual.top>=0 && actual.top<=130' in diag and
+        "changed.top=targetInset" in diag and
+        "CGPointMake(offset.x,-targetInset)" in diag and
+        "saved.originalTop=appBaseline" in diag and
+        "saved.addedTop=targetInset-appBaseline" in diag and
+        "GuestBaiduPendingList" in diag and
+        "GuestBaiduPendingSince" in diag and
+        "now-GuestBaiduPendingSince<0.2" in diag and
+        "GuestResetBaiduListCandidate" in diag and
+        "scroll.dragging || scroll.tracking || scroll.decelerating" in diag and
+        'pipixia-list-v4' in diag and
         "guest-uikit-baidu-list-inset-corrected" in diag and
-        "fabs(actual.top+missing-targetInset)>3" in diag and
-        'actual.top>=0 && actual.top<=70' in diag and
-        'missing>68' in diag and
-        'pipixia-list-v3' in diag and
-        'guest-uikit-baidu-list-inset-reconciled' in diag and
-        'fabs(current.top-target-menuHeight)<=2' in diag and
-        'saved.originalTop=menuHeight' in diag and
-        'saved.addedTop=target-menuHeight' in diag and
-        'fabs(offset.y+current.top)<=2' in diag and
-        'guest-uikit-baidu-list-probe' in diag and
-        'GuestBaiduListProbe' in diag and
-        "scroll.contentSize.height<scroll.bounds.size.height*1.05" in diag and
-        "changed.top+=missing" in diag and
-        "offset.y-missing" in diag,
+        "GuestBaiduListProbe" in diag,
     "Pipixia never edits the -769pt pager or changes geometry globally":
         'BDSIMMPageScrollView' in diag and
         'BDSVerticalUICollectionView' in diag and
         "scroll.dragging || scroll.tracking || scroll.decelerating" in diag and
         "GuestRestoreBaiduListInset" in diag and
-        "saved.originalTop=actual.top" in diag and
+        "saved.originalTop=appBaseline" in diag and
         "offset.y+saved.addedTop" in diag and
         "GuestRepairBaiduListScroll(window,root,top)" in diag and
         "GuestRepairBaiduListScroll(strongWindow,root,top)" in diag and
