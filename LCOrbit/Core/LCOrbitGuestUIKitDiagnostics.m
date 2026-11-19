@@ -45,6 +45,7 @@ static LCOrbitTopSurfaceOffset *GuestInstagramHeaderOffset;
 @end
 static LCOrbitBaiduContentSafeState *GuestBaiduContentSafe;
 static NSTimer *GuestBaiduContentWatchTimer;
+static void GuestBaiduPageProbeTick(void);
 static __weak UIViewController *GuestBaiduProbeSelected;
 static NSInteger GuestBaiduProbeBarY=NSIntegerMin;
 static NSInteger GuestBaiduProbeMenuBottom=NSIntegerMin;
