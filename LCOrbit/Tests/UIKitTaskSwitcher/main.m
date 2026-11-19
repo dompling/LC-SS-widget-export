@@ -394,6 +394,15 @@ static void Run(UIWindowScene *scene) {
         Check(@"dock-keeps-full-inventory-including-not-running",dock.subviews.count==apps.count);
         BOOL ordered=YES;for(NSUInteger i=0;i<apps.count;i++)ordered=ordered&&[Find(dock,[NSString stringWithFormat:@"orbit.dock.app.%lu",(unsigned long)i]).accessibilityLabel isEqual:apps[i][@"title"]];
         Check(@"dock-preserves-original-inventory-order",ordered&&dock!=nil);
+        UIView *dockGlass=Find(Overview(scene),@"orbit.dock");
+        UIButton *firstDockButton=(UIButton *)Find(dock,@"orbit.dock.app.0");
+        UIView *firstArtwork=firstDockButton.subviews.firstObject;
+        CGRect iconInGlass=firstArtwork?[firstArtwork convertRect:firstArtwork.bounds toView:dockGlass]:CGRectZero;
+        CGFloat topInset=CGRectGetMinY(iconInGlass),bottomInset=CGRectGetHeight(dockGlass.bounds)-CGRectGetMaxY(iconInGlass);
+        Check(@"adaptive-dock-keeps-icon-padding-and-smaller-corners",dockGlass &&
+              fabs(dockGlass.bounds.size.height-64)<.5 && fabs(dockGlass.layer.cornerRadius-19)<.5 &&
+              firstArtwork && fabs(firstArtwork.bounds.size.height-48)<.5 &&
+              topInset>=7.5 && bottomInset>=7.5);
         Check(@"dock-horizontal-overflow-is-scrollable",dock.scrollEnabled&&dock.contentSize.width>dock.bounds.size.width&&dock.showsHorizontalScrollIndicator==NO);
         CGPoint dockSnap=CGPointMake(123,0);[dock.delegate scrollViewWillEndDragging:dock withVelocity:CGPointMake(1,0) targetContentOffset:&dockSnap];Check(@"dock-scroll-never-snaps-deck",dock&&fabs(dockSnap.x-123)<.1);
         Pump(1.05);Check(@"supplied-inventory-avoids-running-task-rescan",unified&&InventoryReads==readsBefore&&[LastInventory isEqual:apps]);

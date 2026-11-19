@@ -337,7 +337,7 @@ static UIWindow *OverviewWindow;
         UILabel *empty=[UILabel new];empty.accessibilityIdentifier=@"orbit.task.empty";empty.text=@"没有正在运行的 App";empty.textAlignment=NSTextAlignmentCenter;empty.font=[UIFont systemFontOfSize:15 weight:UIFontWeightMedium];empty.textColor=[UIColor.whiteColor colorWithAlphaComponent:.82];[self.view addSubview:empty];self.emptyLabel=empty;
     }
     if(self.apps.count) {
-        self.dock=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];self.dock.accessibilityIdentifier=@"orbit.dock";self.dock.layer.cornerRadius=24;self.dock.layer.cornerCurve=kCACornerCurveContinuous;self.dock.clipsToBounds=YES;self.dock.layer.borderWidth=.5;self.dock.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.16].CGColor;[self.view addSubview:self.dock];
+        self.dock=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];self.dock.accessibilityIdentifier=@"orbit.dock";self.dock.layer.cornerRadius=19;self.dock.layer.cornerCurve=kCACornerCurveContinuous;self.dock.clipsToBounds=YES;self.dock.layer.borderWidth=.5;self.dock.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.16].CGColor;[self.view addSubview:self.dock];
         self.dockScroll=[UIScrollView new];self.dockScroll.accessibilityIdentifier=@"orbit.dock.scroll";self.dockScroll.delegate=self;self.dockScroll.showsHorizontalScrollIndicator=NO;self.dockScroll.showsVerticalScrollIndicator=NO;self.dockScroll.alwaysBounceHorizontal=YES;self.dockScroll.directionalLockEnabled=YES;self.dockScroll.contentInsetAdjustmentBehavior=UIScrollViewContentInsetAdjustmentNever;[self.dock.contentView addSubview:self.dockScroll];
         NSDictionary *active=nil;
         for(NSDictionary *task in self.tasks)if([task[@"active"] boolValue]){active=task;break;}
@@ -435,18 +435,18 @@ static UIWindow *OverviewWindow;
     UIEdgeInsets safe=self.view.safeAreaInsets;
     if(CGRectEqualToRect(bounds,self.laidOutBounds)&&UIEdgeInsetsEqualToEdgeInsets(safe,self.laidOutSafeInsets))return;self.laidOutBounds=bounds;self.laidOutSafeInsets=safe;
     CGFloat width=bounds.size.width,height=bounds.size.height;
-    // The old fixed 64pt Dock plus 12pt bottom and 20pt card spacing
-    // unnecessarily squeezed previews, especially in landscape.
-    CGFloat dockHeight=MIN(56,MAX(48,ceil(self.dockIconSize)+8));
+    // Keep an actual 8pt inset around the artwork, even at maximum size.
+    // A fixed 56pt cap previously made larger icons hug the glass border.
+    CGFloat dockHeight=MAX(54,ceil(self.dockIconSize)+16);
     CGFloat dockTop=MAX(safe.top+12,height-safe.bottom-dockHeight-self.dockBottomGap);
     if(self.dock) {
-        CGFloat x=12,buttonWidth=MAX(44,self.dockIconSize);
+        CGFloat x=14,buttonWidth=MAX(44,self.dockIconSize);
         for(LCOrbitTaskDockButton *button in self.dockScroll.subviews) {
             if(![button isKindOfClass:LCOrbitTaskDockButton.class])continue;
-            button.frame=CGRectMake(x,4,buttonWidth,dockHeight-8);
+            button.frame=CGRectMake(x,8,buttonWidth,dockHeight-16);
             x+=buttonWidth+10;
         }
-        CGFloat dockContentWidth=x+2;
+        CGFloat dockContentWidth=x+4;
         CGFloat dockWidth=MIN(width-safe.left-safe.right-28,dockContentWidth);
         // The entrance animation initially translates the Dock by 32pt. Setting
         // frame while transformed bakes that translation into its base position;

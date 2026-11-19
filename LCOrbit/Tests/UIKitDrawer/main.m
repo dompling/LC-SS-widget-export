@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import "LCOrbit/Core/LCOrbitCore.h"
 #import "LCOrbit/Core/LCOrbitStorage.h"
 #import "LCOrbit/Core/LCOrbitGuestService.h"
@@ -1402,6 +1403,23 @@ static void RunTests(void) {
     compactSwitch.on=NO;[dock switchChanged:compactSwitch];
     NSArray<NSString *> *listKeys=ShownKeys(dock.view,@"FMDockSlider");
     Check(@"dock-list-mode-shows-its-own-icon-size",[listKeys containsObject:@"menuListIconSize"] && ![listKeys containsObject:@"menuCompactIconSize"],listKeys);
+    id previousTaskMode=[prefs objectForKey:@"LCFloatingMenu.taskSwitcherMode"];
+    [prefs setObject:@2 forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    ((void(*)(id,SEL,BOOL))objc_msgSend)(dock,NSSelectorFromString(@"applyVisibilityAnimated:"),NO);
+    NSArray<NSString *> *adaptiveDockKeys=ShownKeys(dock.view,@"FMDockSlider");
+    Check(@"adaptive-dock-shows-independent-icon-slider",[adaptiveDockKeys containsObject:@"adaptiveDockIconSize"] &&
+          ![adaptiveDockKeys containsObject:@"menuListIconSize"] && ![adaptiveDockKeys containsObject:@"menuCompactIconSize"],adaptiveDockKeys);
+    UISlider *dockIconSlider=(UISlider *)DockControl(dock.view,@"FMDockSlider",@"adaptiveDockIconSize");
+    if(dockIconSlider) {
+        dockIconSlider.value=47;
+        [dock sliderChanged:(id)dockIconSlider];
+        // Persist the staged drag value before reading preference storage.
+        ((void(*)(id,SEL))objc_msgSend)(dock,NSSelectorFromString(@"commitStagedSlider"));
+        Settle(dock.view);
+    }
+    Check(@"adaptive-dock-icon-slider-persists",dockIconSlider && [prefs doubleForKey:@"LCFloatingMenu.adaptiveDockIconSize"]==47,nil);
+    [prefs setObject:previousTaskMode forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    ((void(*)(id,SEL,BOOL))objc_msgSend)(dock,NSSelectorFromString(@"applyVisibilityAnimated:"),NO);
     // Fade: the two fade sliders follow the switch.
     UIControl *opacityHeader=nil;
     for(UIView *view in Views(dock.view)) if([view isKindOfClass:UIControl.class] && view.tag==2 &&
@@ -1725,6 +1743,8 @@ static void RunTests(void) {
     Snapshot(portrait,@"normal-portrait");
     id savedSwitcherMode=[prefs objectForKey:@"LCFloatingMenu.taskSwitcherMode"];
     [prefs setInteger:2 forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    id previousDockIconSize=[prefs objectForKey:@"LCFloatingMenu.adaptiveDockIconSize"];
+    [prefs setObject:@49 forKey:@"LCFloatingMenu.adaptiveDockIconSize"];
     SEL adaptiveEntry=@selector(presentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
     SEL fixtureEntry=@selector(fixturePresentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
     SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
@@ -1738,6 +1758,8 @@ static void RunTests(void) {
         NSDictionary *blocked=@{@"title":@"Blocked",@"status":@"需要 JIT",@"blockReason":@"needs-jit",@"launchable":@NO};
         UIView *blockedIcon=AdaptiveIconProvider?AdaptiveIconProvider(blocked,AdaptiveIconSize,NO):nil;
         UIView *currentIcon=AdaptiveIconProvider?AdaptiveIconProvider(blocked,AdaptiveIconSize,YES):nil;
+        Check(compact.boolValue?@"adaptive-compact-icon-size-from-dock-slider":@"adaptive-normal-icon-size-from-dock-slider",
+              fabs(AdaptiveIconSize-49)<.01,nil);
         Check(compact.boolValue?@"adaptive-compact-drawer-artwork":@"adaptive-normal-drawer-artwork",
               AdaptiveIconSize>0 && CGRectGetWidth(blockedIcon.bounds)==AdaptiveIconSize &&
               [blockedIcon.accessibilityValue isEqualToString:@"需要 JIT"] &&
@@ -1780,6 +1802,7 @@ static void RunTests(void) {
         Check(@"failed-presentation-save-restores-choice",presentation.selectedSegmentIndex==0&&[[prefs objectForKey:@"LCFloatingMenu.taskSwitcherPresentation"] integerValue]==0,nil);RejectPresentation=NO;
     }
     [prefs setObject:savedSwitcherMode forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    [prefs setObject:previousDockIconSize forKey:@"LCFloatingMenu.adaptiveDockIconSize"];
     SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
     FixtureWidth=667;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3.8*NSEC_PER_SEC),dispatch_get_main_queue(),^{
