@@ -202,6 +202,21 @@ static void GuestWriteEvent(NSString *name,NSDictionary *details) {
     } @finally {GuestUnlockFile(lock);}
 }
 
+// Keep at most one useful skip reason of each kind, so the next device log
+// reveals why a feed correction did not run without flooding GuestUIKit.
+static NSMutableSet<NSString *> *GuestBaiduListProbeReasons;
+static void GuestBaiduListProbe(NSString *reason,NSDictionary *extra) {
+    if(![LCOrbitGuestUIKitDiagnostics isEnabled]) return;
+    if(!GuestBaiduListProbeReasons)
+        GuestBaiduListProbeReasons=[NSMutableSet set];
+    if(GuestBaiduListProbeReasons.count>=9 ||
+       [GuestBaiduListProbeReasons containsObject:reason]) return;
+    [GuestBaiduListProbeReasons addObject:reason];
+    NSMutableDictionary *payload=[@{@"reason":reason,
+        @"repairVersion":@"pipixia-list-v2"} mutableCopy];
+    if(extra) [payload addEntriesFromDictionary:extra];
+    GuestWriteEvent(@"guest-uikit-baidu-list-probe",payload);
+}
 // Read only onscreen UIKit controls, never the value of any control or label.
 static void GuestTopControls(UIView *view,UIWindow *window,
                             NSMutableArray<NSDictionary *> *controls,
@@ -1114,12 +1129,19 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
     UINavigationController *nav=(UINavigationController *)root;
     UIViewController *visible=nav.visibleViewController;
     UIViewController *selected=[visible isKindOfClass:UITabBarController.class]?
-        ((UITabBarController *)visible).selectedViewController:nil;
+        ((UITabBarController *)visible).selectedViewController:visible;
     if(!selected ||
        ![NSStringFromClass(selected.class) isEqualToString:
            @"BDSMixedListContainerV3ViewController"] ||
        !selected.isViewLoaded || selected.viewIfLoaded.window!=window ||
        nav.transitionCoordinator || selected.transitionCoordinator) {
+        GuestBaiduListProbe(@"selected-not-ready",@{
+            @"visible":visible?NSStringFromClass(visible.class):@"none",
+            @"selected":selected?NSStringFromClass(selected.class):@"none",
+            @"isLoaded":@(selected.isViewLoaded),
+            @"inWindow":@(selected.viewIfLoaded.window==window),
+            @"navTransition":@(nav.transitionCoordinator!=nil),
+            @"pageTransition":@(selected.transitionCoordinator!=nil)});
         GuestRestoreBaiduListInset();
         return;
     }
@@ -1137,13 +1159,26 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
             (saved.originalTop+saved.addedTop))<=1) return;
         GuestBaiduListInset=nil; // App already changed its own inset.
     }
-    if(!scroll || scroll.dragging || scroll.tracking || scroll.decelerating ||
-       scroll.contentSize.height<scroll.bounds.size.height*1.05)
+    if(!scroll) {
+        GuestBaiduListProbe(@"list-not-found",@{@"visited":@(visited)});
         return;
+    }
+    if(scroll.dragging || scroll.tracking || scroll.decelerating ||
+       scroll.contentSize.height<scroll.bounds.size.height*1.05) {
+        GuestBaiduListProbe(@"list-not-ready",@{
+            @"contentSize":NSStringFromCGSize(scroll.contentSize),
+            @"tracking":@(scroll.tracking),
+            @"dragging":@(scroll.dragging),
+            @"decelerating":@(scroll.decelerating)});
+        return;
+    }
     NSUInteger menuVisited=0;
     UIView *menu=GuestFindBaiduSlideMenu(
         root.viewIfLoaded,window,0,&menuVisited);
-    if(!menu) return;
+    if(!menu) {
+        GuestBaiduListProbe(@"menu-not-found",@{@"visited":@(menuVisited)});
+        return;
+    }
     CGRect menuFrame=[menu convertRect:menu.bounds toView:window];
     CGRect listFrame=[scroll convertRect:scroll.bounds toView:window];
     UIEdgeInsets actual=scroll.contentInset;
@@ -1158,11 +1193,20 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
         CGRectGetHeight(menuFrame)>=40 && CGRectGetHeight(menuFrame)<=58 &&
         fabs(CGRectGetMinX(listFrame))<=3 &&
         CGRectGetMinY(listFrame)>=25 && CGRectGetMinY(listFrame)<=70 &&
-        actual.top>=35 && actual.top<=70 &&
+        actual.top>=0 && actual.top<=70 &&
         fabs(adjusted.top-actual.top)<=1 &&
         fabs(offset.y+adjusted.top)<=1 &&
         listSafeTop>2 && listSafeTop<=24;
-    if(!stable) return;
+    if(!stable) {
+        GuestBaiduListProbe(@"layout-guard",@{
+            @"menu":NSStringFromCGRect(menuFrame),
+            @"list":NSStringFromCGRect(listFrame),
+            @"inset":NSStringFromUIEdgeInsets(actual),
+            @"adjusted":NSStringFromUIEdgeInsets(adjusted),
+            @"offset":NSStringFromCGPoint(offset),
+            @"safeTop":@(listSafeTop)});
+        return;
+    }
     UICollectionViewCell *first=nil;
     CGFloat firstY=CGFLOAT_MAX;
     for(UICollectionViewCell *cell in scroll.visibleCells) {
@@ -1172,14 +1216,28 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
             first=cell;firstY=CGRectGetMinY(cellFrame);
         }
     }
-    if(!first || !isfinite(firstY)) return;
+    if(!first || !isfinite(firstY)) {
+        GuestBaiduListProbe(@"no-visible-cell",@{
+            @"contentSize":NSStringFromCGSize(scroll.contentSize),
+            @"visibleCount":@(scroll.visibleCells.count)});
+        return;
+    }
     CGFloat expectedY=CGRectGetMinY(listFrame)+adjusted.top;
     CGFloat missing=CGRectGetMaxY(menuFrame)-firstY;
-    // Do not shift a feed whose first cell already clears the menu.
-    // This is the observed 11pt local mismatch, not a new global safe area.
-    if(fabs(firstY-expectedY)>3 || missing<=2 || missing>24 ||
-       fabs(missing-listSafeTop)>3)
+    // The app alternates between 48pt and 0pt content insets.
+    // Both must end at the same physical menu bottom: 48+11 = 0+59 = 59.
+    // The first cell must still be at the unscrolled origin to qualify.
+    CGFloat targetInset=CGRectGetMaxY(menuFrame)-CGRectGetMinY(listFrame);
+    if(fabs(firstY-expectedY)>3 || !isfinite(missing) ||
+       missing<=2 || missing>68 ||
+       fabs(actual.top+missing-targetInset)>3) {
+        GuestBaiduListProbe(@"overlap-guard",@{
+            @"first":NSStringFromClass(first.class),
+            @"firstY":@(firstY),@"expectedY":@(expectedY),
+            @"missing":@(missing),@"targetInset":@(targetInset),
+            @"originalTop":@(actual.top)});
         return;
+    }
     UIEdgeInsets changed=actual;
     changed.top+=missing;
     [UIView performWithoutAnimation:^{
@@ -1193,6 +1251,11 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
         fabs(CGRectGetMinY(after)-(firstY+missing))<=3 &&
         fabs(scroll.contentInset.top-changed.top)<=1;
     if(!moved) {
+        GuestBaiduListProbe(@"mutation-not-stable",@{
+            @"firstBefore":@(firstY),@"firstAfter":@(CGRectGetMinY(after)),
+            @"beforeInset":NSStringFromUIEdgeInsets(actual),
+            @"afterInset":NSStringFromUIEdgeInsets(scroll.contentInset),
+            @"afterOffset":NSStringFromCGPoint(scroll.contentOffset)});
         [UIView performWithoutAnimation:^{
             scroll.contentInset=actual;
             [scroll setContentOffset:offset animated:NO];
@@ -1204,6 +1267,7 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
     saved.originalTop=actual.top;saved.addedTop=missing;
     GuestBaiduListInset=saved;
     GuestWriteEvent(@"guest-uikit-baidu-list-inset-corrected",@{
+        @"repairVersion":@"pipixia-list-v2",
         @"scrollClass":NSStringFromClass(scroll.class),
         @"menuFrame":NSStringFromCGRect(menuFrame),
         @"listFrame":NSStringFromCGRect(listFrame),
@@ -1360,7 +1424,8 @@ static void GuestTakeSnapshot(NSString *reason) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if(diagnostics) GuestWriteEvent(@"guest-uikit-diagnostic-loaded",
             @{@"status":@"waiting-for-ui",
-              @"uikitRelayoutEnabled":@(GuestRelayoutEnabled)});
+              @"uikitRelayoutEnabled":@(GuestRelayoutEnabled),
+              @"repairVersion":@"pipixia-list-v2"});
         NSNotificationCenter *center=NSNotificationCenter.defaultCenter;
         NSArray<NSString *> *notifications=@[
             UIApplicationDidBecomeActiveNotification,
