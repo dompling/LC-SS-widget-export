@@ -45,6 +45,10 @@ static LCOrbitTopSurfaceOffset *GuestInstagramHeaderOffset;
 @end
 static LCOrbitBaiduContentSafeState *GuestBaiduContentSafe;
 static NSTimer *GuestBaiduContentWatchTimer;
+static __weak UIViewController *GuestBaiduProbeSelected;
+static NSInteger GuestBaiduProbeBarY=NSIntegerMin;
+static NSInteger GuestBaiduProbeMenuBottom=NSIntegerMin;
+static NSUInteger GuestBaiduProbeCount=0;
 @interface LCOrbitInstagramInsetState : NSObject
 @property(nonatomic,weak) UIScrollView *scroll;
 @property(nonatomic,assign) CGFloat originalTop;
@@ -779,7 +783,10 @@ static void GuestStartBaiduContentWatch(void) {
     GuestBaiduContentWatchTimer=[NSTimer timerWithTimeInterval:0.75 repeats:YES
         block:^(NSTimer *timer) {
             if(UIApplication.sharedApplication.applicationState==
-               UIApplicationStateActive) GuestSafeAreaRepairTick();
+               UIApplicationStateActive) {
+                GuestSafeAreaRepairTick();
+                GuestBaiduPageProbeTick();
+            }
         }];
     [[NSRunLoop mainRunLoop] addTimer:GuestBaiduContentWatchTimer
                             forMode:NSDefaultRunLoopMode];
@@ -788,6 +795,9 @@ static void GuestStopBaiduContentWatch(void) {
     [GuestBaiduContentWatchTimer invalidate];
     GuestBaiduContentWatchTimer=nil;
     GuestRestoreBaiduContentSafeArea();
+    GuestBaiduProbeSelected=nil;
+    GuestBaiduProbeBarY=NSIntegerMin;
+    GuestBaiduProbeMenuBottom=NSIntegerMin;
 }
 // Instagram updates its home feed geometry again during refresh/reload. A
 // normal-mode, low-rate watcher resumes the top-only fix AFTER scrolling settles.
@@ -947,6 +957,121 @@ static NSDictionary *GuestInstagramScrollGeometry(UIWindow *window) {
 
     return result;
 }
+// Read-only geometry for the currently selected BDS list page. Its 59pt top
+// safe inset may not include the 48pt custom slide-menu anchored at y=59.
+static void GuestBaiduPageScrolls(UIView *view,UIWindow *window,
+        NSMutableArray<NSDictionary *> *results,NSUInteger depth,NSUInteger *visited) {
+    if(!view || depth>16 || ++(*visited)>800 || results.count>=5 ||
+       view.hidden || view.alpha<.05 || view.window!=window) return;
+    if([view isKindOfClass:UIScrollView.class]) {
+        UIScrollView *scroll=(UIScrollView *)view;
+        CGRect frame=[scroll convertRect:scroll.bounds toView:window];
+        BOOL major=CGRectGetWidth(frame)>window.bounds.size.width*.65 &&
+            CGRectGetHeight(frame)>130;
+        BOOL vertical=scroll.contentSize.height>scroll.bounds.size.height*1.05 ||
+            [scroll isKindOfClass:UITableView.class] ||
+            [scroll isKindOfClass:UICollectionView.class];
+        if(major && vertical) {
+            NSMutableDictionary *entry=[@{
+                @"class":NSStringFromClass(scroll.class),
+                @"frame":NSStringFromCGRect(frame),
+                @"safeInsets":NSStringFromUIEdgeInsets(scroll.safeAreaInsets),
+                @"contentInset":NSStringFromUIEdgeInsets(scroll.contentInset),
+                @"adjustedInset":NSStringFromUIEdgeInsets(scroll.adjustedContentInset),
+                @"contentOffset":NSStringFromCGPoint(scroll.contentOffset),
+                @"contentSize":NSStringFromCGSize(scroll.contentSize),
+                @"adjustmentBehavior":@(scroll.contentInsetAdjustmentBehavior)
+            } mutableCopy];
+            if([scroll isKindOfClass:UICollectionView.class]) {
+                NSMutableArray *cells=[NSMutableArray array];
+                for(UICollectionViewCell *cell in ((UICollectionView *)scroll).visibleCells) {
+                    CGRect rect=[cell convertRect:cell.bounds toView:window];
+                    if(CGRectIntersectsRect(rect,CGRectMake(0,0,window.bounds.size.width,180)) &&
+                       cells.count<4)
+                        [cells addObject:@{@"class":NSStringFromClass(cell.class),
+                            @"frame":NSStringFromCGRect(rect)}];
+                }
+                entry[@"topCells"]=cells;
+            } else if([scroll isKindOfClass:UITableView.class]) {
+                NSMutableArray *cells=[NSMutableArray array];
+                for(UITableViewCell *cell in ((UITableView *)scroll).visibleCells) {
+                    CGRect rect=[cell convertRect:cell.bounds toView:window];
+                    if(CGRectIntersectsRect(rect,CGRectMake(0,0,window.bounds.size.width,180)) &&
+                       cells.count<4)
+                        [cells addObject:@{@"class":NSStringFromClass(cell.class),
+                            @"frame":NSStringFromCGRect(rect)}];
+                }
+                entry[@"topCells"]=cells;
+            }
+            [results addObject:entry];
+        }
+    }
+    for(UIView *subview in view.subviews) {
+        if(results.count>=5 || *visited>=800) break;
+        GuestBaiduPageScrolls(subview,window,results,depth+1,visited);
+    }
+}
+static NSDictionary *GuestBaiduPageGeometry(UIWindow *window) {
+    if(![GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"] ||
+       ![NSStringFromClass(window.rootViewController.class)
+           isEqualToString:@"BDSNavigationController"]) return nil;
+    UINavigationController *nav=(UINavigationController *)window.rootViewController;
+    UIViewController *visible=nav.visibleViewController;
+    UIViewController *selected=[visible isKindOfClass:UITabBarController.class]?
+        ((UITabBarController *)visible).selectedViewController:visible;
+    UIView *selectedView=selected.viewIfLoaded;
+    if(!selectedView || selectedView.window!=window) return @{
+        @"selectedClass":selected?NSStringFromClass(selected.class):@"none",
+        @"selectedReady":@NO};
+    NSUInteger menuVisited=0,scrollVisited=0;
+    UIView *menu=GuestFindBaiduSlideMenu(nav.viewIfLoaded,window,0,&menuVisited);
+    NSMutableArray *scrolls=[NSMutableArray array];
+    GuestBaiduPageScrolls(selectedView,window,scrolls,0,&scrollVisited);
+    NSMutableDictionary *result=[@{
+        @"selectedReady":@YES,
+        @"selectedClass":NSStringFromClass(selected.class),
+        @"selectedFrame":NSStringFromCGRect(
+            [selectedView convertRect:selectedView.bounds toView:window]),
+        @"selectedSafeInsets":NSStringFromUIEdgeInsets(selectedView.safeAreaInsets),
+        @"selectedAdditionalSafeInsets":NSStringFromUIEdgeInsets(
+            selected.additionalSafeAreaInsets),
+        @"scrolls":scrolls,
+        @"scrollVisited":@(scrollVisited),
+        @"menuFound":@(menu!=nil),
+        @"navigationBarHidden":@(nav.navigationBarHidden)
+    } mutableCopy];
+    if(menu) result[@"menuFrame"]=NSStringFromCGRect(
+        [menu convertRect:menu.bounds toView:window]);
+    if(nav.navigationBar.window==window)
+        result[@"navBarFrame"]=NSStringFromCGRect(
+            [nav.navigationBar convertRect:nav.navigationBar.bounds toView:window]);
+    return result;
+}
+static void GuestBaiduPageProbeTick(void) {
+    if(![LCOrbitGuestUIKitDiagnostics isEnabled] || GuestBaiduProbeCount>=14)
+        return;
+    UIWindow *window=GuestVisibleWindow();
+    if(!window) return;
+    NSDictionary *snapshot=GuestBaiduPageGeometry(window);
+    if(![snapshot[@"selectedReady"] boolValue]) return;
+    UINavigationController *nav=(UINavigationController *)window.rootViewController;
+    UIViewController *visible=nav.visibleViewController;
+    UIViewController *selected=[visible isKindOfClass:UITabBarController.class]?
+        ((UITabBarController *)visible).selectedViewController:visible;
+    CGRect bar=[nav.navigationBar convertRect:nav.navigationBar.bounds toView:window];
+    NSInteger barY=(NSInteger)lround(CGRectGetMinY(bar));
+    NSUInteger visited=0;
+    UIView *menu=GuestFindBaiduSlideMenu(nav.viewIfLoaded,window,0,&visited);
+    NSInteger menuBottom=menu?(NSInteger)lround(
+        CGRectGetMaxY([menu convertRect:menu.bounds toView:window])):NSIntegerMin;
+    if(selected==GuestBaiduProbeSelected && barY==GuestBaiduProbeBarY &&
+       menuBottom==GuestBaiduProbeMenuBottom) return;
+    GuestBaiduProbeSelected=selected;
+    GuestBaiduProbeBarY=barY;
+    GuestBaiduProbeMenuBottom=menuBottom;
+    GuestBaiduProbeCount++;
+    GuestWriteEvent(@"guest-uikit-baidu-page-geometry",snapshot);
+}
 static void GuestTakeSnapshot(NSString *reason) {
     if(!NSThread.isMainThread || ![LCOrbitGuestUIKitDiagnostics isEnabled] ||
        ![LCOrbitHost guestInfo] || GuestSamples>=12) return;
@@ -991,6 +1116,8 @@ static void GuestTakeSnapshot(NSString *reason) {
         details[@"rootFrameInWindow"]=NSStringFromCGRect([rootView convertRect:rootView.bounds toView:window]);
     NSDictionary *instagram=GuestInstagramScrollGeometry(window);
     if(instagram) details[@"instagramScroll"]=instagram;
+    NSDictionary *baiduPage=GuestBaiduPageGeometry(window);
+    if(baiduPage) details[@"baiduPage"]=baiduPage;
     GuestWriteEvent(@"guest-uikit-snapshot",details);
 }
 @implementation LCOrbitGuestUIKitDiagnostics
