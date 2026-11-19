@@ -2,11 +2,13 @@
 #import "LCOrbitHost.h"
 #import "LCOrbitStorage.h"
 #import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <objc/message.h>
 #import <sys/file.h>
 #import <sys/stat.h>
 #import <fcntl.h>
 #import <unistd.h>
+#import <stdlib.h>
 #import <math.h>
 
 // An opt-in diagnostic, isolated from the normal host/menu lifecycle.
@@ -18,6 +20,8 @@ static NSUInteger GuestSamples=0;
 // add a second safe-area inset on top of UIKit's already-correct value.
 static BOOL GuestRelayoutEnabled=NO;
 static BOOL GuestRelayoutPolling=NO;
+static BOOL GuestActivationSubscribed=NO;
+static CFAbsoluteTime GuestActivationDeadline=0;
 static NSUInteger GuestRepairGeneration;
 static __weak UIWindow *GuestRelayoutWindow;
 static __weak UIViewController *GuestRelayoutRoot;
@@ -34,6 +38,25 @@ static CGRect GuestOriginalFrame, GuestAppliedFrame;
 static NSString *GuestInstallPath(void) {
     NSString *name=NSBundle.mainBundle.bundlePath.lastPathComponent;
     return [name isKindOfClass:NSString.class] && [name hasSuffix:@".app"]?name:nil;
+}
+// The real selected data container can differ from LCAppInfo.plist's default.
+// Bootstrap sets HOME to the selected sandbox before loading Guest tweaks.
+static NSString *GuestSelectedContainer(void) {
+    const char *raw=getenv("HOME");
+    NSString *home=raw?[NSString stringWithUTF8String:raw]:nil;
+    if([home.stringByDeletingLastPathComponent.lastPathComponent isEqualToString:@"Application"])
+        return home.lastPathComponent;
+    id fallback=[LCOrbitHost guestInfo][@"LCDataUUID"];
+    return [fallback isKindOfClass:NSString.class]?fallback:nil;
+}
+// Darwin notifications have no payload. Scope each activation to one installed
+// App and data container, never all LiveProcess guests on the device.
+static NSString *GuestActivationNotificationName(NSString *bundle,NSString *container) {
+    if(![bundle isKindOfClass:NSString.class] ||
+       ![bundle isEqualToString:@"com.bd.iphone.super.app"] ||
+       ![container isKindOfClass:NSString.class] || !container.length ||
+       ![container isEqualToString:container.lastPathComponent]) return nil;
+    return [NSString stringWithFormat:@"com.dompling.lcorbit.guest-uikit-activate.%@.%@",bundle,container];
 }
 static NSString *GuestUIKitModeFile(void) {
     NSString *group=[LCOrbitHost appGroupPath];
@@ -378,7 +401,11 @@ static void GuestRepairHomeLayout(UIWindow *window,UIViewController *root,CGFloa
 static void GuestSafeAreaRepairTick(void) {
     if(!GuestRelayoutEnabled || !NSThread.isMainThread) return;
     UIApplication *app=UIApplication.sharedApplication;
-    if(!app || app.applicationState!=UIApplicationStateActive) return;
+    // In remote LiveProcess switching the host may reactivate a scene without
+    // changing the Guest's UIApplicationState. Only a recent targeted host
+    // signal can temporarily bypass that state gate.
+    if(!app || (app.applicationState!=UIApplicationStateActive &&
+       CFAbsoluteTimeGetCurrent()>GuestActivationDeadline)) return;
     UIWindow *window=GuestVisibleWindow();
     UIViewController *root=window.rootViewController;
     UIView *view=root.viewIfLoaded;
@@ -455,6 +482,33 @@ static void GuestScheduleSafeAreaRepair(BOOL restart) {
             if(last) GuestRelayoutPolling=NO;
         });
     }
+}
+// The host keeps the Guest process alive while swapping remote task views;
+// UIApplicationDidBecomeActive is not guaranteed to fire in that process.
+static void GuestTakeSnapshot(NSString *reason);
+static void GuestActivationCallback(CFNotificationCenterRef center,void *observer,
+                                    CFNotificationName name,const void *object,
+                                    CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(!GuestRelayoutEnabled) return;
+        GuestActivationDeadline=CFAbsoluteTimeGetCurrent()+5.5;
+        GuestWriteEvent(@"guest-uikit-activation-received",@{@"signal":@"host-switch",
+            @"applicationState":@(UIApplication.sharedApplication.applicationState),
+            @"windowReady":@(GuestVisibleWindow()!=nil)});
+        // Invalidate any earlier poll cycle, including one started at launch.
+        GuestScheduleSafeAreaRepair(YES);
+        if([LCOrbitGuestUIKitDiagnostics isEnabled]) {
+            GuestSamples=0;
+            GuestTakeSnapshot(@"host-activation+0s");
+            NSUInteger generation=GuestRepairGeneration;
+            for(NSNumber *delay in @[@0.6,@2.0])
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                    (int64_t)(delay.doubleValue*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+                    if(generation==GuestRepairGeneration)
+                        GuestTakeSnapshot([NSString stringWithFormat:@"host-activation+%.1fs",delay.doubleValue]);
+                });
+        }
+    });
 }
 static void GuestTakeSnapshot(NSString *reason) {
     if(!NSThread.isMainThread || ![LCOrbitGuestUIKitDiagnostics isEnabled] ||
@@ -558,6 +612,13 @@ static void GuestTakeSnapshot(NSString *reason) {
     @finally {GuestUnlockFile(lock);}
     return result?:@[];
 }
++ (void)notifyGuestActivatedBundle:(NSString *)bundle container:(NSString *)container {
+    if(![LCOrbitHost isHostUI]) return;
+    NSString *name=GuestActivationNotificationName(bundle,container);
+    if(!name) return;
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+        (__bridge CFStringRef)name,NULL,NULL,YES);
+}
 + (void)startInLiveProcess {
     // LiveProcess intentionally never starts LCOrbitCore / FloatingMenu.
     // The repair is gated by this Guest's per-App UIKit selection; independent
@@ -572,6 +633,16 @@ static void GuestTakeSnapshot(NSString *reason) {
         if(diagnostics) GuestWriteEvent(@"guest-uikit-diagnostic-loaded",
             @{@"status":@"waiting-for-ui",
               @"uikitRelayoutEnabled":@(GuestRelayoutEnabled)});
+        if(GuestRelayoutEnabled && !GuestActivationSubscribed) {
+            NSString *name=GuestActivationNotificationName(GuestInstallPath(),GuestSelectedContainer());
+            if(name) {
+                CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                    NULL,GuestActivationCallback,(__bridge CFStringRef)name,NULL,
+                    CFNotificationSuspensionBehaviorDeliverImmediately);
+                GuestActivationSubscribed=YES;
+                if(diagnostics) GuestWriteEvent(@"guest-uikit-activation-listening",@{@"status":@"ready"});
+            }
+        }
         NSNotificationCenter *center=NSNotificationCenter.defaultCenter;
         NSArray<NSString *> *notifications=@[
             UIApplicationDidBecomeActiveNotification,

@@ -73,6 +73,25 @@ checks = {
         'fabs(CGRectGetMinY(after)-top)>2' in diag and
         'UIInterfaceOrientationIsPortrait(scene.interfaceOrientation)' in diag and
         '@5.0' in diag,
+    "host broadcasts only targeted Pipixia UIKit activation":
+        'notifyGuestActivatedBundle:bundle container:container' in ui and
+        'CFNotificationCenterPostNotification' in diag and
+        'com.bd.iphone.super.app' in diag and
+        'UIKitTopInsetEnhanced(bundle)' in ui and
+        'NotifyReactivatedGuest(window)' in ui,
+    "Guest listens to its actual selected container after bootstrap":
+        'GuestSelectedContainer()' in diag and
+        'getenv("HOME")' in diag and
+        'CFNotificationCenterAddObserver' in diag and
+        'GuestActivationCallback' in diag,
+    "activation resets bounded layout probes even without UIKit foreground events":
+        'GuestActivationDeadline=CFAbsoluteTimeGetCurrent()+5.5' in diag and
+        'GuestScheduleSafeAreaRepair(YES)' in diag and
+        'generation!=GuestRepairGeneration' in diag and
+        'CFAbsoluteTimeGetCurrent()>GuestActivationDeadline' in diag,
+    "host and Guest expose activation send receive diagnostics":
+        'guest-uikit-activation-sent' in ui and
+        'guest-uikit-activation-received' in diag,
     "records actual navigation and upper subview geometry":
         "GuestNavigationGeometry" in diag and
         "GuestTopViews" in diag and

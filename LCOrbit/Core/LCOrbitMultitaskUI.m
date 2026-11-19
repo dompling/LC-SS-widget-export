@@ -721,6 +721,20 @@ static void SetVisible(UIViewController *window,SEL selector,BOOL visible) {
     window.view.alpha=visible?1:0;
     window.view.hidden=!visible;
 }
+static void NotifyReactivatedGuest(UIViewController *window) {
+    if(!Fullscreen() || !window || OrbitPiPProtectedWindow(window)) return;
+    id scene=SceneController(window);
+    NSString *bundle=[scene bundleId];
+    NSString *container=[scene dataUUID];
+    if(![bundle isEqualToString:@"com.bd.iphone.super.app"] ||
+       !UIKitTopInsetEnhanced(bundle) || !container.length) return;
+    // Activation changes the host's remote scene, not necessarily the Guest's
+    // UIApplication state. Wake the correct LiveProcess after that transaction.
+    [LCOrbitGuestUIKitDiagnostics notifyGuestActivatedBundle:bundle container:container];
+    [LCOrbitLog appendEvent:@"guest-uikit-activation-sent" details:@{
+        @"guestBundle":bundle,@"guestContainer":container,
+        @"trigger":@"host-task-activation"} kind:@"runtime"];
+}
 static void Activate(UIViewController *window,SEL selector) {
     if(![LCOrbitMultitask isEnabled] || OrbitPiPProtectedWindow(window)) return;
     if(Fullscreen()) for(UIViewController *other in [LCOrbitMultitask windows])
@@ -728,7 +742,10 @@ static void Activate(UIViewController *window,SEL selector) {
     SetVisible(window,selector,YES);
     [window.view.superview bringSubviewToFront:window.view];
     [LCOrbitMultitask didActivateWindow:window];
-    if(Fullscreen()) UpdateScene(window,nil);
+    if(Fullscreen()) {
+        UpdateScene(window,nil);
+        NotifyReactivatedGuest(window);
+    }
 }
 static id InitWindow(id __attribute__((ns_consumed)) self,SEL selector,NSString *name,NSString *bundle,NSString *container,UIViewController *root) __attribute__((ns_returns_retained));
 static id InitWindow(id __attribute__((ns_consumed)) self,SEL selector,NSString *name,NSString *bundle,NSString *container,UIViewController *root) {
@@ -886,7 +903,10 @@ static void HostingBringToFront(UIView *hosting,SEL selector,UIView *view) {
         if(Fullscreen()) for(UIViewController *other in [LCOrbitMultitask windows])
             SetVisible(other,selector,other==window);
         [LCOrbitMultitask didActivateWindow:window];
-        if(Fullscreen()) UpdateScene(window,nil);
+        if(Fullscreen()) {
+            UpdateScene(window,nil);
+            NotifyReactivatedGuest(window);
+        }
         break;
     }
 }
