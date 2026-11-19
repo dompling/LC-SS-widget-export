@@ -213,7 +213,7 @@ static void GuestBaiduListProbe(NSString *reason,NSDictionary *extra) {
        [GuestBaiduListProbeReasons containsObject:reason]) return;
     [GuestBaiduListProbeReasons addObject:reason];
     NSMutableDictionary *payload=[@{@"reason":reason,
-        @"repairVersion":@"pipixia-list-v2"} mutableCopy];
+        @"repairVersion":@"pipixia-list-v3"} mutableCopy];
     if(extra) [payload addEntriesFromDictionary:extra];
     GuestWriteEvent(@"guest-uikit-baidu-list-probe",payload);
 }
@@ -1155,9 +1155,85 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
         saved=nil;
     }
     if(saved) {
-        if(fabs(scroll.contentInset.top-
+        if(scroll && fabs(scroll.contentInset.top-
             (saved.originalTop+saved.addedTop))<=1) return;
-        GuestBaiduListInset=nil; // App already changed its own inset.
+        // Pipixia may add its own 48pt menu inset after our 59pt
+        // correction. Its 107pt result is app inset + plugin inset.
+        // Reconcile ONLY this measured top-of-list geometry, never a drag.
+        if(scroll && !scroll.dragging && !scroll.tracking &&
+           !scroll.decelerating &&
+           scroll.contentSize.height>scroll.bounds.size.height*1.05) {
+            NSUInteger menuVisited=0;
+            UIView *menu=GuestFindBaiduSlideMenu(
+                root.viewIfLoaded,window,0,&menuVisited);
+            CGRect menuRect=menu?
+                [menu convertRect:menu.bounds toView:window]:CGRectNull;
+            CGRect listRect=[scroll convertRect:scroll.bounds toView:window];
+            UIEdgeInsets current=scroll.contentInset;
+            CGPoint offset=scroll.contentOffset;
+            CGFloat menuHeight=CGRectGetHeight(menuRect);
+            CGFloat target=CGRectGetMaxY(menuRect)-CGRectGetMinY(listRect);
+            BOOL additive=menu && isfinite(target) &&
+                fabs(CGRectGetMinY(menuRect)-top)<=2 &&
+                menuHeight>=40 && menuHeight<=58 &&
+                CGRectGetMinY(listRect)>=25 &&
+                CGRectGetMinY(listRect)<=70 &&
+                fabs(saved.originalTop+saved.addedTop-target)<=2 &&
+                fabs(current.top-target-menuHeight)<=2 &&
+                fabs(offset.y+current.top)<=2 &&
+                fabs(scroll.adjustedContentInset.top-current.top)<=1 &&
+                scroll.safeAreaInsets.top>2 &&
+                scroll.safeAreaInsets.top<=24;
+            UICollectionViewCell *first=nil;
+            CGFloat firstY=CGFLOAT_MAX;
+            if(additive) for(UICollectionViewCell *cell in scroll.visibleCells) {
+                CGRect rect=[cell convertRect:cell.bounds toView:window];
+                if(CGRectGetWidth(rect)>window.bounds.size.width*.7 &&
+                   CGRectGetMinY(rect)<firstY) {
+                    first=cell;
+                    firstY=CGRectGetMinY(rect);
+                }
+            }
+            if(first && fabs(firstY-
+                (CGRectGetMinY(listRect)+current.top))<=3) {
+                UIEdgeInsets normalized=current;
+                normalized.top=target;
+                [UIView performWithoutAnimation:^{
+                    scroll.contentInset=normalized;
+                    [scroll setContentOffset:CGPointMake(offset.x,-target)
+                                    animated:NO];
+                    [scroll layoutIfNeeded];
+                }];
+                CGRect after=[first convertRect:first.bounds toView:window];
+                BOOL valid=fabs(scroll.contentInset.top-target)<=1 &&
+                    fabs(scroll.contentOffset.y+target)<=2 &&
+                    fabs(CGRectGetMinY(after)-
+                        CGRectGetMaxY(menuRect))<=3;
+                if(valid) {
+                    saved.originalTop=menuHeight;
+                    saved.addedTop=target-menuHeight;
+                    GuestWriteEvent(@"guest-uikit-baidu-list-inset-reconciled",@{
+                        @"repairVersion":@"pipixia-list-v3",
+                        @"insetBefore":NSStringFromUIEdgeInsets(current),
+                        @"insetAfter":NSStringFromUIEdgeInsets(scroll.contentInset),
+                        @"offsetBefore":NSStringFromCGPoint(offset),
+                        @"offsetAfter":NSStringFromCGPoint(scroll.contentOffset),
+                        @"firstBefore":@(firstY),
+                        @"firstAfter":@(CGRectGetMinY(after)),
+                        @"remainingCorrection":@(saved.addedTop)});
+                    return;
+                }
+                [UIView performWithoutAnimation:^{
+                    scroll.contentInset=current;
+                    [scroll setContentOffset:offset animated:NO];
+                }];
+            }
+        }
+        GuestBaiduListProbe(@"app-inset-changed",@{
+            @"observedTop":@(scroll?scroll.contentInset.top:0),
+            @"previousBase":@(saved.originalTop),
+            @"previousCorrection":@(saved.addedTop)});
+        GuestBaiduListInset=nil; // Different app-owned geometry: do not force.
     }
     if(!scroll) {
         GuestBaiduListProbe(@"list-not-found",@{@"visited":@(visited)});
@@ -1267,7 +1343,7 @@ static void GuestRepairBaiduListScroll(UIWindow *window,
     saved.originalTop=actual.top;saved.addedTop=missing;
     GuestBaiduListInset=saved;
     GuestWriteEvent(@"guest-uikit-baidu-list-inset-corrected",@{
-        @"repairVersion":@"pipixia-list-v2",
+        @"repairVersion":@"pipixia-list-v3",
         @"scrollClass":NSStringFromClass(scroll.class),
         @"menuFrame":NSStringFromCGRect(menuFrame),
         @"listFrame":NSStringFromCGRect(listFrame),
@@ -1425,7 +1501,7 @@ static void GuestTakeSnapshot(NSString *reason) {
         if(diagnostics) GuestWriteEvent(@"guest-uikit-diagnostic-loaded",
             @{@"status":@"waiting-for-ui",
               @"uikitRelayoutEnabled":@(GuestRelayoutEnabled),
-              @"repairVersion":@"pipixia-list-v2"});
+              @"repairVersion":@"pipixia-list-v3"});
         NSNotificationCenter *center=NSNotificationCenter.defaultCenter;
         NSArray<NSString *> *notifications=@[
             UIApplicationDidBecomeActiveNotification,
