@@ -11,6 +11,32 @@ static NSString *Selected, *Container;
 static NSString *ContainerOwner;
 static NSArray *Inventory;
 static NSUInteger AutomaticRefreshes;
+static BOOL NativeSupported;
+static NSMutableDictionary *NativeTask;
+static NSUInteger NativeLaunches, NativeActivations, NativeCloses, NativeHomes;
+@interface MultitaskWindowManager : NSObject @end
+@implementation MultitaskWindowManager
++ (BOOL)orbitSupportsNativeTaskWindows { return NativeSupported; }
++ (NSArray *)orbitRunningTasks { return NativeTask?@[NativeTask]:@[]; }
++ (BOOL)orbitShowHome { NativeHomes++;return YES; }
++ (NSDictionary *)orbitTaskForBundleId:(NSString *)bundle dataUUID:(NSString *)container {
+    return [NativeTask[@"bundle"] isEqual:bundle] && [NativeTask[@"container"] isEqual:container]?NativeTask:nil;
+}
++ (void)orbitOpenAppWindowWithDisplayName:(NSString *)name bundleId:(NSString *)bundle dataUUID:(NSString *)container completionHandler:(void (^)(NSNumber *,NSError *))completion {
+    NativeLaunches++;
+    NativeTask=[@{@"bundle":bundle,@"container":container,@"folder":[@"/fixture/" stringByAppendingString:bundle],
+        @"title":name,@"running":@YES,@"active":@YES,@"token":NSUUID.UUID.UUIDString} mutableCopy];
+    completion(@789,nil);
+}
++ (BOOL)orbitActivateTaskWithBundleId:(NSString *)bundle dataUUID:(NSString *)container {
+    if(![self orbitTaskForBundleId:bundle dataUUID:container]) return NO;
+    NativeActivations++;NativeTask[@"active"]=@YES;return YES;
+}
++ (BOOL)orbitCloseTaskWithBundleId:(NSString *)bundle dataUUID:(NSString *)container {
+    if(![self orbitTaskForBundleId:bundle dataUUID:container]) return NO;
+    NativeCloses++;NativeTask=nil;return YES;
+}
+@end
 @interface LCOrbitAutomaticPiP : NSObject @end
 @implementation LCOrbitAutomaticPiP
 + (void)refresh { AutomaticRefreshes++; }
@@ -39,8 +65,15 @@ static void (^Pending)(NSNumber *,NSError *);
 + (BOOL)isSupportedGuest { return NO; }
 @end
 @interface LCSharedUtils : NSObject @end
+@interface ResolvedBundle : NSObject
+@property(nonatomic,copy) NSString *bundlePath;
+@end
+@implementation ResolvedBundle @end
 @implementation LCSharedUtils
 + (NSString *)getContainerUsingLCSchemeWithFolderName:(NSString *)folder { return ContainerOwner; }
++ (id)findBundleWithBundleId:(NSString *)bundle isSharedAppOut:(bool *)shared {
+    ResolvedBundle *resolved=[ResolvedBundle new];resolved.bundlePath=[@"/fixture/" stringByAppendingString:bundle];return resolved;
+}
 @end
 @interface LCOrbitGuestService : NSObject @end
 @implementation LCOrbitGuestService
@@ -62,7 +95,7 @@ static void (^Pending)(NSNumber *,NSError *);
 }
 @end
 @interface OrbitWindow : NSObject
-@property BOOL hidden, running;
+@property BOOL hidden, running, defersClose;
 @end
 @implementation OrbitWindow
 - (id)appSceneVC { return self; }
@@ -73,6 +106,7 @@ static void (^Pending)(NSNumber *,NSError *);
     [(id)NSClassFromString(@"LCOrbitMultitask") didActivateWindow:self];
 }
 - (void)closeWindow {
+    if(self.defersClose)return;
     self.running=NO;
     [(id)NSClassFromString(@"LCOrbitMultitask") forgetWindow:self];
 }
@@ -86,6 +120,15 @@ static void (^Pending)(NSNumber *,NSError *);
 + (BOOL)isRunningGuest:(NSDictionary *)guest;
 + (BOOL)isManagingWindows;
 + (BOOL)closeGuest:(NSDictionary *)guest error:(NSError **)error;
++ (BOOL)usesAdaptiveSwitcher;
++ (BOOL)setUseAdaptiveSwitcher:(BOOL)enabled error:(NSError **)error;
++ (BOOL)usesNativeTaskWindows;
++ (NSInteger)taskSwitcherPresentation;
++ (BOOL)setTaskSwitcherPresentation:(NSInteger)presentation error:(NSError **)error;
++ (NSArray *)runningTasks;
++ (BOOL)activateTask:(NSDictionary *)task error:(NSError **)error;
++ (BOOL)closeTask:(NSDictionary *)task error:(NSError **)error;
++ (NSArray *)runningTasksForApps:(NSArray *)apps;
 @end
 static void Expect(BOOL ok, NSString *message) {
     Assertions++; if(!ok) { Failures++; fprintf(stderr,"FAIL: %s\n",message.UTF8String); }
@@ -289,6 +332,98 @@ int main(void) {
         if([bridge respondsToSelector:@selector(requestMenu)]) [bridge requestMenu];
         Expect(menuRequests==1,@"system menu selection does not open bead task UI");
         [bridge setEnabled:YES error:&error];
+        BOOL adaptive=[bridge respondsToSelector:@selector(setUseAdaptiveSwitcher:error:)];
+        Expect(adaptive,@"adaptive switching provides real task routing rather than a decorative menu");
+        if(adaptive) {
+            Expect([bridge setUseAdaptiveSwitcher:YES error:&error] && [bridge usesAdaptiveSwitcher],@"adaptive selection persists independently of legacy choices");
+            Expect([bridge respondsToSelector:@selector(setTaskSwitcherPresentation:error:)],
+                @"adaptive mode exposes an explicit iPhone/iPad presentation choice");
+            if([bridge respondsToSelector:@selector(setTaskSwitcherPresentation:error:)]) {
+                NativeSupported=YES;
+                Expect([bridge setTaskSwitcherPresentation:0 error:&error] &&
+                    [bridge usesAdaptiveSwitcher] && ![bridge usesNativeTaskWindows],
+                    @"iPhone presentation remains selectable on the current device");
+                Expect([bridge setTaskSwitcherPresentation:1 error:&error] &&
+                    [bridge usesAdaptiveSwitcher] && [bridge usesNativeTaskWindows],
+                    @"iPad presentation can be selected from iPhone without becoming unavailable");
+                NativeSupported=NO;
+                Expect([bridge taskSwitcherPresentation]==1&&![bridge usesNativeTaskWindows]&&[bridge isManagingWindows],
+                    @"iPad choice remains selected and uses LC live tasks on a single-window phone host");
+            }
+            Expect([bridge setTaskSwitcherPresentation:0 error:&error],@"iPhone presentation can be restored before card-flow checks");
+            [Defaults setInteger:1 forKey:@"LCMultitaskMode"];
+            Expect(![bridge usesNativeTaskWindows] && [bridge isManagingWindows],@"phone adaptive path remains fullscreen even with stale native LC setting");
+            Expect([Defaults integerForKey:@"LCMultitaskMode"]==1,@"adaptive routing never rewrites LC settings");
+            Expect([bridge launchGuest:a error:&error],@"phone adaptive route starts actual LiveProcess task");
+            wa.running=YES;[bridge recordWindow:wa bundle:@"A.app" container:@"a"];
+            [bridge didActivateWindow:wa];Pending(@321,nil);Pending=nil;
+            NSArray *tasks=[bridge runningTasks];
+            NSDictionary *card=tasks.firstObject;
+            Expect(tasks.count==1 && card[@"window"]==wa && [card[@"uuid"] isEqual:@"a"] && [card[@"folder"] isEqual:@"/fixture/A.app"],@"card exposes actual running window and exact identity");
+            BOOL cachedInventory=[bridge respondsToSelector:@selector(runningTasksForApps:)];
+            Expect(cachedInventory,@"presentation can enumerate live tasks without rescanning drawer inventory");
+            if(cachedInventory) {
+                Inventory=@[];
+                Expect([[bridge runningTasksForApps:@[a,b]] count]==1,@"presentation reuses supplied inventory with actual live task identities");
+                Expect([[bridge runningTasksForApps:@[]] count]==0,@"empty presentation inventory never invents task cards");
+                Inventory=@[a,b];
+            }
+            wb.running=YES;[bridge recordWindow:wb bundle:@"B.app" container:@"b"];
+            [bridge didActivateWindow:wb];
+            NSArray *openedOrder=[bridge runningTasksForApps:@[b,a]];
+            Expect(openedOrder.count==2 && openedOrder[0][@"window"]==wa && openedOrder[1][@"window"]==wb,
+                @"active B keeps its first-open slot after A even when inventory order differs");
+            Expect(openedOrder.count==2 && ![openedOrder[0][@"active"] boolValue] && [openedOrder[1][@"active"] boolValue],
+                @"active task is identified at its original position rather than moved to the front");
+            [bridge recordWindow:wb bundle:@"B.app" container:@"b"];
+            [bridge recordWindow:wa bundle:@"A.app" container:@"a"];
+            NSArray *rerecorded=[bridge runningTasks];
+            Expect(rerecorded.count==2 && rerecorded[0][@"window"]==wa && rerecorded[1][@"window"]==wb &&
+                [rerecorded[0][@"token"] isEqual:card[@"token"]],
+                @"recording existing windows again preserves first-open order and exact task generation");
+            [bridge didActivateWindow:wa];
+            NSArray *switchedBack=[bridge runningTasks];
+            Expect(switchedBack.count==2 && switchedBack[0][@"window"]==wa && switchedBack[1][@"window"]==wb &&
+                [switchedBack[0][@"active"] boolValue] && ![switchedBack[1][@"active"] boolValue],
+                @"switching active task only changes active flags and preserves card order");
+            NSDictionary *backgroundHandle=nil;
+            for(NSDictionary *task in switchedBack)if(task[@"window"]==wb)backgroundHandle=task;
+            wb.defersClose=YES;
+            Expect([bridge closeTask:backgroundHandle error:&error] && wa.running && wb.running &&
+                [bridge runningTasks].count==1 && [bridge runningTasks].firstObject[@"window"]==wa,
+                @"closing a background task removes its card before the process exits");
+            Expect(![bridge activateTask:backgroundHandle error:&error]&&![bridge launchGuest:b error:&error],
+                @"a task terminating in the background cannot be resumed from the deck or Dock");
+            wb.defersClose=NO;[wb closeWindow];
+            Expect([bridge activateTask:card error:&error] && [bridge isCurrentGuest:a],@"card selection reuses original running task");
+            NSMutableDictionary *forged=[card mutableCopy];forged[@"folder"]=@"/other-scope/A.app";
+            Expect(![bridge closeTask:forged error:&error] && wa.running,@"card close rejects forged scope");
+            wa.running=NO;
+            Expect([bridge runningTasks].count==0 && ![bridge activateTask:card error:&error],@"exited tasks are removed from overview and stale selection rejected");
+            [bridge forgetWindow:wa];
+            Expect([bridge launchGuest:a error:&error],@"same task identity can restart after exit");
+            wa.running=YES;[bridge recordWindow:wa bundle:@"A.app" container:@"a"];Pending(@322,nil);Pending=nil;
+            Expect(![bridge closeTask:card error:&error] && wa.running,@"old card cannot close restarted task with same identity and controller");
+            Expect([bridge closeTask:[bridge runningTasks].firstObject error:&error] && !wa.running,@"fresh card closes its exact process");
+            NativeSupported=YES;
+            Expect([bridge setTaskSwitcherPresentation:1 error:&error],@"iPad presentation is selected for native-window checks");
+            Expect([bridge usesNativeTaskWindows] && ![bridge isManagingWindows],@"supported iPad leaves native scene geometry to system");
+            NSUInteger oldVirtualLaunches=Launches;
+            Expect(![bridge launchGuest:namesake error:&error] && NativeLaunches==0,@"new native launch rejects same-name app when LC resolves another scope");
+            Expect([bridge launchGuest:a error:&error] && NativeLaunches==1 && Launches==oldVirtualLaunches,@"iPad adaptive launch uses native-window bridge without virtual fallback");
+            Expect([bridge isRunningGuest:a] && [bridge isCurrentGuest:a],@"native window participates in exact running/current identity");
+            Expect([bridge launchGuest:a error:&error] && NativeLaunches==1 && NativeActivations==1,@"native relaunch activates existing window");
+            [bridge showHome];
+            Expect(NativeHomes==1 && [NativeTask[@"running"] boolValue],@"native Home activates LC main scene without ending task");
+            Expect(![bridge closeGuest:namesake error:&error] && NativeCloses==0,@"native close rejects different-scope namesake");
+            NSDictionary *nativeCard=[bridge runningTasks].firstObject;
+            Expect([nativeCard[@"native"] boolValue] && !nativeCard[@"window"] && [nativeCard[@"token"] isEqual:NativeTask[@"token"]],@"native descriptor retains token without virtual-view placeholder");
+            Expect([bridge closeTask:nativeCard error:&error] && NativeCloses==1,@"exact native close reaches matching system scene");
+            Expect(![bridge closeTask:nativeCard error:&error] && NativeCloses==1,@"stale native close cannot reach another task");
+            [bridge setUseSystemMenu:NO error:&error];
+            Expect(![bridge usesAdaptiveSwitcher] && ![bridge usesSystemMenu],@"selecting legacy bead mode exits adaptive routing");
+            NativeSupported=NO;[Defaults setInteger:0 forKey:@"LCMultitaskMode"];
+        }
         NSString *config=[[LCOrbitStorage rootPath] stringByAppendingPathComponent:@"config.json"];
         NSData *savedConfig=[NSData dataWithContentsOfFile:config];
         [@"invalid JSON" writeToFile:config atomically:YES encoding:NSUTF8StringEncoding error:nil];

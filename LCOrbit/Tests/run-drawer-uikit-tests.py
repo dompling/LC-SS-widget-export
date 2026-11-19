@@ -27,9 +27,13 @@ output.mkdir(parents=True, exist_ok=True)
 (output / 'result.json').unlink(missing_ok=True)
 
 def command(*argv, **kwargs):
+    if argv[:2] == ('xcrun', 'simctl') and os.environ.get('ORBIT_SIMCTL'):
+        argv = (os.environ['ORBIT_SIMCTL'], *argv[2:])
     return subprocess.run([str(a) for a in argv], check=True, text=True, **kwargs)
 
 def capture(*argv):
+    if argv[:2] == ('xcrun', 'simctl') and os.environ.get('ORBIT_SIMCTL'):
+        argv = (os.environ['ORBIT_SIMCTL'], *argv[2:])
     return subprocess.check_output([str(a) for a in argv], text=True).strip()
 
 devices = json.loads(capture('xcrun', 'simctl', 'list', 'devices', 'available', '--json'))['devices']
@@ -47,6 +51,7 @@ command('xcrun', 'simctl', 'bootstatus', udid, '-b', stdout=subprocess.DEVNULL)
 sdk = capture('xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path')
 arch = capture('uname', '-m')
 core_names = ['LCOrbitCore', 'LCOrbitHost', 'LCOrbitGuestService', 'LCOrbitMultitask', 'LCOrbitAutomaticPiP', 'LCOrbitMultitaskUI', 'LCOrbitHostSettings', 'LCOrbitEventBus', 'LCOrbitOverlayManager', 'LCOrbitStorage', 'LCOrbitGitHub', 'LCOrbitUpdateRelease', 'LCOrbitPluginUpdater', 'LCOrbitLog', 'LCOrbitTweakAudit', 'LCOrbitTweakSync', 'LCOrbitTweakCenter', 'LCOrbitTweakCenterViews', 'LCOrbitSharedTweaksViewController', 'LCOrbitLogViewer']
+core_names.append('LCOrbitTaskSwitcher')
 bundle_id = 'local.orbit.DrawerRegression'
 with tempfile.TemporaryDirectory(prefix='orbit-drawer-uikit-') as temporary:
     # Freeze unmodified production files so concurrent edits cannot change the
@@ -71,9 +76,10 @@ with tempfile.TemporaryDirectory(prefix='orbit-drawer-uikit-') as temporary:
         sys.exit(result.returncode)
     (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': bundle_id, 'CFBundleName': 'DrawerRegression', 'CFBundleExecutable': 'DrawerRegression', 'CFBundlePackageType': 'APPL', 'MinimumOSVersion': '16.0', 'UIDeviceFamily': [1, 2], 'UILaunchScreen': {}, 'UISupportedInterfaceOrientations': ['UIInterfaceOrientationPortrait']}))
     command('codesign', '-s', '-', '--force', app, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(['xcrun', 'simctl', 'terminate', udid, bundle_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    simctl = [os.environ['ORBIT_SIMCTL']] if os.environ.get('ORBIT_SIMCTL') else ['xcrun', 'simctl']
+    subprocess.run([*simctl, 'terminate', udid, bundle_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # Uninstall only this dedicated fixture app to reset preferences/evidence.
-    subprocess.run(['xcrun', 'simctl', 'uninstall', udid, bundle_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run([*simctl, 'uninstall', udid, bundle_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     command('xcrun', 'simctl', 'install', udid, app)
     container = Path(capture('xcrun', 'simctl', 'get_app_container', udid, bundle_id, 'data'))
     command('xcrun', 'simctl', 'launch', udid, bundle_id, *(['--droplet-drag-only'] if args.droplet_drag_only else ['--water-popup-only'] if args.water_popup_only else ['--drawer-performance'] if args.performance_only else []))

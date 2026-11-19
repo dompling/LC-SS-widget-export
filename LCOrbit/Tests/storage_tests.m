@@ -7,6 +7,8 @@
 + (NSString *)rootPath;
 + (BOOL)reloadWithError:(NSError **)error;
 + (NSError *)lastError;
++ (void)beginReadSnapshot:(NSDictionary *)values;
++ (void)endReadSnapshot;
 @end
 static NSUserDefaults *Legacy;
 static NSUInteger Assertions,Failures;
@@ -29,6 +31,81 @@ static NSDictionary *Document(NSString *path) {
 static void Write(NSString *path,id document) {
     [[NSJSONSerialization dataWithJSONObject:document options:NSJSONWritingPrettyPrinted error:nil]
         writeToFile:path atomically:YES];
+}
+static void TestReadSnapshots(NSString *home,NSString *file,id prefs) {
+    BOOL available=[LCOrbitStorage respondsToSelector:@selector(beginReadSnapshot:)] &&
+        [LCOrbitStorage respondsToSelector:@selector(endReadSnapshot)];
+    Expect(available,@"event-scoped preference reads are available");
+    if(!available) return;
+    NSData *original=[NSData dataWithContentsOfFile:file];
+    NSString *key=@"LCFloatingMenu.snapshot",*other=@"LCFloatingMenu.external";
+    [prefs setObject:@"disk" forKey:key];
+    NSMutableDictionary *supplied=[[prefs dictionaryRepresentation] mutableCopy];
+    supplied[key]=@"outer";
+    [LCOrbitStorage beginReadSnapshot:supplied];
+    supplied[key]=@"caller-mutated";
+    Expect([[prefs objectForKey:key] isEqual:@"outer"],@"supplied snapshot copies its caller's dictionary");
+    [Legacy setInteger:2 forKey:@"LCMultitaskMode"];
+    Expect([prefs integerForKey:@"LCMultitaskMode"]==2,@"scoped reads keep native preferences delegated to LC");
+    NSMutableDictionary *external=[Document(file)[@"preferences"] mutableCopy];
+    external[key]=@"external";external[other]=@"preserved";
+    Write(file,@{@"schemaVersion":@1,@"preferences":external});
+    Expect([[prefs objectForKey:key] isEqual:@"outer"],@"scope keeps external edits out of an in-progress event");
+    __block BOOL isolated=NO;
+    dispatch_semaphore_t done=dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        isolated=[[prefs objectForKey:key] isEqual:@"external"];
+        dispatch_semaphore_signal(done);
+    });
+    dispatch_semaphore_wait(done,DISPATCH_TIME_FOREVER);
+    Expect(isolated,@"read snapshots stay on their owning thread");
+    [LCOrbitStorage beginReadSnapshot:@{key:@"inner"}];
+    Expect([[prefs objectForKey:key] isEqual:@"inner"],@"nested explicit snapshot controls its own reads");
+    [prefs setObject:@"written" forKey:key];
+    Expect([[prefs objectForKey:key] isEqual:@"written"] &&
+        [[prefs objectForKey:other] isEqual:@"preserved"],@"scope writes merge fresh disk values and refresh the inner snapshot");
+    [LCOrbitStorage endReadSnapshot];
+    Expect([[prefs objectForKey:key] isEqual:@"written"],@"successful writes refresh every same-root nested snapshot");
+    [prefs removeObjectForKey:key];
+    Expect([prefs objectForKey:key]==nil && Document(file)[@"preferences"][key]==nil,@"scope deletion updates the snapshot after durable removal");
+    [prefs setObject:@"stable" forKey:key];
+    [prefs setObject:@"invalid" forKey:@"LCFloatingMenu.idleAlpha"];
+    Expect([LCOrbitStorage lastError]!=nil && [[prefs objectForKey:key] isEqual:@"stable"] &&
+        [LCOrbitStorage lastError]!=nil,@"scoped reads retain validation errors from failed writes");
+    [@"broken scoped JSON" writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [prefs setObject:@"rejected" forKey:key];
+    Expect([LCOrbitStorage lastError]!=nil && [[prefs objectForKey:key] isEqual:@"stable"],@"failed disk validation leaves the scoped value unchanged");
+    NSError *error=nil;
+    Expect(![LCOrbitStorage reloadWithError:&error] && error!=nil &&
+        [[prefs objectForKey:key] isEqual:@"stable"],@"explicit invalid reload bypasses the scope but keeps its prior values");
+    external[key]=@"reloaded";
+    Write(file,@{@"schemaVersion":@1,@"preferences":external});
+    [LCOrbitStorage beginReadSnapshot:@{key:@"nested stale"}];
+    Expect([LCOrbitStorage reloadWithError:nil] && [[prefs objectForKey:key] isEqual:@"reloaded"],@"valid explicit reload refreshes the inner scope");
+    [LCOrbitStorage endReadSnapshot];
+    Expect([[prefs objectForKey:key] isEqual:@"reloaded"],@"valid explicit reload refreshes the outer scope");
+    external[key]=@"nested-disk";
+    Write(file,@{@"schemaVersion":@1,@"preferences":external});
+    [LCOrbitStorage beginReadSnapshot:nil];
+    Expect([[prefs objectForKey:key] isEqual:@"nested-disk"],@"nil nested snapshot reads the current disk configuration");
+    [LCOrbitStorage endReadSnapshot];
+    Expect([[prefs objectForKey:key] isEqual:@"reloaded"],@"ending a nested scope restores its outer event values");
+    NSString *secondHome=[home stringByAppendingPathComponent:@"second-home"];
+    setenv("LC_HOME_PATH",secondHome.UTF8String,1);
+    [prefs setObject:@"second-root" forKey:key];
+    Expect([[prefs objectForKey:key] isEqual:@"second-root"],@"an unrelated root never uses a scoped root's values");
+    [LCOrbitStorage beginReadSnapshot:nil];
+    [prefs setObject:@"second-written" forKey:key];
+    setenv("LC_HOME_PATH",home.UTF8String,1);
+    Expect([[prefs objectForKey:key] isEqual:@"reloaded"],@"writes update only snapshots for their current root");
+    [LCOrbitStorage endReadSnapshot];
+    [LCOrbitStorage endReadSnapshot];
+    external[key]=@"after-event";
+    Write(file,@{@"schemaVersion":@1,@"preferences":external});
+    Expect([[prefs objectForKey:key] isEqual:@"after-event"],@"ending a scope restores fresh external reads");
+    [LCOrbitStorage endReadSnapshot]; // An unmatched cleanup must not create a lingering scope.
+    [original writeToFile:file atomically:YES];
+    [LCOrbitStorage reloadWithError:nil];
 }
 int main(int argc,const char **argv) { @autoreleasepool {
     if(argc>=5) {
@@ -139,6 +216,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     [beforeLink writeToFile:file atomically:YES];
     [prefs setInteger:0 forKey:@"LCMultitaskMode"];
     Expect([Legacy integerForKey:@"LCMultitaskMode"]==0 && Document(file)[@"preferences"][@"LCMultitaskMode"]==nil,@"native keys stay delegated to native defaults");
+    TestReadSnapshots(home,file,prefs);
     Write(file,@{@"schemaVersion":@1,@"preferences":@{@"LCMultitaskMode":@1}});
     Expect(![LCOrbitStorage reloadWithError:nil],@"external JSON cannot import native keys");
     NSMutableData *oversized=[NSMutableData dataWithLength:1048577];

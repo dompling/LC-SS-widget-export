@@ -2,6 +2,7 @@
 #import "LCOrbitHost.h"
 #import "LCOrbitLog.h"
 #import "LCOrbitStorage.h"
+#import "LCOrbitTaskSwitcher.h"
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -79,6 +80,7 @@ static IMP OriginalLayout, OriginalShowDock, OriginalShowHidden, OriginalToggleD
 static IMP OriginalBringToFront;
 static IMP OriginalMinimize;
 static IMP OriginalPiPStopped;
+static IMP OriginalPiPStarting;
 static IMP OriginalWindowDidAddSubview;
 static __weak UIView *NativeDockSurface;
 static char DockVisibilityKey;
@@ -94,9 +96,10 @@ static Class HostClass(NSString *name) {
 }
 static BOOL Fullscreen(void) { return [LCOrbitMultitask isManagingWindows]; }
 static UIViewController *SceneController(UIViewController *window) { return [(id)window appSceneVC]; }
-// LC moves the Guest content into AVPictureInPictureVideoCallViewController.
-// While PiP owns it, do not change the decorated window or its scene geometry.
+// PiP and the task overview temporarily own the live Guest surface. Do not
+// change its decorated window or scene geometry until the owner restores it.
 static BOOL OrbitPiPProtectedWindow(UIViewController *window) {
+    if([LCOrbitTaskSwitcher isPresentingWindow:window]) return YES;
     id scene=window?SceneController(window):nil;
     SEL state=NSSelectorFromString(@"shouldIgnoreSceneUpdates");
     return [scene respondsToSelector:state] &&
@@ -642,6 +645,7 @@ static void Layout(UIViewController *window,SEL selector) {
     if(Fullscreen()) LayoutFullscreen(window);
 }
 static void Exited(UIViewController *window,SEL selector,id scene) {
+    if([LCOrbitTaskSwitcher isPresentingWindow:window]) [LCOrbitTaskSwitcher dismiss];
     BOOL managed=Fullscreen();
     ((void(*)(id,SEL,id))OriginalExit)(window,selector,scene);
     if(![(id)scene isAppRunning]) {
@@ -794,7 +798,18 @@ static void PiPStopped(id manager,SEL selector,id controller) {
     dispatch_async(dispatch_get_main_queue(),^{[LCOrbitMultitask refreshPresentation];});
 }
 
+static void PiPStarting(id manager,SEL selector,id controller) {
+    [LCOrbitTaskSwitcher dismiss];
+    ((void(*)(id,SEL,id))OriginalPiPStarting)(manager,selector,controller);
+}
+
 @implementation LCOrbitMultitask (Presentation)
++ (BOOL)requiresUpdatedNativeHost {
+    if(@available(iOS 16.1,*)) {} else return NO;
+    if(!UIApplication.sharedApplication.supportsMultipleScenes) return NO;
+    Class manager=HostClass(@"MultitaskWindowManager");
+    return ![manager respondsToSelector:NSSelectorFromString(@"orbitSupportsNativeTaskWindows")];
+}
 // Historical UI API reports the switch, not whether the Guest owns the inset.
 + (BOOL)usesAppTopInsetForBundle:(NSString *)bundle { return PhysicalTopAvoidanceEnabled(bundle); }
 + (void)setUsesAppTopInset:(BOOL)enabled forBundle:(NSString *)bundle {
@@ -881,6 +896,8 @@ static void PiPStopped(id manager,SEL selector,id controller) {
     Replace(parametersClass,@"updateSettingsWithBlock:",(IMP)InitialSceneSettings,&OriginalInitialSettings);
     Replace(sceneClass,@"setUpAppPresenter",(IMP)PresenterReady,&OriginalPresenter);
     Class pipClass=HostClass(@"PiPManager");
+    if(OrbitMethodMatches(pipClass,@"pictureInPictureControllerWillStartPictureInPicture:",@encode(void),@[@"@"]))
+        Replace(pipClass,@"pictureInPictureControllerWillStartPictureInPicture:",(IMP)PiPStarting,&OriginalPiPStarting);
     if(OrbitMethodMatches(pipClass,@"pictureInPictureControllerDidStopPictureInPicture:",@encode(void),@[@"@"]))
         Replace(pipClass,@"pictureInPictureControllerDidStopPictureInPicture:",(IMP)PiPStopped,&OriginalPiPStopped);
     installed=YES;

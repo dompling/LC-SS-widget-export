@@ -27,19 +27,29 @@
 @property(nonatomic) NSString *sceneID;
 @property(nonatomic) NSExtension* extension;
 @property(nonatomic) bool isAppTerminationCleanUpCalled;
+@property(nonatomic) BOOL terminationRequested, registeredMultitaskContainer, extensionRequestCompleted;
+@end
+
+@interface NSExtension (LCCancelRequest)
+- (void)cancelExtensionRequestWithIdentifier:(NSUUID *)identifier;
 @end
 
 @implementation AppSceneViewController
 
 
 - (instancetype)initWithBundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUID delegate:(id<AppSceneViewControllerDelegate>)delegate {
+    return [self initWithBundleId:bundleId dataUUID:dataUUID delegate:delegate
+                    nativeWindow:[NSUserDefaults.lcSharedDefaults integerForKey:@"LCMultitaskMode"] == 1];
+}
+
+- (instancetype)initWithBundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUID delegate:(id<AppSceneViewControllerDelegate>)delegate nativeWindow:(BOOL)nativeWindow {
     self = [super initWithNibName:nil bundle:nil];
     self.delegate = delegate;
     self.dataUUID = dataUUID;
     self.bundleId = bundleId;
     self.scaleRatio = 1.0;
     self.isAppTerminationCleanUpCalled = false;
-    self.isNativeWindow = [NSUserDefaults.lcSharedDefaults integerForKey:@"LCMultitaskMode" ] == 1;
+    self.isNativeWindow = nativeWindow;
     
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -94,31 +104,68 @@
     
     __weak typeof(self) weakSelf = self;
     [_extension setRequestCancellationBlock:^(NSUUID *uuid, NSError *error) {
-        [weakSelf appTerminationCleanUp];
-        [weakSelf.delegate appSceneVC:weakSelf didInitializeWithError:error];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppSceneViewController *controller = weakSelf;
+            if(!controller) return;
+            [controller appTerminationCleanUp];
+            if(!controller.terminationRequested)
+                [controller.delegate appSceneVC:controller didInitializeWithError:error];
+        });
     }];
     [_extension setRequestInterruptionBlock:^(NSUUID *uuid) {
         [weakSelf appTerminationCleanUp];
     }];
     [_extension beginExtensionRequestWithInputItems:@[item] completion:^(NSUUID *identifier) {
-        if(identifier) {
-            [MultitaskManager registerMultitaskContainerWithContainer:self.dataUUID];
-            self.identifier = identifier;
-            self.pid = [self.extension pidForRequestIdentifier:self.identifier];
-            [delegate appSceneVC:self didInitializeWithError:nil];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self setUpAppPresenter];
-            });
-        } else {
-            NSError* error = [NSError errorWithDomain:@"LiveProcess" code:2 userInfo:@{NSLocalizedDescriptionKey: @"Failed to start app. Child process has unexpectedly crashed"}];
-            [delegate appSceneVC:self didInitializeWithError:error];
-        }
+        // The request may outlive its native window. Serialize completion with
+        // termination and keep this controller until its exact request can be cancelled.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self extensionRequestDidComplete:identifier];
+        });
     }];
     
     return self;
 }
 
+- (void)cancelExtensionRequest:(NSUUID *)identifier {
+    if(!identifier) return;
+    if([self.extension respondsToSelector:@selector(cancelExtensionRequestWithIdentifier:)]) {
+        [self.extension cancelExtensionRequestWithIdentifier:identifier];
+    } else if([self.extension pidForRequestIdentifier:identifier]>0) {
+        // This NSExtension instance owns one request; preserve the existing
+        // termination fallback on hosts missing request-specific cancellation.
+        [self.extension _kill:SIGTERM];
+    }
+}
+
+- (void)extensionRequestDidComplete:(NSUUID *)identifier {
+    if(self.extensionRequestCompleted) return;
+    self.extensionRequestCompleted = YES;
+    self.identifier = identifier;
+    if(self.terminationRequested || self.isAppTerminationCleanUpCalled) {
+        [self cancelExtensionRequest:identifier];
+        [self appTerminationCleanUp];
+        return;
+    }
+    int pid = identifier?[self.extension pidForRequestIdentifier:identifier]:0;
+    if(pid<=0) {
+        [self cancelExtensionRequest:identifier];
+        NSError *error = [NSError errorWithDomain:@"LiveProcess" code:2 userInfo:@{NSLocalizedDescriptionKey: @"Failed to start app. Child process has unexpectedly crashed"}];
+        [self.delegate appSceneVC:self didInitializeWithError:error];
+        [self appTerminationCleanUp];
+        return;
+    }
+    self.pid = pid;
+    [MultitaskManager registerMultitaskContainerWithContainer:self.dataUUID];
+    self.registeredMultitaskContainer = YES;
+    [self.delegate appSceneVC:self didInitializeWithError:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(!self.terminationRequested && !self.isAppTerminationCleanUpCalled && self.isAppRunning)
+            [self setUpAppPresenter];
+    });
+}
+
 - (void)setUpAppPresenter {
+    if(self.terminationRequested || self.isAppTerminationCleanUpCalled) return;
     RBSProcessPredicate* predicate = [PrivClass(RBSProcessPredicate) predicateMatchingIdentifier:@(self.pid)];
     FBProcessManager *manager = [PrivClass(FBProcessManager) sharedInstance];
     // At this point, the process is spawned and we're ready to create a scene to render in our app
@@ -239,12 +286,20 @@
 }
 
 - (void)terminate {
+    if(!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self terminate]; });
+        return;
+    }
+    if(self.terminationRequested) return;
+    self.terminationRequested = YES;
+    [self cancelExtensionRequest:self.identifier];
     if(self.isAppRunning) {
         [self.extension _kill:SIGTERM];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self.extension _kill:SIGKILL];
         });
     }
+    if(self.pid<=0) [self appTerminationCleanUp];
 }
 
 - (void)_performActionsForUIScene:(UIScene *)scene withUpdatedFBSScene:(id)fbsScene settingsDiff:(FBSSceneSettingsDiff *)diff fromSettings:(UIApplicationSceneSettings *)settings transitionContext:(id)context lifecycleActionType:(uint32_t)actionType {
@@ -339,10 +394,18 @@
 }
 
 - (void)appTerminationCleanUp {
+    if(!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self appTerminationCleanUp]; });
+        return;
+    }
     if(_isAppTerminationCleanUpCalled) {
         return;
     }
     _isAppTerminationCleanUpCalled = true;
+    if(self.registeredMultitaskContainer) {
+        self.registeredMultitaskContainer = NO;
+        [MultitaskManager unregisterMultitaskContainerWithContainer:self.dataUUID];
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.sceneID) {
             [[PrivClass(FBSceneManager) sharedInstance] destroyScene:self.sceneID withTransitionContext:nil];
@@ -360,7 +423,6 @@
         self.presenter = nil;
         
         [self.delegate appSceneVCAppDidExit:self];
-        [MultitaskManager unregisterMultitaskContainerWithContainer:self.dataUUID];
     });
 }
 

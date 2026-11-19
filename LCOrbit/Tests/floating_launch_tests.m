@@ -98,6 +98,16 @@ static void FMSyncSharedTweaks(void (^completion)(void)) {
 + (void)forgetWindow:(id)window {}
 + (BOOL)installHooksWithError:(NSError **)error { return YES; }
 @end
+@interface LCOrbitTaskSwitcher : NSObject
++ (NSUUID *)dockLaunchTokenForApp:(NSDictionary *)app;
++ (void)beginDockLaunch:(NSUUID *)token;
++ (void)cancelDockLaunch:(NSUUID *)token;
+@end
+@implementation LCOrbitTaskSwitcher
++ (NSUUID *)dockLaunchTokenForApp:(NSDictionary *)app { return nil; }
++ (void)beginDockLaunch:(NSUUID *)token {}
++ (void)cancelDockLaunch:(NSUUID *)token {}
+@end
 @interface LCOrbitStorage : NSObject
 + (BOOL)reloadWithError:(NSError **)error;
 @end

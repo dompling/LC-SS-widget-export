@@ -22,6 +22,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setObject:(nullable id)object forKey:(NSString *)key module:(NSString *)identifier;
 + (nullable NSString *)rootPath;
 + (LCOrbitPreferences *)preferences;
+/// Balance scopes on the same thread. Nil loads once; supplied values are copied.
+/// Writes still merge current disk values and refresh same-root scopes on success.
++ (void)beginReadSnapshot:(nullable NSDictionary *)values;
++ (void)endReadSnapshot;
 + (BOOL)reloadWithError:(NSError * _Nullable * _Nullable)error;
 + (nullable NSError *)lastError;
 @end
