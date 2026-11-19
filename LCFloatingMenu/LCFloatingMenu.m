@@ -2057,7 +2057,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,strong) NSArray<NSDictionary*> *apps;
 // visibleApps sorts a copy on every call and one drawer build calls it seven
 // times. Remember the last result until the inventory or the order changes.
-@property(nonatomic,strong) NSArray<NSDictionary*> *visibleAppsCache;
 + (instancetype)shared;
 - (void)installIfPossible;
 - (void)checkOrbUpdateIfNeeded;
@@ -2696,7 +2695,6 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     if(_morphActive) { _drawDeferred=YES; return; }
     if(_isPanning) return;
     if(self.settingsWindow) { [self updateSettingsContent]; return; }
-    self.visibleAppsCache=nil; // a redraw may follow an inventory change
     BOOL visible=[LCOrbitMultitask shouldShowFloatingMenu];
     [self.orbitContext.overlays setModule:@"FloatingMenu" visible:visible];
     if(!visible) {
@@ -4276,14 +4274,9 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UILabel *b=[self label:sub size:12 weight:UIFontWeightRegular]; b.textColor=FMThemeColor(FMColorSecondary);
     [stack addArrangedSubview:b]; [self spacer:stack size:8];
 }
-- (void)setApps:(NSArray<NSDictionary*> *)apps {
-    _apps=apps;
-    self.visibleAppsCache=nil;
-}
 - (NSArray<NSDictionary*> *)visibleApps {
     // Visibility is not launch eligibility. Keep the current app and blocked
     // entries; controls and the guest service independently guard execution.
-    if(self.visibleAppsCache) return self.visibleAppsCache;
     NSMutableArray *found=[self.apps mutableCopy] ?: [NSMutableArray array];
     NSArray *order=[HostDefaults() arrayForKey:Pref(@"menuOrder")];
     if([order isKindOfClass:NSArray.class] && order.count) {
@@ -4317,7 +4310,6 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             return [a[@"title"] localizedStandardCompare:b[@"title"]];
         }];
     }
-    self.visibleAppsCache=found;
     return found;
 }
 // 记录当前活跃页面状态：若处于子 App 则记录该 App；若处于 LiveContainer 主页则记录 @"ui"
@@ -5696,7 +5688,6 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(index!=NSNotFound && index>0) {
         [order exchangeObjectAtIndex:index withObjectAtIndex:index-1];
         SetPref(@"menuOrder",order);
-        self.visibleAppsCache=nil;
     }
     [self draw];
 }
@@ -5811,7 +5802,6 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
             [order removeObjectAtIndex:from];
             [order insertObject:moving atIndex:destination];
             SetPref(@"menuOrder",order);
-            self.visibleAppsCache=nil;
             FMLog(@"menu-reordered",@"animated-slot");
         }
         if(state) {
@@ -5986,7 +5976,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 
 - (void)compatibilityPage:(UIStackView *)stack {
     [self section:@"应用兼容性" sub:@"开启后以兼容性方式启动，由 App 自行避让顶部。关闭时保持默认行为。部分 App 需重新启动后生效。" in:stack];
-    NSArray<NSDictionary *> *apps=InstalledAppsCached();
+    // Settings is a one-off screen, not the drawer's hot path; keep the
+    // uncached scan so the switches never render a stale inventory.
+    NSArray<NSDictionary *> *apps=InstalledApps();
     NSMutableArray<UIView *> *rows=[NSMutableArray arrayWithCapacity:apps.count];
     for(NSDictionary *app in apps) {
         // LC's scene bundleId is the relative installation path, not CFBundleIdentifier.
