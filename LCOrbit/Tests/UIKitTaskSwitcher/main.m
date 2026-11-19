@@ -98,7 +98,7 @@ static void FailureDetails(NSDictionary *details) { if(![Results.lastObject[@"pa
     for(NSDictionary *entry in Tasks) ((UIViewController *)entry[@"window"]).view.hidden=entry!=task;
     return YES;
 }
-+ (BOOL)closeTask:(NSDictionary *)task error:(NSError **)error {
++ (BOOL)closeTaskFromOverview:(NSDictionary *)task error:(NSError **)error {
     RestoredBeforeAction = ((UIViewController *)task[@"window"]).view.superview==Host.rootViewController.view && ![Switcher() isPresentingWindow:task[@"window"]];
     CloseCalls++;
     if(RejectClose) { if(error)*error=[NSError errorWithDomain:@"fixture" code:2 userInfo:@{NSLocalizedDescriptionKey:@"此任务已重新启动。"}];return NO; }
@@ -320,6 +320,7 @@ static void Run(UIWindowScene *scene) {
         direction.fixtureVelocity=CGPointMake(900,-30);Check(@"horizontal-drag-is-routed-to-page-scroll",![installed.delegate gestureRecognizerShouldBegin:direction]);
         // Closing must update the existing task rail in place. Replacing the
         // overview tears down the rail and makes it flash on re-presentation.
+        UIWindow *windowBeforeClose=Overview(scene);
         UIView *dockBeforeClose=Find(Overview(scene),@"orbit.dock");
         UIView *dockIconBeforeClose=Find(Overview(scene),@"orbit.dock.app.0");
         Pan(scene,@"B",UIGestureRecognizerStateBegan,CGPointZero,CGPointMake(0,-100));Pan(scene,@"B",UIGestureRecognizerStateEnded,CGPointMake(0,-400),CGPointMake(0,-150));
@@ -330,7 +331,7 @@ static void Run(UIWindowScene *scene) {
         Pump(.35);
         Check(@"upward-distance-closes-only-exact-card",[Closed[@"token"] isEqual:@"B"]&&Tasks.count==1&&Tasks.firstObject==first&&CloseCalls==1);
         Check(@"close-reflow-has-no-ghost-view",Overview(scene)&&[switcher isPresentingWindow:a]&&!Find(Overview(scene),@"orbit.task.card.B"));
-        Check(@"closing-one-task-keeps-overview-visible",Overview(scene)!=nil&&Tasks.count==1&&Find(Overview(scene),@"orbit.task.card.A")!=nil);
+        Check(@"closing-one-task-keeps-overview-visible",Overview(scene)==windowBeforeClose&&Tasks.count==1&&Find(Overview(scene),@"orbit.task.card.A")!=nil);
         Check(@"closing-task-keeps-the-same-dock",Overview(scene)&&Find(Overview(scene),@"orbit.dock")==dockBeforeClose);
         Check(@"closing-task-keeps-the-same-dock-icons",Overview(scene)&&Find(Overview(scene),@"orbit.dock.app.0")==dockIconBeforeClose);
         Check(@"closing-task-keeps-dock-visible",Overview(scene)&&Find(Overview(scene),@"orbit.dock").alpha==1&&Find(Overview(scene),@"orbit.dock.scroll").alpha==1);

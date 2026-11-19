@@ -815,20 +815,38 @@ static UIWindow *OverviewWindow;
     UIWindowScene *scene=self.hostScene;
     NSError *error=nil;
     if(close) {
-        BOOL success=[LCOrbitMultitask closeTask:task error:&error];
+        LCOrbitTaskCard *card=self.cards[index];
+        LCOrbitTaskPlacement *placement=card.placement;
+        NSMutableDictionary *frames=[NSMutableDictionary dictionary];
+        for(LCOrbitTaskCard *other in self.cards) if(other!=card)
+            frames[self.tasks[other.index][@"token"]]=[NSValue valueWithCGRect:
+                [other.preview convertRect:other.preview.bounds toView:self.view]];
+
+        // Exit callbacks can run synchronously. Release only this preview
+        // before closing so a callback cannot dismiss the surviving deck.
+        if(placement) [self.placements removeObjectIdenticalTo:placement];
+        BOOL success=[LCOrbitMultitask closeTaskFromOverview:task error:&error];
+        self.transitioning=NO;
+        self.pages.scrollEnabled=YES;
         if(success) {
-            [LCOrbitTaskSwitcher dismiss];
-            NSString *selectedToken=self.tasks[self.selectedIndex][@"token"];
-            [LCOrbitTaskSwitcher presentInScene:scene apps:self.apps dockIconSize:self.dockIconSize
-                                   iconProvider:self.iconProvider launchHandler:self.launchHandler
-                                    focusToken:selectedToken excludedToken:nil restoredDock:YES error:NULL];
+            if(placement) {
+                placement.hidden=YES;
+                [placement restore];
+                [placement restoreConstraints];
+            }
+            [self removeClosedTaskWithToken:task[@"token"]];
+            if(!self.cards.count && !self.apps.count) {
+                [LCOrbitTaskSwitcher dismissAnimatedWithHome];
+                return;
+            }
+            if(!UIAccessibilityIsReduceMotionEnabled()) [self animateReflowFromFrames:frames];
             return;
         }
-        [LCOrbitTaskSwitcher dismiss];
-        [LCOrbitTaskSwitcher presentInScene:scene apps:self.apps dockIconSize:self.dockIconSize
-                               iconProvider:self.iconProvider launchHandler:self.launchHandler
-                                focusToken:self.tasks[self.selectedIndex][@"token"] excludedToken:nil
-                                restoredDock:NO error:NULL];
+        if(placement) [self.placements addObject:placement];
+        card.alpha=1;
+        placement.view.alpha=1;
+        [self updateDeck];
+        [self updateLiveGeometry];
         NSString *message=error.localizedDescription?:@"此任务已结束或发生变化。";
         UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification,message);
         UIViewController *presenter=CurrentOverview?:scene.keyWindow.rootViewController;
@@ -892,6 +910,7 @@ static UIWindow *OverviewWindow;
     self.emptyLabel.alpha=1;
     [self setDockVisible:YES];
     for(NSUInteger cardIndex=0;cardIndex<cards.count;cardIndex++)((LCOrbitTaskCard *)cards[cardIndex]).index=cardIndex;
+    if(index<self.selectedIndex) self.selectedIndex--;
     if(self.selectedIndex>=cards.count)self.selectedIndex=cards.count?cards.count-1:0;
 
     if(!cards.count) {

@@ -25,6 +25,7 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 + (NSArray<NSDictionary *> *)runningTasksForApps:(NSArray<NSDictionary *> *)apps;
 + (BOOL)activateTask:(NSDictionary *)task error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)closeTask:(NSDictionary *)task error:(NSError * _Nullable * _Nullable)error;
++ (BOOL)closeTaskFromOverview:(NSDictionary *)task error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)shouldShowFloatingMenu;
 + (BOOL)launchGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)isCurrentGuest:(NSDictionary *)guest;

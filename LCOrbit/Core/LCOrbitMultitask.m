@@ -321,6 +321,11 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     NSDictionary *task=[self currentTaskMatchingHandle:handle];
     return task?[self closeGuest:task error:error]:Fail(error,@"这个任务已退出或重新启动，没有关闭其他任务。");
 }
++ (BOOL)closeTaskFromOverview:(NSDictionary *)handle error:(NSError **)error {
+    NSDictionary *task=[self currentTaskMatchingHandle:handle];
+    if(!task || [task[@"native"] boolValue]) return Fail(error,@"这个任务已退出或发生变化。");
+    return [self closeGuest:task dismissOverview:NO error:error];
+}
 + (id)activeWindow { return [self isEnabled]?ActiveWindow:nil; }
 + (void)recordWindow:(id)window bundle:(NSString *)bundle container:(NSString *)container {
     if(!window || !TaskPathComponent(bundle) || !TaskPathComponent(container)) return;
@@ -467,8 +472,11 @@ static void FinishLaunch(NSUUID *token,NSNumber *pid,NSError *error) {
     return NO;
 }
 + (BOOL)closeGuest:(NSDictionary *)guest error:(NSError **)error {
+    return [self closeGuest:guest dismissOverview:YES error:error];
+}
++ (BOOL)closeGuest:(NSDictionary *)guest dismissOverview:(BOOL)dismissOverview error:(NSError **)error {
     if(![self isRunningGuest:guest]) return Fail(error,@"目标任务未运行或身份已变化，未关闭其他任务。");
-    DismissTaskOverview();
+    if(dismissOverview) DismissTaskOverview();
     if(MatchingNativeTask(guest,NativeTask(guest))) {
         Class manager=NativeManager();SEL close=NSSelectorFromString(@"orbitCloseTaskWithBundleId:dataUUID:");
         if([manager respondsToSelector:close] && ((BOOL(*)(id,SEL,id,id))objc_msgSend)(manager,close,guest[@"path"],guest[@"uuid"])) return YES;
