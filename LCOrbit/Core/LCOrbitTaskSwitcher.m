@@ -894,21 +894,8 @@ static UIWindow *OverviewWindow;
     [cards removeObjectAtIndex:index];
     [closed removeFromSuperview];
 
-    NSMutableArray *placements=[self.placements mutableCopy];
-    LCOrbitTaskPlacement *removed=nil;
-    for(LCOrbitTaskPlacement *placement in placements)if(placement.controller==retiring){removed=placement;break;}
-    if(removed)[placements removeObjectIdenticalTo:removed];
-
     self.tasks=tasks;
     self.cards=cards;
-    self.placements=placements;
-    self.dock.alpha=1;
-    [self.dock.layer removeAllAnimations];
-    [self.dockScroll.layer removeAllAnimations];
-    self.dock.transform=CGAffineTransformIdentity;
-    self.dockScroll.alpha=1;
-    self.emptyLabel.alpha=1;
-    [self setDockVisible:YES];
     for(NSUInteger cardIndex=0;cardIndex<cards.count;cardIndex++)((LCOrbitTaskCard *)cards[cardIndex]).index=cardIndex;
     if(index<self.selectedIndex) self.selectedIndex--;
     if(self.selectedIndex>=cards.count)self.selectedIndex=cards.count?cards.count-1:0;
@@ -929,7 +916,6 @@ static UIWindow *OverviewWindow;
     self.pages.alpha=1;
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
-    [self setDockVisible:YES];
     [self updateDeck];
     [self updateLiveGeometry];
 }
