@@ -97,6 +97,7 @@ static void FailureDetails(NSDictionary *details) { if(![Results.lastObject[@"pa
 + (BOOL)isManagingWindows { return YES; }
 + (id)activeWindow { return DockActiveWindow; }
 + (BOOL)activateTask:(NSDictionary *)task error:(NSError **)error {
+    [Switcher() dismiss]; // The real activation bridge restores the overview before activation.
     RestoredBeforeAction = ((UIViewController *)task[@"window"]).view.superview==Host.rootViewController.view && ![Switcher() isPresentingWindow:task[@"window"]];
     if(RejectAction) { if(error) *error=[NSError errorWithDomain:@"fixture" code:1 userInfo:@{NSLocalizedDescriptionKey:@"This task has ended."}];return NO; }
     Activated=task;
@@ -302,7 +303,7 @@ static void Run(UIWindowScene *scene) {
         [switcher presentInScene:scene error:NULL];Tap(scene,@"A");
         Check(@"tap-resumes-exact-task-after-restoring",[Activated[@"token"] isEqual:@"A"]&&RestoredBeforeAction&&!a.view.hidden&&b.view.hidden);
         Check(@"task-resume-restores-exact-task",Activated[@"window"]==a);
-        [switcher presentInScene:scene error:NULL];UIView *card=Find(Overview(scene),@"orbit.task.card.B");UIPanGestureRecognizer *installed=InstalledPan(card);
+        [switcher presentInScene:scene apps:[Tasks copy] launchHandler:nil error:NULL];UIView *card=Find(Overview(scene),@"orbit.task.card.B");UIPanGestureRecognizer *installed=InstalledPan(card);
         Check(@"actual-card-pan-is-installed",installed!=nil&&installed.delegate!=nil);
         FixturePan *direction=[FixturePan new];direction.fixtureVelocity=CGPointMake(900,-30);direction.fixtureView=card;
         Check(@"horizontal-drag-rejected-by-close-recognizer",installed&&![installed.delegate gestureRecognizerShouldBegin:direction]);
@@ -348,9 +349,9 @@ static void Run(UIWindowScene *scene) {
         Check(@"velocity-close-rejects-stale-target-without-other-close",CloseCalls==2&&Tasks.count==1&&[Overview(scene).rootViewController.presentedViewController isKindOfClass:UIAlertController.class]);
         FailureDetails(@{@"calls":@(CloseCalls),@"tasks":@(Tasks.count),@"restored":@(RestoredBeforeAction),@"bounds":NSStringFromCGRect(a.view.bounds),@"overview":@(Overview(scene)!=nil)});
         RejectClose=NO;[switcher dismiss];RejectAction=YES;[switcher presentInScene:scene error:NULL];Tap(scene,@"A");
-        Check(@"rejected-open-reports-real-error-only",RestoredBeforeAction&&Tasks.count==1&&[Overview(scene).rootViewController.presentedViewController isKindOfClass:UIAlertController.class]);
+        Check(@"rejected-open-reports-real-error-only",RestoredBeforeAction&&Tasks.count==1&&[scene.keyWindow.rootViewController.presentedViewController isKindOfClass:UIAlertController.class]);
         FailureDetails(@{@"restored":@(RestoredBeforeAction),@"bounds":NSStringFromCGRect(a.view.bounds),@"overview":@(Overview(scene)!=nil)});
-        RejectAction=NO;[switcher dismiss];
+        RejectAction=NO;[scene.keyWindow.rootViewController dismissViewControllerAnimated:NO completion:nil];[switcher dismiss];
         Activated=nil;[switcher presentInScene:scene error:NULL];BeginTap(scene,@"A");
         [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationWillResignActiveNotification object:UIApplication.sharedApplication];Pump(.4);
         Check(@"interrupted-selection-does-not-reactivate-task",Activated==nil&&Overview(scene)==nil&&a.view.superview==original);
