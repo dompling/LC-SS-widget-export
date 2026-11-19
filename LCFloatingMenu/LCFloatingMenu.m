@@ -26,7 +26,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.38"
+#define FM_MENU_VERSION @"1.0.39"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -275,6 +275,29 @@ static void FMLog(NSString *event, NSString *detail) {
 // Public Guest APIs are implemented in LCOrbitGuestService for all future modules.
 static NSArray<NSDictionary*> *InstalledApps(void) { return [LCOrbitGuestService installedApps]; }
 
+// One drawer opening used to walk the inventory four to five times: the toggle,
+// the active-app bookkeeping and every visibleApps caller each rescanned both
+// roots, parsed LCAppInfo.plist plus Info.plist per app and canonicalised every
+// folder. A snapshot holds a single opening to one scan. Writes invalidate it
+// explicitly, so hidden/locked state never comes back stale.
+static NSArray<NSDictionary*> *FMInstalledAppsSnapshot;
+static CFTimeInterval FMInstalledAppsSnapshotAt;
+static BOOL FMInstalledAppsSnapshotValid;
+static void FMInvalidateInstalledApps(void) {
+    FMInstalledAppsSnapshotValid=NO;
+    FMInstalledAppsSnapshot=nil;
+}
+static NSArray<NSDictionary*> *InstalledAppsCached(void) {
+    CFTimeInterval now=CACurrentMediaTime();
+    if(FMInstalledAppsSnapshotValid && FMInstalledAppsSnapshot && now-FMInstalledAppsSnapshotAt<1.5)
+        return FMInstalledAppsSnapshot;
+    NSArray<NSDictionary*> *fresh=InstalledApps();
+    FMInstalledAppsSnapshot=fresh?:@[];
+    FMInstalledAppsSnapshotAt=now;
+    FMInstalledAppsSnapshotValid=YES;
+    return FMInstalledAppsSnapshot;
+}
+
 static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
     NSString *folder=app[@"folder"];
     if(![folder isKindOfClass:NSString.class] || !folder.length) return NO;
@@ -292,6 +315,7 @@ static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
         format:NSPropertyListBinaryFormat_v1_0 options:0 error:&error];
     BOOL ok=data && [data writeToFile:file options:NSDataWritingAtomic error:&error];
     if(ok) {
+        FMInvalidateInstalledApps();
         FMLog(@"app-hide-toggle",[NSString stringWithFormat:@"app=%@ hidden=%d",FMAppKey(app),hidden]);
     }
     return ok;
@@ -1563,13 +1587,45 @@ static UIView *FMGlassContent(UIView *surface) {
             return ((UIVisualEffectView *)child).contentView;
     return surface;
 }
-static UIImage *FMGuestIcon(NSDictionary *app) {
+// LiveContainer exports the full-size icon (often 1024x1024) into LCAppIconLight.png.
+// A drawer row is at most ~50pt, so decoding the original costs megabytes of backing
+// store per app and blows up the moment a device has more apps than the cache holds.
+static size_t FMImageCost(UIImage *image) {
+    if(![image isKindOfClass:UIImage.class]) return 0;
+    CGImageRef cg=image.CGImage;
+    if(!cg) return (size_t)MAX(1,image.size.width*image.size.height*4);
+    return (size_t)CGImageGetBytesPerRow(cg)*(size_t)CGImageGetHeight(cg);
+}
+static UIImage *FMResampleIcon(UIImage *image, CGFloat pixels) {
+    if(!image || pixels<=0) return image;
+    CGImageRef cg=image.CGImage;
+    if(!cg) return image;
+    CGFloat widest=MAX((CGFloat)CGImageGetWidth(cg),(CGFloat)CGImageGetHeight(cg));
+    if(widest<=pixels*1.05) return image;
+    CGFloat ratio=pixels/widest;
+    CGSize target=CGSizeMake(MAX(1,floor(CGImageGetWidth(cg)*ratio)),
+                             MAX(1,floor(CGImageGetHeight(cg)*ratio)));
+    UIGraphicsImageRendererFormat *format=UIGraphicsImageRendererFormat.defaultFormat;
+    format.scale=1; format.opaque=NO;
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:target format:format];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx){
+        [image drawInRect:CGRectMake(0,0,target.width,target.height)];
+    }];
+}
+// pixels is the on-screen edge already multiplied by the screen scale.
+static UIImage *FMGuestIconSized(NSDictionary *app, CGFloat pixels) {
     NSString *folder=app[@"folder"];
     if(![folder isKindOfClass:NSString.class] || !folder.length) return nil;
     static NSCache *cache;
     static dispatch_once_t once;
-    dispatch_once(&once,^{ cache=[NSCache new];cache.countLimit=90; });
-    NSString *cacheKey=folder;
+    dispatch_once(&once,^{
+        cache=[NSCache new];
+        cache.countLimit=400;
+        cache.totalCostLimit=32*1024*1024;
+    });
+    // Bucket to 4px steps so the handful of real row sizes share one entry.
+    NSInteger edge=(NSInteger)MIN(1024.0,MAX(24.0,round(pixels/4.0)*4.0));
+    NSString *cacheKey=[NSString stringWithFormat:@"%@#%ld",folder,(long)edge];
     id saved=[cache objectForKey:cacheKey];
     if(saved) return saved==NSNull.null?nil:saved;
     NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[folder stringByAppendingPathComponent:@"Info.plist"]];
@@ -1614,7 +1670,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
         if(result) break;
     }
-    if(result) [cache setObject:result forKey:cacheKey];
+    if(result) result=FMResampleIcon(result,(CGFloat)edge);
+    if(result) [cache setObject:result forKey:cacheKey cost:FMImageCost(result)];
+    else [cache setObject:NSNull.null forKey:cacheKey cost:0];
     return result;
 }
 
@@ -1997,6 +2055,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,strong) NSTimer *orbUpdateTimer;
 @property(nonatomic,copy) NSString *page;
 @property(nonatomic,strong) NSArray<NSDictionary*> *apps;
+// visibleApps sorts a copy on every call and one drawer build calls it seven
+// times. Remember the last result until the inventory or the order changes.
+@property(nonatomic,strong) NSArray<NSDictionary*> *visibleAppsCache;
 + (instancetype)shared;
 - (void)installIfPossible;
 - (void)checkOrbUpdateIfNeeded;
@@ -2162,7 +2223,7 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     self.orbY=Clamp(FloatPref(@"orbY",.50),.10,.90);
     self.left=BoolPref(@"onLeft",NO);
     self.page=@"apps";
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     [self rememberCurrentApp];
     if(!self.screenTouchObserver) {
         __weak typeof(self) weakSelf=self;
@@ -2635,6 +2696,7 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     if(_morphActive) { _drawDeferred=YES; return; }
     if(_isPanning) return;
     if(self.settingsWindow) { [self updateSettingsContent]; return; }
+    self.visibleAppsCache=nil; // a redraw may follow an inventory change
     BOOL visible=[LCOrbitMultitask shouldShowFloatingMenu];
     [self.orbitContext.overlays setModule:@"FloatingMenu" visible:visible];
     if(!visible) {
@@ -3044,7 +3106,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     }
     self.isOpen=opening; self.page=@"apps";
     if(self.isOpen) {
-        self.apps=InstalledApps();
+        self.apps=InstalledAppsCached();
         [self rememberCurrentApp];
     }
     [self announceDrawerState];
@@ -3212,7 +3274,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     if(self.panel || self.settingsWindow || !self.orb) return;
     self.page=@"apps";
     [self loadAppsScroll];
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     [self buildPanel];
     if(!self.panel) return;
     _dropletPanelPrepared=YES;
@@ -3243,7 +3305,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     [self cancelOrbFade];
     self.page=@"apps";
     [self loadAppsScroll];
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     [self rememberCurrentApp];
     [self buildPanel];
     if(![self prepareDrawerMorph]) {
@@ -3827,7 +3889,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     box.clipsToBounds=YES;
     box.layer.masksToBounds=YES;
     box.backgroundColor=UIColor.clearColor;
-    UIImage *real=FMGuestIcon(app);
+    UIImage *real=FMGuestIconSized(app,(size+3)*MAX(1.0,UIScreen.mainScreen.scale));
     if(real) {
         // 彻底消除四角白边：系统 IconServices 生成的图标图片外圈自带 1px 高光描边与四角抗锯齿高亮杂色，
         // 将图片略微外扩 1.5pt（3x 屏幕约 4.5 物理像素），由 box 的超椭圆连续曲率统一进行严格 masksToBounds 裁切，
@@ -3929,7 +3991,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
             }
         }
-        self.apps=InstalledApps();
+        self.apps=InstalledAppsCached();
         [self draw];
     }
 }
@@ -4214,21 +4276,36 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     UILabel *b=[self label:sub size:12 weight:UIFontWeightRegular]; b.textColor=FMThemeColor(FMColorSecondary);
     [stack addArrangedSubview:b]; [self spacer:stack size:8];
 }
+- (void)setApps:(NSArray<NSDictionary*> *)apps {
+    _apps=apps;
+    self.visibleAppsCache=nil;
+}
 - (NSArray<NSDictionary*> *)visibleApps {
     // Visibility is not launch eligibility. Keep the current app and blocked
     // entries; controls and the guest service independently guard execution.
+    if(self.visibleAppsCache) return self.visibleAppsCache;
     NSMutableArray *found=[self.apps mutableCopy] ?: [NSMutableArray array];
     NSArray *order=[HostDefaults() arrayForKey:Pref(@"menuOrder")];
     if([order isKindOfClass:NSArray.class] && order.count) {
+        // indexOfObject: inside the comparator is a linear scan on an NSArray of
+        // strings; a 50-app drawer then pays O(n log n * n) string comparisons.
+        // Build the first-occurrence table once instead.
+        NSMutableDictionary<NSString*,NSNumber*> *rank=[NSMutableDictionary dictionaryWithCapacity:order.count];
+        for(NSUInteger i=0;i<order.count;i++) {
+            id key=order[i];
+            if([key isKindOfClass:NSString.class] && !rank[key]) rank[key]=@(i);
+        }
         [found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
             BOOL hiddenA=[a[@"hidden"] boolValue];
             BOOL hiddenB=[b[@"hidden"] boolValue];
             if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
-            NSUInteger ai=[order indexOfObject:a[@"identity"] ?: a[@"path"]];
-            NSUInteger bi=[order indexOfObject:b[@"identity"] ?: b[@"path"]];
+            NSNumber *ar=rank[a[@"identity"] ?: a[@"path"] ?: @""];
+            NSNumber *br=rank[b[@"identity"] ?: b[@"path"] ?: @""];
             // Read pre-fix preferences without merging new private/shared keys.
-            if(ai==NSNotFound) ai=[order indexOfObject:a[@"path"]];
-            if(bi==NSNotFound) bi=[order indexOfObject:b[@"path"]];
+            if(!ar && a[@"path"]) ar=rank[a[@"path"]];
+            if(!br && b[@"path"]) br=rank[b[@"path"]];
+            NSUInteger ai=ar?ar.unsignedIntegerValue:NSNotFound;
+            NSUInteger bi=br?br.unsignedIntegerValue:NSNotFound;
             if(ai!=bi) return ai<bi?NSOrderedAscending:NSOrderedDescending;
             return [a[@"title"] localizedStandardCompare:b[@"title"]];
         }];
@@ -4240,6 +4317,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
             return [a[@"title"] localizedStandardCompare:b[@"title"]];
         }];
     }
+    self.visibleAppsCache=found;
     return found;
 }
 // 记录当前活跃页面状态：若处于子 App 则记录该 App；若处于 LiveContainer 主页则记录 @"ui"
@@ -4256,7 +4334,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 if([LCOrbitMultitask windows].count==0) SetPref(@"lastActiveAppKey",@"ui");
                 return;
             }
-            for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
+            for(NSDictionary *app in (self.apps.count?self.apps:InstalledAppsCached())) {
                 if([LCOrbitMultitask isCurrentGuest:app]) {
                     FMRememberOpenedApp(app);
                     return;
@@ -4271,7 +4349,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         }
     }
     // 处于子 App 内部环境
-    for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
+    for(NSDictionary *app in (self.apps.count?self.apps:InstalledAppsCached())) {
         if([LCOrbitGuestService isCurrentGuest:app]) {
             FMRememberOpenedApp(app);
             break;
@@ -4284,18 +4362,37 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     id preference=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
     NSArray *recent=[preference isKindOfClass:NSArray.class]?preference:@[];
     NSMutableArray<NSDictionary *> *sorted=[apps mutableCopy];
+    // The comparator used to call isCurrentGuest: twice per comparison (each one
+    // realpaths two folders) plus two linear scans. Resolve all three keys once.
+    NSMutableSet<NSValue *> *current=[[NSMutableSet alloc] initWithCapacity:apps.count];
+    NSMutableDictionary<NSString *,NSNumber *> *recentRank=[NSMutableDictionary dictionaryWithCapacity:recent.count];
+    NSMutableDictionary<NSValue *,NSNumber *> *manualRank=[NSMutableDictionary dictionaryWithCapacity:apps.count];
+    for(NSUInteger i=0;i<apps.count;i++) {
+        NSDictionary *app=apps[i];
+        if([LCOrbitGuestService isCurrentGuest:app])
+            [current addObject:[NSValue valueWithPointer:(__bridge const void *)app]];
+        NSString *key=FMAppKey(app);
+        if(key && !recentRank[key]) {
+            NSUInteger recentIndex=[recent indexOfObject:key];
+            if(recentIndex!=NSNotFound) recentRank[key]=@(recentIndex);
+        }
+        manualRank[[NSValue valueWithPointer:(__bridge const void *)app]]=@(i);
+    }
     [sorted sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
         BOOL hiddenA=[a[@"hidden"] boolValue];
         BOOL hiddenB=[b[@"hidden"] boolValue];
         if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
-        BOOL currentA=[LCOrbitGuestService isCurrentGuest:a];
-        BOOL currentB=[LCOrbitGuestService isCurrentGuest:b];
+        BOOL currentA=[current containsObject:[NSValue valueWithPointer:(__bridge const void *)a]];
+        BOOL currentB=[current containsObject:[NSValue valueWithPointer:(__bridge const void *)b]];
         if(currentA!=currentB) return currentA?NSOrderedAscending:NSOrderedDescending;
-        NSUInteger indexA=[recent indexOfObject:FMAppKey(a)];
-        NSUInteger indexB=[recent indexOfObject:FMAppKey(b)];
+        NSNumber *ra=recentRank[FMAppKey(a)]?:nil, *rb=recentRank[FMAppKey(b)]?:nil;
+        NSUInteger indexA=ra?ra.unsignedIntegerValue:NSNotFound;
+        NSUInteger indexB=rb?rb.unsignedIntegerValue:NSNotFound;
         if(indexA!=indexB) return indexA<indexB?NSOrderedAscending:NSOrderedDescending;
-        NSUInteger manualA=[apps indexOfObjectIdenticalTo:a];
-        NSUInteger manualB=[apps indexOfObjectIdenticalTo:b];
+        NSNumber *ma=manualRank[[NSValue valueWithPointer:(__bridge const void *)a]];
+        NSNumber *mb=manualRank[[NSValue valueWithPointer:(__bridge const void *)b]];
+        NSUInteger manualA=ma?ma.unsignedIntegerValue:NSNotFound;
+        NSUInteger manualB=mb?mb.unsignedIntegerValue:NSNotFound;
         return manualA<manualB?NSOrderedAscending:manualA>manualB?NSOrderedDescending:NSOrderedSame;
     }];
     return sorted;
@@ -4831,7 +4928,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     self.page=@"apps";
     self.isOpen=visible;
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     if(visible) { [self rememberCurrentApp]; [self loadAppsScroll]; }
     FMLog(@"settings-close",FMHostUI()?@"lc-host-foreground":@"guest-foreground");
     [self draw];
@@ -5599,6 +5696,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     if(index!=NSNotFound && index>0) {
         [order exchangeObjectAtIndex:index withObjectAtIndex:index-1];
         SetPref(@"menuOrder",order);
+        self.visibleAppsCache=nil;
     }
     [self draw];
 }
@@ -5713,6 +5811,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
             [order removeObjectAtIndex:from];
             [order insertObject:moving atIndex:destination];
             SetPref(@"menuOrder",order);
+            self.visibleAppsCache=nil;
             FMLog(@"menu-reordered",@"animated-slot");
         }
         if(state) {
@@ -5887,7 +5986,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 
 - (void)compatibilityPage:(UIStackView *)stack {
     [self section:@"应用兼容性" sub:@"开启后以兼容性方式启动，由 App 自行避让顶部。关闭时保持默认行为。部分 App 需重新启动后生效。" in:stack];
-    NSArray<NSDictionary *> *apps=InstalledApps();
+    NSArray<NSDictionary *> *apps=InstalledAppsCached();
     NSMutableArray<UIView *> *rows=[NSMutableArray arrayWithCapacity:apps.count];
     for(NSDictionary *app in apps) {
         // LC's scene bundleId is the relative installation path, not CFBundleIdentifier.
@@ -6215,7 +6314,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     [self installIfPossible];
     if(!self.window || self.settingsWindow) return;
     if([LCOrbitMultitask usesSystemMenu]) { [self draw];return; }
-    self.apps=InstalledApps();self.page=@"apps";
+    self.apps=InstalledAppsCached();self.page=@"apps";
     [self rememberCurrentApp];
     if(expanded && !self.isOpen) {
         [self loadAppsScroll];
@@ -6279,7 +6378,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         // 若已不再处于宿主 UI，或正在拉起/处于设置页面，则安全取消
         if(!FMHostUI() || manager.launchPending || manager.settingsWindow) return;
 
-        NSArray<NSDictionary *> *allApps=InstalledApps();
+        NSArray<NSDictionary *> *allApps=InstalledAppsCached();
         NSDictionary *target=nil;
         for(NSDictionary *app in allApps) {
             if([FMAppKey(app) isEqualToString:lastAppKey] || [app[@"identity"] isEqualToString:lastAppKey]) {
