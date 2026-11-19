@@ -1,11 +1,19 @@
 #import "LCOrbitTaskSwitcher.h"
 #import "LCOrbitMultitask.h"
+#import "LCOrbitStorage.h"
 #import <objc/message.h>
 #import <QuartzCore/QuartzCore.h>
 #import <math.h>
 
 static id TaskObject(id object,SEL selector) {
     return [object respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(object,selector):nil;
+}
+// 0 means closest to the home-indicator safe area; larger values lift the Dock.
+// Read once when the overview opens instead of loading preferences during layout.
+static CGFloat TaskDockBottomGap(void) {
+    id stored=[[LCOrbitStorage preferences] objectForKey:@"LCFloatingMenu.adaptiveDockBottomGap"];
+    CGFloat gap=stored?[stored doubleValue]:4;
+    return isfinite(gap)?fmax(0,fmin(80,gap)):4;
 }
 static BOOL TaskUsesPiP(UIViewController *window) {
     id scene=TaskObject(window,NSSelectorFromString(@"appSceneVC"));
@@ -249,6 +257,7 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic,copy) void (^launchHandler)(NSDictionary *app);
 @property(nonatomic,copy) LCOrbitTaskDockIconProvider iconProvider;
 @property(nonatomic) CGFloat dockIconSize;
+@property(nonatomic) CGFloat dockBottomGap;
 @property(nonatomic) BOOL gridPresentation;
 @property(nonatomic) BOOL initialDockVisible;
 @property(nonatomic) NSUInteger cardsPerPage;
@@ -421,8 +430,10 @@ static UIWindow *OverviewWindow;
     UIEdgeInsets safe=self.view.safeAreaInsets;
     if(CGRectEqualToRect(bounds,self.laidOutBounds)&&UIEdgeInsetsEqualToEdgeInsets(safe,self.laidOutSafeInsets))return;self.laidOutBounds=bounds;self.laidOutSafeInsets=safe;
     CGFloat width=bounds.size.width,height=bounds.size.height;
-    CGFloat dockHeight=64;
-    CGFloat dockTop=height-safe.bottom-dockHeight-12;
+    // The old fixed 64pt Dock plus 12pt bottom and 20pt card spacing
+    // unnecessarily squeezed previews, especially in landscape.
+    CGFloat dockHeight=MIN(56,MAX(48,ceil(self.dockIconSize)+8));
+    CGFloat dockTop=MAX(safe.top+12,height-safe.bottom-dockHeight-self.dockBottomGap);
     if(self.dock) {
         CGFloat x=12,buttonWidth=MAX(44,self.dockIconSize);
         for(LCOrbitTaskDockButton *button in self.dockScroll.subviews) {
@@ -434,7 +445,7 @@ static UIWindow *OverviewWindow;
         CGFloat dockWidth=MIN(width-safe.left-safe.right-28,dockContentWidth);
         self.dock.frame=CGRectMake((width-dockWidth)/2,dockTop,dockWidth,dockHeight);self.dockScroll.frame=self.dock.bounds;self.dockScroll.contentSize=CGSizeMake(dockContentWidth,dockHeight);
     }
-    CGFloat cardBottom=self.dock?dockTop-20:height-safe.bottom-16;
+    CGFloat cardBottom=self.dock?dockTop-10:height-safe.bottom-16;
     CGFloat availableHeight=MAX(35,cardBottom-safe.top);
     self.emptyLabel.frame=CGRectMake(0,safe.top,width,availableHeight);
     NSUInteger columns=self.gridPresentation?(width>height?3:2):1;
@@ -1029,6 +1040,7 @@ static UIWindow *OverviewWindow;
     controller.gridPresentation=[LCOrbitMultitask taskSwitcherPresentation]==1;
     controller.initialDockVisible=restoredDock;
     controller.dockIconSize=MIN(50,MAX(24,size));
+    controller.dockBottomGap=TaskDockBottomGap();
     controller.iconProvider=provider;
     for(NSUInteger index=0;index<tasks.count;index++)if([tasks[index][@"active"] boolValue]){controller.selectedIndex=index;break;}
     if(focusToken)for(NSUInteger index=0;index<tasks.count;index++)if([tasks[index][@"token"] isEqual:focusToken]){controller.selectedIndex=index;break;}
