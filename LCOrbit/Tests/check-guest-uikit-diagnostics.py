@@ -151,7 +151,12 @@ checks = {
         "firstCellBefore" in diag and
         "firstCellAfter" in diag and
         "guest-uikit-baidu-list-inset-corrected" in diag and
-        "fabs(missing-listSafeTop)>3" in diag and
+        "fabs(actual.top+missing-targetInset)>3" in diag and
+        'actual.top>=0 && actual.top<=70' in diag and
+        'missing>68' in diag and
+        'pipixia-list-v2' in diag and
+        'guest-uikit-baidu-list-probe' in diag and
+        'GuestBaiduListProbe' in diag and
         "scroll.contentSize.height<scroll.bounds.size.height*1.05" in diag and
         "changed.top+=missing" in diag and
         "offset.y-missing" in diag,
