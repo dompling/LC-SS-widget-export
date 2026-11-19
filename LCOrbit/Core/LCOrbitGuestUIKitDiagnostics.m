@@ -46,6 +46,17 @@ static LCOrbitTopSurfaceOffset *GuestInstagramHeaderOffset;
 static LCOrbitBaiduContentSafeState *GuestBaiduContentSafe;
 static NSTimer *GuestBaiduContentWatchTimer;
 static void GuestBaiduPageProbeTick(void);
+static void GuestRepairBaiduListScroll(UIWindow *window,UIViewController *root,CGFloat top);
+static void GuestRestoreBaiduListInset(void);
+@interface LCOrbitBaiduListInsetState : NSObject
+@property(nonatomic,weak) UICollectionView *scroll;
+@property(nonatomic,weak) UIViewController *selected;
+@property(nonatomic,assign) CGFloat originalTop;
+@property(nonatomic,assign) CGFloat addedTop;
+@end
+@implementation LCOrbitBaiduListInsetState
+@end
+static LCOrbitBaiduListInsetState *GuestBaiduListInset;
 static __weak UIViewController *GuestBaiduProbeSelected;
 static NSInteger GuestBaiduProbeBarY=NSIntegerMin;
 static NSInteger GuestBaiduProbeMenuBottom=NSIntegerMin;
@@ -319,6 +330,7 @@ static void GuestRestoreBaiduSurfaces(void) {
     GuestRestoreTopSurface(&GuestHeaderOffset);
     GuestRestoreTopSurface(&GuestNavigationOffset);
     GuestRestoreBaiduContentSafeArea();
+    GuestRestoreBaiduListInset();
 }
 static UIView *GuestFindBaiduSlideMenu(UIView *node,UIWindow *window,
                                        NSUInteger depth,NSUInteger *visited) {
@@ -739,6 +751,7 @@ static void GuestSafeAreaRepairTick(void) {
     if(fabs(top-GuestRepairedTop)<.5) {
         GuestRepairBaiduTopSurfaces(window,root,top);
         GuestRepairBaiduContentSafeArea(window,root,top);
+        GuestRepairBaiduListScroll(window,root,top);
         GuestRepairInstagramInnerScroll(window,root,top);
         return;
     }
@@ -767,6 +780,7 @@ static void GuestSafeAreaRepairTick(void) {
         [view layoutIfNeeded];
         GuestRepairBaiduTopSurfaces(strongWindow,root,top);
         GuestRepairBaiduContentSafeArea(strongWindow,root,top);
+        GuestRepairBaiduListScroll(strongWindow,root,top);
         GuestRepairInstagramInnerScroll(strongWindow,root,top);
         if([LCOrbitGuestUIKitDiagnostics isEnabled])
             GuestWriteEvent(@"guest-uikit-safe-area-relayout",@{
@@ -797,6 +811,7 @@ static void GuestStopBaiduContentWatch(void) {
     [GuestBaiduContentWatchTimer invalidate];
     GuestBaiduContentWatchTimer=nil;
     GuestRestoreBaiduContentSafeArea();
+    GuestRestoreBaiduListInset();
     GuestBaiduProbeSelected=nil;
     GuestBaiduProbeBarY=NSIntegerMin;
     GuestBaiduProbeMenuBottom=NSIntegerMin;
@@ -1049,6 +1064,157 @@ static NSDictionary *GuestBaiduPageGeometry(UIWindow *window) {
         result[@"navBarFrame"]=NSStringFromCGRect(
             [nav.navigationBar convertRect:nav.navigationBar.bounds toView:window]);
     return result;
+}
+// Pipixia embeds its actual vertical feed in a horizontal BDSIMMPageScrollView.
+// Do not touch the pager: its legitimate top inset can be -769pt. Instead locate
+// only the current, on-screen BDSVerticalUICollectionView and its first cell.
+static UICollectionView *GuestBaiduForegroundList(UIView *node,UIWindow *window,
+        NSUInteger depth,NSUInteger *visited) {
+    if(!node || depth>19 || ++(*visited)>1100 || node.hidden ||
+       node.alpha<.05 || node.window!=window) return nil;
+    if([NSStringFromClass(node.class) isEqualToString:
+            @"BDSVerticalUICollectionView"] &&
+       [node isKindOfClass:UICollectionView.class]) {
+        CGRect rect=[node convertRect:node.bounds toView:window];
+        if(fabs(CGRectGetMinX(rect))<=3 &&
+           CGRectGetWidth(rect)>=window.bounds.size.width*.95 &&
+           CGRectGetHeight(rect)>=window.bounds.size.height*.65)
+            return (UICollectionView *)node;
+    }
+    for(UIView *child in node.subviews) {
+        UICollectionView *result=GuestBaiduForegroundList(child,window,depth+1,visited);
+        if(result) return result;
+    }
+    return nil;
+}
+static void GuestRestoreBaiduListInset(void) {
+    LCOrbitBaiduListInsetState *saved=GuestBaiduListInset;
+    if(!saved) return;
+    UICollectionView *scroll=saved.scroll;
+    if(scroll && (scroll.dragging || scroll.tracking || scroll.decelerating))
+        return; // Never mutate the user's in-flight scroll.
+    GuestBaiduListInset=nil;
+    if(!scroll || fabs(scroll.contentInset.top-
+        (saved.originalTop+saved.addedTop))>1) return; // App took ownership.
+    UIEdgeInsets inset=scroll.contentInset;
+    CGPoint offset=scroll.contentOffset;
+    inset.top=saved.originalTop;
+    [UIView performWithoutAnimation:^{
+        scroll.contentInset=inset;
+        [scroll setContentOffset:CGPointMake(offset.x,offset.y+saved.addedTop)
+                        animated:NO];
+    }];
+}
+static void GuestRepairBaiduListScroll(UIWindow *window,
+                                       UIViewController *root,CGFloat top) {
+    if(!GuestIsBaiduTopRepair(root)) {
+        GuestRestoreBaiduListInset();
+        return;
+    }
+    UINavigationController *nav=(UINavigationController *)root;
+    UIViewController *visible=nav.visibleViewController;
+    UIViewController *selected=[visible isKindOfClass:UITabBarController.class]?
+        ((UITabBarController *)visible).selectedViewController:nil;
+    if(!selected ||
+       ![NSStringFromClass(selected.class) isEqualToString:
+           @"BDSMixedListContainerV3ViewController"] ||
+       !selected.isViewLoaded || selected.viewIfLoaded.window!=window ||
+       nav.transitionCoordinator || selected.transitionCoordinator) {
+        GuestRestoreBaiduListInset();
+        return;
+    }
+    NSUInteger visited=0;
+    UICollectionView *scroll=GuestBaiduForegroundList(
+        selected.viewIfLoaded,window,0,&visited);
+    LCOrbitBaiduListInsetState *saved=GuestBaiduListInset;
+    if(saved && (saved.scroll!=scroll || saved.selected!=selected)) {
+        GuestRestoreBaiduListInset();
+        if(GuestBaiduListInset) return; // Wait for an ongoing drag to stop.
+        saved=nil;
+    }
+    if(saved) {
+        if(fabs(scroll.contentInset.top-
+            (saved.originalTop+saved.addedTop))<=1) return;
+        GuestBaiduListInset=nil; // App already changed its own inset.
+    }
+    if(!scroll || scroll.dragging || scroll.tracking || scroll.decelerating ||
+       scroll.contentSize.height<scroll.bounds.size.height*1.05)
+        return;
+    NSUInteger menuVisited=0;
+    UIView *menu=GuestFindBaiduSlideMenu(
+        root.viewIfLoaded,window,0,&menuVisited);
+    if(!menu) return;
+    CGRect menuFrame=[menu convertRect:menu.bounds toView:window];
+    CGRect listFrame=[scroll convertRect:scroll.bounds toView:window];
+    UIEdgeInsets actual=scroll.contentInset;
+    UIEdgeInsets adjusted=scroll.adjustedContentInset;
+    CGPoint offset=scroll.contentOffset;
+    CGFloat listSafeTop=scroll.safeAreaInsets.top;
+    // The observed feed is y=48 with a 48pt app-owned inset. Its 11pt
+    // remaining UIKit safe inset was not added, so the first cell starts at
+    // y=96 underneath the custom menu ending at y=107.
+    BOOL stable=isfinite(top) && top>35 && top<90 &&
+        fabs(CGRectGetMinY(menuFrame)-top)<=2 &&
+        CGRectGetHeight(menuFrame)>=40 && CGRectGetHeight(menuFrame)<=58 &&
+        fabs(CGRectGetMinX(listFrame))<=3 &&
+        CGRectGetMinY(listFrame)>=25 && CGRectGetMinY(listFrame)<=70 &&
+        actual.top>=35 && actual.top<=70 &&
+        fabs(adjusted.top-actual.top)<=1 &&
+        fabs(offset.y+adjusted.top)<=1 &&
+        listSafeTop>2 && listSafeTop<=24;
+    if(!stable) return;
+    UICollectionViewCell *first=nil;
+    CGFloat firstY=CGFLOAT_MAX;
+    for(UICollectionViewCell *cell in scroll.visibleCells) {
+        CGRect cellFrame=[cell convertRect:cell.bounds toView:window];
+        if(CGRectGetWidth(cellFrame)>window.bounds.size.width*.7 &&
+           CGRectGetMinY(cellFrame)<firstY) {
+            first=cell;firstY=CGRectGetMinY(cellFrame);
+        }
+    }
+    if(!first || !isfinite(firstY)) return;
+    CGFloat expectedY=CGRectGetMinY(listFrame)+adjusted.top;
+    CGFloat missing=CGRectGetMaxY(menuFrame)-firstY;
+    // Do not shift a feed whose first cell already clears the menu.
+    // This is the observed 11pt local mismatch, not a new global safe area.
+    if(fabs(firstY-expectedY)>3 || missing<=2 || missing>24 ||
+       fabs(missing-listSafeTop)>3)
+        return;
+    UIEdgeInsets changed=actual;
+    changed.top+=missing;
+    [UIView performWithoutAnimation:^{
+        scroll.contentInset=changed;
+        [scroll setContentOffset:CGPointMake(offset.x,offset.y-missing)
+                        animated:NO];
+        [scroll layoutIfNeeded];
+    }];
+    CGRect after=[first convertRect:first.bounds toView:window];
+    BOOL moved=isfinite(CGRectGetMinY(after)) &&
+        fabs(CGRectGetMinY(after)-(firstY+missing))<=3 &&
+        fabs(scroll.contentInset.top-changed.top)<=1;
+    if(!moved) {
+        [UIView performWithoutAnimation:^{
+            scroll.contentInset=actual;
+            [scroll setContentOffset:offset animated:NO];
+        }];
+        return;
+    }
+    saved=[LCOrbitBaiduListInsetState new];
+    saved.scroll=scroll;saved.selected=selected;
+    saved.originalTop=actual.top;saved.addedTop=missing;
+    GuestBaiduListInset=saved;
+    GuestWriteEvent(@"guest-uikit-baidu-list-inset-corrected",@{
+        @"scrollClass":NSStringFromClass(scroll.class),
+        @"menuFrame":NSStringFromCGRect(menuFrame),
+        @"listFrame":NSStringFromCGRect(listFrame),
+        @"firstCellBefore":@(firstY),
+        @"firstCellAfter":@(CGRectGetMinY(after)),
+        @"missing":@(missing),
+        @"originalInset":NSStringFromUIEdgeInsets(actual),
+        @"correctedInset":NSStringFromUIEdgeInsets(scroll.contentInset),
+        @"originalOffset":NSStringFromCGPoint(offset),
+        @"correctedOffset":NSStringFromCGPoint(scroll.contentOffset)
+    });
 }
 static void GuestBaiduPageProbeTick(void) {
     if(![LCOrbitGuestUIKitDiagnostics isEnabled] || GuestBaiduProbeCount>=14)
