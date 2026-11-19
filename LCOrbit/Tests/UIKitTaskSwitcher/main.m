@@ -29,6 +29,11 @@ static UIWindow *Host;
 static BOOL TaskRemovesViewOnClose;
 static UIViewController *DockActiveWindow;
 static BOOL GridPresentation;
+@interface LCOrbitStorage : NSObject
+@end
+@implementation LCOrbitStorage
++ (NSUserDefaults *)preferences { return NSUserDefaults.standardUserDefaults; }
+@end
 @interface LCOrbitMultitask : NSObject
 @end
 NSString *const LCOrbitMultitaskConfigurationChangedNotification=@"LCOrbitMultitaskConfigurationChanged";
