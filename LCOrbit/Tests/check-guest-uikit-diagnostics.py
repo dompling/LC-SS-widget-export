@@ -56,28 +56,23 @@ checks = {
         "additionalSafeAreaInsets" not in diag and
         "setFrame:" not in diag and
         "method_exchangeImplementations" not in diag,
-    "Baidu top-only fix is opt-in, class-scoped and not a window resize":
-        'GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"' in diag and
-        'isEqualToString:@"BDSNavigationController"' in diag and
+    "Pipixia lays out a common home container instead of translating bars":
+        'GuestHomeBodyContainer(menu,page,window)' in diag and
+        'GuestHomeMenu(page,0,&visited)' in diag and
         'isEqualToString:@"BDSSlideMenuMain"' in diag and
-        'GuestIsBaiduTopRepair' in diag and
-        'GuestCorrectTopSurface' in diag and
-        'GuestRepairBaiduTopSurfaces' in diag and
-        'CGRectGetHeight(before)<=85' in diag and
-        'CGRectGetWidth(before)>=window.bounds.size.width*.85' in diag,
-    "top-only transforms restore on rotation, view replacement and native geometry":
-        'GuestRestoreBaiduSurfaces' in diag and
-        'GuestRestoreTopSurface(slot)' in diag and
-        'CGAffineTransformEqualToTransform' in diag and
-        'UIView performWithoutAnimation' in diag and
+        'isEqualToString:@"com.bd.iphone.super.app"' in diag and
+        'CGAffineTransformMakeTranslation' not in diag,
+    "preserves bottom and restores owned geometry":
+        'frame.size.height-delta' in diag and
+        'return bottom?top:nil' in diag and
+        'anchor.constant=GuestAppliedConstant' in diag and
+        'GuestHomeTop.constant==GuestAppliedConstant' in diag and
+        'CGRectEqualToRect(GuestHomeContainer.frame,GuestAppliedFrame)' in diag,
+    "local correction is bounded and verified":
+        'guest-uikit-home-layout' in diag and
+        'fabs(CGRectGetMinY(after)-top)>2' in diag and
         'UIInterfaceOrientationIsPortrait(scene.interfaceOrientation)' in diag and
-        'fabs(saved.applied-offset)<.5' in diag,
-    "local corrections are logged and bounded to the Guest startup/foreground window":
-        'guest-uikit-top-surfaces-corrected' in diag and
-        'GuestRepairBaiduTopSurfaces(strongWindow,root,top)' in diag and
-        'GuestRepairBaiduTopSurfaces(window,root,top)' in diag and
-        '@5.0' in diag and
-        'method_exchangeImplementations' not in diag,
+        '@5.0' in diag,
     "records actual navigation and upper subview geometry":
         "GuestNavigationGeometry" in diag and
         "GuestTopViews" in diag and

@@ -22,17 +22,11 @@ static __weak UIWindow *GuestRelayoutWindow;
 static __weak UIViewController *GuestRelayoutRoot;
 static CGFloat GuestRepairedTop=-1;
 
-// Per-Guest, per-visible-view corrections. Keep weak references so navigation
-// transitions can discard their views. The original transforms are restored
-// on rotation, replacement, or when UIKit itself starts honoring safe areas.
-@interface LCOrbitTopSurfaceOffset : NSObject
-@property(nonatomic,weak) UIView *view;
-@property(nonatomic,assign) CGFloat applied;
-@end
-@implementation LCOrbitTopSurfaceOffset
-@end
-static LCOrbitTopSurfaceOffset *GuestHeaderOffset;
-static LCOrbitTopSurfaceOffset *GuestNavigationOffset;
+// Geometry belongs to the home content container. Its bottom stays anchored.
+static __weak UIView *GuestHomeContainer;
+static __weak NSLayoutConstraint *GuestHomeTop;
+static CGFloat GuestOriginalConstant, GuestAppliedConstant;
+static CGRect GuestOriginalFrame, GuestAppliedFrame;
 
 // LC removes the one-shot "selected" default before shared tweaks load.
 // The installed app folder remains available after NSBundle is replaced.
@@ -241,116 +235,123 @@ static UIWindow *GuestVisibleWindow(void) {
 // Baidu's custom tab/header is absolutely positioned at y=0 even though its
 // UIWindow and child views report a 59pt safe top. Changing the whole scene
 // compresses content; only correct these observed top-only surfaces.
-static BOOL GuestIsBaiduTopRepair(UIViewController *root) {
-    return GuestRelayoutEnabled &&
-        [GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"] &&
-        [root isKindOfClass:UINavigationController.class] &&
-        [NSStringFromClass(root.class) isEqualToString:@"BDSNavigationController"];
-}
-static void GuestRestoreTopSurface(LCOrbitTopSurfaceOffset *__strong *slot) {
-    LCOrbitTopSurfaceOffset *saved=*slot;
-    UIView *view=saved.view;
-    if(view && CGAffineTransformEqualToTransform(view.transform,
-           CGAffineTransformMakeTranslation(0,saved.applied))) {
-        [UIView performWithoutAnimation:^{view.transform=CGAffineTransformIdentity;}];
+static void GuestRestoreHomeLayout(void) {
+    if(GuestHomeTop) {
+        if(GuestHomeTop.constant==GuestAppliedConstant)
+            GuestHomeTop.constant=GuestOriginalConstant;
+    } else if(GuestHomeContainer && CGRectEqualToRect(GuestHomeContainer.frame,GuestAppliedFrame)) {
+        GuestHomeContainer.frame=GuestOriginalFrame;
     }
-    *slot=nil;
+    GuestHomeContainer=nil;
+    GuestHomeTop=nil;
 }
-static void GuestRestoreBaiduSurfaces(void) {
-    GuestRestoreTopSurface(&GuestHeaderOffset);
-    GuestRestoreTopSurface(&GuestNavigationOffset);
-}
-static UIView *GuestFindBaiduSlideMenu(UIView *node,UIWindow *window,
-                                       NSUInteger depth,NSUInteger *visited) {
-    if(!node || depth>17 || ++(*visited)>900 || node.hidden ||
-       node.alpha<.05 || node.window!=window) return nil;
-    if([NSStringFromClass(node.class) isEqualToString:@"BDSSlideMenuMain"])
-        return node;
+
+static UIView *GuestHomeMenu(UIView *node,NSUInteger depth,NSUInteger *visited) {
+    if(!node || depth>17 || ++(*visited)>900 || node.hidden || node.alpha<.05) return nil;
+    if([NSStringFromClass(node.class) isEqualToString:@"BDSSlideMenuMain"]) return node;
     for(UIView *child in node.subviews) {
-        UIView *found=GuestFindBaiduSlideMenu(child,window,depth+1,visited);
-        if(found) return found;
+        UIView *menu=GuestHomeMenu(child,depth+1,visited);
+        if(menu) return menu;
     }
     return nil;
 }
-static UIView *GuestBaiduHeaderContainer(UIView *menu,UIView *root,UIWindow *window) {
-    // Reuse the same corrected ancestor after its visual frame moves to y=59.
-    UIView *saved=GuestHeaderOffset.view;
-    for(UIView *node=menu;node && node!=root;node=node.superview)
-        if(node==saved) return saved;
-    UIView *best=nil;
-    for(UIView *node=menu;node && node!=root;node=node.superview) {
-        CGRect frame=[node convertRect:node.bounds toView:window];
-        if(CGRectGetHeight(frame)>=30 && CGRectGetHeight(frame)<=85 &&
-           CGRectGetWidth(frame)>=window.bounds.size.width*.85 &&
-           fabs(CGRectGetMinY(frame))<=5) best=node;
+
+// Select the nearest shared parent of the menu strip and a full-width body.
+// Never select the window, app root or navigation transition container.
+static UIView *GuestHomeBodyContainer(UIView *menu,UIView *page,UIWindow *window) {
+    CGFloat width=window.bounds.size.width;
+    for(UIView *branch=menu;branch && branch!=page;branch=branch.superview) {
+        UIView *parent=branch.superview;
+        if(!parent || ![parent isDescendantOfView:page]) break;
+        CGRect strip=[branch convertRect:branch.bounds toView:window];
+        if(strip.size.height<30 || strip.size.height>100 || strip.size.width<width*.8) continue;
+        for(UIView *body in parent.subviews) {
+            if(body==branch || body.hidden || body.alpha<.05 || !body.userInteractionEnabled) continue;
+            CGRect area=[body convertRect:body.bounds toView:window];
+            if(area.size.width>=width*.85 && area.size.height>=window.bounds.size.height*.5 &&
+               CGRectGetMinY(area)<=CGRectGetMaxY(strip)+8 && CGRectGetMaxY(area)>CGRectGetMaxY(strip))
+                return parent;
+        }
     }
-    return best;
+    return nil;
 }
-static NSDictionary *GuestCorrectTopSurface(UIView *surface,UIWindow *window,
-                                             CGFloat top,NSString *name,
-                                             LCOrbitTopSurfaceOffset *__strong *slot) {
-    if((*slot).view!=surface) GuestRestoreTopSurface(slot);
-    if(!surface || surface.window!=window) {
-        GuestRestoreTopSurface(slot);
-        return nil;
+
+// For Auto Layout, adjust only an unambiguous top-to-parent constraint with
+// a separately anchored bottom. Leave app-owned height/center layouts alone.
+static NSLayoutConstraint *GuestContainerTop(UIView *view,CGFloat *sign) {
+    NSLayoutConstraint *top=nil;
+    BOOL bottom=NO;
+    for(NSLayoutConstraint *c in view.superview.constraints) {
+        if(!c.active || c.relation!=NSLayoutRelationEqual || c.multiplier!=1) continue;
+        BOOL first=c.firstItem==view, second=c.secondItem==view;
+        if(!first && !second) continue;
+        id other=first?c.secondItem:c.firstItem;
+        if(other!=view.superview && other!=view.superview.safeAreaLayoutGuide) continue;
+        NSLayoutAttribute edge=first?c.firstAttribute:c.secondAttribute;
+        if(edge!=(first?c.secondAttribute:c.firstAttribute)) continue;
+        if(edge==NSLayoutAttributeBottom) bottom=YES;
+        if(edge==NSLayoutAttributeTop) {
+            if(top) return nil;
+            top=c;
+            *sign=first?1:-1;
+        }
     }
-    LCOrbitTopSurfaceOffset *saved=*slot;
-    CGAffineTransform expected=saved?
-        CGAffineTransformMakeTranslation(0,saved.applied):CGAffineTransformIdentity;
-    // Never overwrite transforms owned by app transitions/animations.
-    if(!CGAffineTransformEqualToTransform(surface.transform,expected)) {
-        *slot=nil;
-        return nil;
-    }
-    CGRect before=[surface convertRect:surface.bounds toView:window];
-    CGFloat baseY=CGRectGetMinY(before)-(saved?saved.applied:0);
-    // Correct only full-width top strips (44/48pt), not the body of the app.
-    BOOL eligible=isfinite(top) && top>=30 && top<=90 && isfinite(baseY) &&
-        baseY>=-5 && baseY<=MIN(22,top*.4) &&
-        CGRectGetHeight(before)>=30 && CGRectGetHeight(before)<=85 &&
-        CGRectGetWidth(before)>=window.bounds.size.width*.85;
-    if(!eligible) {
-        GuestRestoreTopSurface(slot);
-        return nil;
-    }
-    CGFloat offset=top-baseY;
-    if(saved && fabs(saved.applied-offset)<.5) return nil;
-    if(!saved) {
-        saved=[LCOrbitTopSurfaceOffset new];
-        saved.view=surface;
-        *slot=saved;
-    }
-    saved.applied=offset;
-    [UIView performWithoutAnimation:^{
-        surface.transform=CGAffineTransformMakeTranslation(0,offset);
-    }];
-    return @{@"component":name,@"safeTop":@(top),@"offset":@(offset),
-        @"before":NSStringFromCGRect(before),
-        @"after":NSStringFromCGRect([surface convertRect:surface.bounds toView:window]),
-        @"class":NSStringFromClass(surface.class)};
+    return bottom?top:nil;
 }
-static void GuestRepairBaiduTopSurfaces(UIWindow *window,
-                                       UIViewController *root,CGFloat top) {
-    if(!GuestIsBaiduTopRepair(root)) {
-        GuestRestoreBaiduSurfaces();
+
+static void GuestRepairHomeLayout(UIWindow *window,UIViewController *root,CGFloat top) {
+    if(![GuestInstallPath() isEqualToString:@"com.bd.iphone.super.app"] ||
+       ![NSStringFromClass(root.class) isEqualToString:@"BDSNavigationController"] ||
+       ![root isKindOfClass:UINavigationController.class]) { GuestRestoreHomeLayout(); return; }
+    UINavigationController *nav=(UINavigationController *)root;
+    UIView *page=nav.visibleViewController.viewIfLoaded;
+    if(nav.transitionCoordinator) return;
+    NSUInteger visited=0;
+    UIView *menu=page.window==window?GuestHomeMenu(page,0,&visited):nil;
+    UIView *container=menu?GuestHomeBodyContainer(menu,page,window):nil;
+    if(container!=GuestHomeContainer) GuestRestoreHomeLayout();
+    if(!container || container==root.view || !CGAffineTransformIsIdentity(container.transform)) return;
+    CGFloat sign=1;
+    BOOL manual=container.translatesAutoresizingMaskIntoConstraints;
+    NSLayoutConstraint *anchor=manual?nil:GuestContainerTop(container,&sign);
+    if(!manual && !anchor) { GuestRestoreHomeLayout(); return; }
+    if(GuestHomeContainer && anchor!=GuestHomeTop) GuestRestoreHomeLayout();
+    CGRect strip=[menu convertRect:menu.bounds toView:window];
+    // Convert the residual displacement into the parent's coordinate system.
+    CGPoint origin=CGPointMake(CGRectGetMinX(strip),CGRectGetMinY(strip));
+    CGPoint desired=CGPointMake(origin.x,top);
+    CGFloat delta=[container.superview convertPoint:desired fromView:window].y-
+                  [container.superview convertPoint:origin fromView:window].y;
+    if(!isfinite(delta) || fabs(delta)<.5) return;
+    if(delta<0 || delta>90 || top<30 || top>90) { GuestRestoreHomeLayout(); return; }
+    CGRect frame=container.frame;
+    if(frame.size.height-delta<window.bounds.size.height*.45) return;
+    if(anchor) {
+        if(!GuestHomeContainer || anchor.constant!=GuestAppliedConstant)
+            GuestOriginalConstant=anchor.constant;
+        GuestAppliedConstant=anchor.constant+sign*delta;
+        GuestHomeTop=anchor;
+        anchor.constant=GuestAppliedConstant;
+        [container.superview layoutIfNeeded];
+    } else {
+        if(!GuestHomeContainer || !CGRectEqualToRect(frame,GuestAppliedFrame))
+            GuestOriginalFrame=frame;
+        GuestAppliedFrame=CGRectMake(frame.origin.x,frame.origin.y+delta,
+            frame.size.width,frame.size.height-delta);
+        container.frame=GuestAppliedFrame;
+        [container layoutIfNeeded];
+    }
+    GuestHomeContainer=container;
+    CGRect after=[menu convertRect:menu.bounds toView:window];
+    if(!isfinite(CGRectGetMinY(after)) || fabs(CGRectGetMinY(after)-top)>2) {
+        GuestRestoreHomeLayout();
+        [container.superview layoutIfNeeded];
         return;
     }
-    NSUInteger visited=0;
-    UIView *menu=GuestFindBaiduSlideMenu(root.viewIfLoaded,window,0,&visited);
-    UIView *header=menu?GuestBaiduHeaderContainer(menu,root.viewIfLoaded,window):nil;
-    UINavigationBar *bar=((UINavigationController *)root).navigationBar;
-    if(bar.window!=window || bar.hidden ||
-       ((UINavigationController *)root).navigationBarHidden) bar=nil;
-    NSMutableArray *changes=[NSMutableArray arrayWithCapacity:2];
-    NSDictionary *headerChange=GuestCorrectTopSurface(header,window,top,
-        @"baidu-slide-menu-header",&GuestHeaderOffset);
-    if(headerChange) [changes addObject:headerChange];
-    NSDictionary *barChange=GuestCorrectTopSurface(bar,window,top,
-        @"baidu-navigation-bar",&GuestNavigationOffset);
-    if(barChange) [changes addObject:barChange];
-    if(changes.count) GuestWriteEvent(@"guest-uikit-top-surfaces-corrected",
-        @{@"changes":changes,@"windowSafeInsets":
-            NSStringFromUIEdgeInsets(window.safeAreaInsets)});
+    GuestWriteEvent(@"guest-uikit-home-layout",@{@"container":NSStringFromClass(container.class),
+        @"menuBefore":NSStringFromCGRect(strip),
+        @"menuAfter":NSStringFromCGRect(after),
+        @"delta":@(delta),@"mode":manual?@"frame":@"constraint"});
 }
 // A remote scene can be activated with 0pt insets and acquire its real
 // Dynamic-Island safe area one UIKit pass later. Some custom navigation
@@ -364,12 +365,12 @@ static void GuestSafeAreaRepairTick(void) {
     UIViewController *root=window.rootViewController;
     UIView *view=root.viewIfLoaded;
     if(!window || !root || !view || view.window!=window) {
-        GuestRestoreBaiduSurfaces();
+        GuestRestoreHomeLayout();
         return;
     }
     UIWindowScene *scene=window.windowScene;
     if(!scene || !UIInterfaceOrientationIsPortrait(scene.interfaceOrientation)) {
-        GuestRestoreBaiduSurfaces();
+        GuestRestoreHomeLayout();
         return;
     }
     if(GuestRelayoutWindow!=window || GuestRelayoutRoot!=root) {
@@ -382,7 +383,7 @@ static void GuestSafeAreaRepairTick(void) {
     // A later app layout may recreate its custom header without changing the
     // safe-area number; the short bounded polling still checks for new views.
     if(fabs(top-GuestRepairedTop)<.5) {
-        GuestRepairBaiduTopSurfaces(window,root,top);
+        GuestRepairHomeLayout(window,root,top);
         return;
     }
     GuestRepairedTop=top;
@@ -408,7 +409,7 @@ static void GuestSafeAreaRepairTick(void) {
             [visible setNeedsLayout];
         }
         [view layoutIfNeeded];
-        GuestRepairBaiduTopSurfaces(strongWindow,root,top);
+        GuestRepairHomeLayout(strongWindow,root,top);
         if([LCOrbitGuestUIKitDiagnostics isEnabled])
             GuestWriteEvent(@"guest-uikit-safe-area-relayout",@{
                 @"windowSafeInsets":NSStringFromUIEdgeInsets(strongWindow.safeAreaInsets),
