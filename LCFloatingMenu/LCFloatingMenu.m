@@ -2408,14 +2408,18 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
         nightBacking.userInteractionEnabled=NO;
         [material.contentView addSubview:nightBacking];
     }
-    // LC's colorful app cards and translucent TabView show through the
-    // native drawer. Give only the host drawer a light readability backing.
-    if(strong && FMHostUI()) {
+    // Regular glass adapts to the sampled background on iOS 26+.
+    // A dark drawer over a light host/guest used the same weak backing as
+    // daytime, so the light application could visibly wash through it.
+    // Keep daytime and the explicit Clear setting's lighter treatment intact.
+    if(strong && (FMHostUI() || (nativeGlass && FMMenuDark()))) {
         UIView *backing=[[UIView alloc] initWithFrame:material.contentView.bounds];
         backing.tag=9231; // Material backing, not content: the drawer morph leaves it alone.
         backing.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-        backing.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:
-            clear?.42:.26];
+        BOOL night=FMMenuDark();
+        UIColor *base=night?FMThemeColor(FMColorBackground):FMThemeColor(FMColorSurface);
+        CGFloat opacity=night?(clear?.56:.74):(clear?.42:.26);
+        backing.backgroundColor=[base colorWithAlphaComponent:opacity];
         backing.userInteractionEnabled=NO;
         [material.contentView addSubview:backing];
     }
@@ -5081,6 +5085,11 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
                 presentation.accessibilityLabel=@"自适应任务切换呈现方式";
                 [presentation addTarget:self action:@selector(multitaskPresentationChanged:) forControlEvents:UIControlEventValueChanged];
                 [self addRow:presentation height:38 to:s];
+                if(![LCOrbitMultitask usesNativeTaskWindows]) {
+                    [self spacer:s size:10];
+                    [self section:@"自适应 Dock 位置" sub:@"向右移动滑块可将 Dock 上移，0 为最贴近底部安全区；重新打开切换界面后生效。" in:s];
+                    [self settingSlider:s title:@"距底部距离" key:@"adaptiveDockBottomGap" min:0 max:80 def:4 tag:112];
+                }
             }
             [self spacer:s size:14];
         }
@@ -5275,6 +5284,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     [s addArrangedSubview:l];
     UISlider *slider=[UISlider new];slider.minimumValue=min;slider.maximumValue=max;
     slider.value=FloatPref(key,def);slider.tag=tag;
+    if(tag==112) slider.continuous=NO; // One persisted write on release, not each frame.
     slider.tintColor=FMAccent();
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
     [self addRow:slider height:28 to:s];
@@ -6197,6 +6207,13 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 // The per-app bead opacity slider.
 - (void)sliderChanged:(UISlider*)slider {
+    if(slider.tag==112) {
+        CGFloat bottomGap=round(Clamp(slider.value,0,80));
+        slider.value=bottomGap;
+        SetPref(@"adaptiveDockBottomGap",@(bottomGap));
+        FMLog(@"adaptive-dock-position",[NSString stringWithFormat:@"bottom-gap=%.0f",bottomGap]);
+        return;
+    }
     if(slider.tag!=12) return;
     SetPref([@"appAlpha." stringByAppendingString:GuestID()],@(slider.value));
     [self refreshOrbPreview];

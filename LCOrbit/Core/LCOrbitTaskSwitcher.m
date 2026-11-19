@@ -1,11 +1,19 @@
 #import "LCOrbitTaskSwitcher.h"
 #import "LCOrbitMultitask.h"
+#import "LCOrbitStorage.h"
 #import <objc/message.h>
 #import <QuartzCore/QuartzCore.h>
 #import <math.h>
 
 static id TaskObject(id object,SEL selector) {
     return [object respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(object,selector):nil;
+}
+// 0 means closest to the home-indicator safe area; larger values lift the Dock.
+// Read once when the overview opens instead of loading preferences during layout.
+static CGFloat TaskDockBottomGap(void) {
+    id stored=[[LCOrbitStorage preferences] objectForKey:@"LCFloatingMenu.adaptiveDockBottomGap"];
+    CGFloat gap=stored?[stored doubleValue]:4;
+    return isfinite(gap)?fmax(0,fmin(80,gap)):4;
 }
 static BOOL TaskUsesPiP(UIViewController *window) {
     id scene=TaskObject(window,NSSelectorFromString(@"appSceneVC"));
@@ -249,6 +257,7 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic,copy) void (^launchHandler)(NSDictionary *app);
 @property(nonatomic,copy) LCOrbitTaskDockIconProvider iconProvider;
 @property(nonatomic) CGFloat dockIconSize;
+@property(nonatomic) CGFloat dockBottomGap;
 @property(nonatomic) BOOL gridPresentation;
 @property(nonatomic) BOOL initialDockVisible;
 @property(nonatomic) NSUInteger cardsPerPage;
@@ -353,7 +362,10 @@ static UIWindow *OverviewWindow;
         LCOrbitTaskCard *card=[LCOrbitTaskCard new];card.owner=self;card.index=index;card.accessibilityIdentifier=[@"orbit.task.card." stringByAppendingString:token];card.isAccessibilityElement=YES;card.accessibilityTraits=UIAccessibilityTraitButton;card.accessibilityLabel=task[@"title"]?:@"App";[self.pages addSubview:card];[self.cards addObject:card];
         card.icon=[[UIImageView alloc] initWithImage:TaskIcon(task)?:[UIImage systemImageNamed:@"app.fill"]];card.icon.accessibilityIdentifier=[@"orbit.task.icon." stringByAppendingString:token];card.icon.contentMode=UIViewContentModeScaleAspectFit;card.icon.layer.cornerRadius=6;card.icon.clipsToBounds=YES;card.icon.tintColor=UIColor.whiteColor;[card addSubview:card.icon];
         card.name=[UILabel new];card.name.text=card.accessibilityLabel;card.name.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];card.name.textColor=UIColor.whiteColor;card.name.numberOfLines=1;card.name.lineBreakMode=NSLineBreakByTruncatingTail;card.name.accessibilityIdentifier=[@"orbit.task.name." stringByAppendingString:token];[card addSubview:card.name];
-        card.preview=[UIView new];card.preview.accessibilityIdentifier=[@"orbit.task.preview." stringByAppendingString:token];card.preview.backgroundColor=UIColor.clearColor;card.preview.clipsToBounds=YES;card.preview.layer.cornerRadius=28;card.preview.layer.cornerCurve=kCACornerCurveContinuous;card.preview.layer.borderWidth=.5;card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.25].CGColor;[card addSubview:card.preview];
+        card.preview=[UIView new];card.preview.accessibilityIdentifier=[@"orbit.task.preview." stringByAppendingString:token];card.preview.backgroundColor=UIColor.clearColor;card.preview.clipsToBounds=YES;card.preview.layer.cornerRadius=28;card.preview.layer.cornerCurve=kCACornerCurveContinuous;
+        // Live App previews are already rounded and shadowed; an extra transparent
+        // outline can draw across a neighboring card in the stacked switcher.
+        [card addSubview:card.preview];
         LCOrbitTaskPlacement *placement=nil;for(LCOrbitTaskPlacement *candidate in self.placements)if(candidate.controller==controller)placement=candidate;
         if(placement) {
             card.placement=placement;
@@ -362,6 +374,8 @@ static UIWindow *OverviewWindow;
             placement.view.userInteractionEnabled=NO;placement.view.accessibilityElementsHidden=YES;
         } else {
             card.preview.backgroundColor=[UIColor colorWithWhite:.18 alpha:1];
+            card.preview.layer.borderWidth=.5;
+            card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.25].CGColor;
             UIImageView *pip=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pip.fill"]];pip.contentMode=UIViewContentModeScaleAspectFit;pip.tintColor=UIColor.whiteColor;pip.tag=12;pip.accessibilityIdentifier=[@"orbit.task.pip." stringByAppendingString:token];[card.preview addSubview:pip];card.accessibilityHint=@"此 App 的画面保留在画中画中";
         }
         // The entire App-content rectangle belongs to task gestures, including
@@ -421,8 +435,10 @@ static UIWindow *OverviewWindow;
     UIEdgeInsets safe=self.view.safeAreaInsets;
     if(CGRectEqualToRect(bounds,self.laidOutBounds)&&UIEdgeInsetsEqualToEdgeInsets(safe,self.laidOutSafeInsets))return;self.laidOutBounds=bounds;self.laidOutSafeInsets=safe;
     CGFloat width=bounds.size.width,height=bounds.size.height;
-    CGFloat dockHeight=64;
-    CGFloat dockTop=height-safe.bottom-dockHeight-12;
+    // The old fixed 64pt Dock plus 12pt bottom and 20pt card spacing
+    // unnecessarily squeezed previews, especially in landscape.
+    CGFloat dockHeight=MIN(56,MAX(48,ceil(self.dockIconSize)+8));
+    CGFloat dockTop=MAX(safe.top+12,height-safe.bottom-dockHeight-self.dockBottomGap);
     if(self.dock) {
         CGFloat x=12,buttonWidth=MAX(44,self.dockIconSize);
         for(LCOrbitTaskDockButton *button in self.dockScroll.subviews) {
@@ -432,9 +448,17 @@ static UIWindow *OverviewWindow;
         }
         CGFloat dockContentWidth=x+2;
         CGFloat dockWidth=MIN(width-safe.left-safe.right-28,dockContentWidth);
-        self.dock.frame=CGRectMake((width-dockWidth)/2,dockTop,dockWidth,dockHeight);self.dockScroll.frame=self.dock.bounds;self.dockScroll.contentSize=CGSizeMake(dockContentWidth,dockHeight);
+        // The entrance animation initially translates the Dock by 32pt. Setting
+        // frame while transformed bakes that translation into its base position;
+        // clearing the transform then lifts the visible Dock above its target.
+        // bounds + center describe the untransformed geometry in both states.
+        self.dock.bounds=CGRectMake(0,0,dockWidth,dockHeight);
+        self.dock.center=CGPointMake(width*.5,dockTop+dockHeight*.5);
+        self.dockScroll.frame=self.dock.bounds;
+        self.dockScroll.contentSize=CGSizeMake(dockContentWidth,dockHeight);
     }
-    CGFloat cardBottom=self.dock?dockTop-20:height-safe.bottom-16;
+    // Reserve a visible 28pt gutter above the Dock, even in a dense deck.
+    CGFloat cardBottom=self.dock?dockTop-28:height-safe.bottom-16;
     CGFloat availableHeight=MAX(35,cardBottom-safe.top);
     self.emptyLabel.frame=CGRectMake(0,safe.top,width,availableHeight);
     NSUInteger columns=self.gridPresentation?(width>height?3:2):1;
@@ -458,6 +482,11 @@ static UIWindow *OverviewWindow;
         NSUInteger slot=index%self.cardsPerPage;
         CGFloat centerX=self.gridPresentation?gridInset+(slot%columns+.5)*cellWidth:deckCenterX;
         CGFloat centerY=safe.top+(self.gridPresentation?(slot/columns+.5)*cellHeight:availableHeight*.52);
+        // The preview begins 34pt below the card top, so its bottom is
+        // centerY + 17 + cardHeight/2. Account for the deck's 1.018x
+        // scale to keep even a non-focused card clear of the Dock.
+        CGFloat maxDeckScale=self.gridPresentation?1:1.018;
+        centerY=MIN(centerY,cardBottom-maxDeckScale*(17+cardHeight*.5));
         card.transform=CGAffineTransformIdentity;
         card.bounds=CGRectMake(0,0,cardWidth,cardHeight+34);
         card.center=CGPointMake(centerX+(index/self.cardsPerPage)*self.stride,centerY);
@@ -1029,6 +1058,7 @@ static UIWindow *OverviewWindow;
     controller.gridPresentation=[LCOrbitMultitask taskSwitcherPresentation]==1;
     controller.initialDockVisible=restoredDock;
     controller.dockIconSize=MIN(50,MAX(24,size));
+    controller.dockBottomGap=TaskDockBottomGap();
     controller.iconProvider=provider;
     for(NSUInteger index=0;index<tasks.count;index++)if([tasks[index][@"active"] boolValue]){controller.selectedIndex=index;break;}
     if(focusToken)for(NSUInteger index=0;index<tasks.count;index++)if([tasks[index][@"token"] isEqual:focusToken]){controller.selectedIndex=index;break;}
