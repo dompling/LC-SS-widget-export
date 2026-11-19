@@ -42,6 +42,9 @@
 - (void)toggle;
 - (void)completeDrawerMorphNow;
 - (void)buildPanel;
+- (void)scrubMeasure;
+- (NSInteger)scrubIndexAtLensY:(CGFloat)y;
+- (void)applyMorphProgress:(CGFloat)progress;
 - (void)morphFrame:(CADisplayLink *)link;
 - (void)morphDrawerOpen:(BOOL)open;
 - (void)refreshSystemAppearance;
@@ -713,7 +716,33 @@ static BOOL WaitForDrawerOpen(FMManager *menu) {
         [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.005]];
     return menu.isOpen;
 }
+static void CheckScrubCache(void) {
+    FMManager *menu=[FMManager new];
+    UIView *glass=[[UIView alloc] initWithFrame:CGRectMake(0,0,200,120)];
+    glass.tag=9230;
+    menu.panel=glass;
+    UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:glass.bounds];
+    [glass addSubview:scroll]; menu.appsScroll=scroll;
+    UIStackView *stack=[[NSClassFromString(@"FMAppRowsStack") alloc] initWithFrame:CGRectMake(0,0,200,300)];
+    stack.axis=UILayoutConstraintAxisVertical;
+    stack.distribution=UIStackViewDistributionFillEqually;
+    [scroll addSubview:stack]; scroll.contentSize=stack.bounds.size;
+    for(NSUInteger index=0;index<6;index++) [stack addArrangedSubview:[UIView new]];
+    [stack layoutIfNeeded];
+    [menu setValue:stack forKey:@"scrubStack"];
+    [menu setValue:stack.arrangedSubviews forKey:@"scrubRows"];
+    [menu scrubMeasure];
+    NSData *edges=[menu valueForKey:@"scrubEdges"];
+    Check(@"scrub-cache-initial-hit",[menu scrubIndexAtLensY:25]==0,nil);
+    scroll.contentOffset=CGPointMake(0,100);
+    [menu scrubMeasure];
+    Check(@"scrub-cache-scroll-reuses-edges-and-updates-hit",edges==[menu valueForKey:@"scrubEdges"] && [menu scrubIndexAtLensY:25]==2,nil);
+    stack.frame=CGRectMake(0,0,200,360);
+    [stack setNeedsLayout];[stack layoutIfNeeded];[menu scrubMeasure];
+    Check(@"scrub-cache-relayout-refreshes-edges",edges!=[menu valueForKey:@"scrubEdges"] && [menu scrubIndexAtLensY:15]==1,nil);
+}
 static void RunDropletReleaseTests(void) {
+    CheckScrubCache();
     WaterLifecycleChecksDone=NO;
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
     NSArray *keys=@[@"orbHandleStyle",@"orbDropletPull",@"popAnimation"];
@@ -778,6 +807,12 @@ static void RunDropletReleaseTests(void) {
         [capsule toggle];
         CAShapeLayer *mask=(CAShapeLayer *)[capsule.panel viewWithTag:9230].layer.mask;
         Check([@"capsule-tap-keeps-bead-morph-" stringByAppendingString:suffix],[[capsule valueForKey:@"morphActive"] boolValue] && !DrawerSlideActive(capsule) && mask.path && CGPathGetPathBoundingBox(mask.path).size.width<[capsule.panel viewWithTag:9230].bounds.size.width*.5,nil);
+        [capsule applyMorphProgress:1];
+        CFTimeInterval endpoint=[[capsule valueForKey:@"morphFrameAt"] doubleValue];
+        [capsule applyMorphProgress:1.06];
+        Check([@"overshoot-reuses-endpoint-outline-" stringByAppendingString:suffix],
+              endpoint==[[capsule valueForKey:@"morphFrameAt"] doubleValue] &&
+              [[capsule valueForKey:@"morphProgress"] doubleValue]>1,nil);
         [capsule completeDrawerMorphNow];[capsule toggle];[capsule completeDrawerMorphNow];
     }
     // Neither a short pull nor a cancellation should leak the prepared water drawer.

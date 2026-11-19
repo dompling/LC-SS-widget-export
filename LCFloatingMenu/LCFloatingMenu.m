@@ -1072,8 +1072,13 @@ static CGFloat FMSpringDamping(CGFloat response,CGFloat fraction) {
 // Long-press scrub, after the wloc dock. The row under the finger, given every
 // row's top and bottom in order; between rows the current one stays.
 static NSInteger FMScrubIndexAtY(CGFloat y,const CGFloat *tops,const CGFloat *bottoms,NSUInteger count,NSInteger current) {
-    for(NSUInteger index=0;index<count;index++)
-        if(y>=tops[index] && y<bottoms[index]) return (NSInteger)index;
+    NSUInteger low=0,high=count;
+    while(low<high) {
+        NSUInteger mid=low+(high-low)/2;
+        if(bottoms[mid]<=y) low=mid+1;
+        else high=mid;
+    }
+    if(low<count && y>=tops[low]) return (NSInteger)low;
     return current;
 }
 // The lens follows the finger but stays between the first and last row centers.
@@ -1097,6 +1102,26 @@ static CGFloat FMScrubScrollSpeed(CGFloat y,CGFloat top,CGFloat bottom,CGFloat s
     return fastest*(below-above);
 }
 // FMDrawerMotion:end
+// The drawer and settings preview apply the same outline in a disabled-actions transaction.
+static void FMSetDrawerOutline(UIView *glass,CALayer *shadow,UIBezierPath *outline) {
+    CAShapeLayer *clip=(CAShapeLayer *)glass.layer.mask;
+    if([clip isKindOfClass:CAShapeLayer.class]) clip.path=outline.CGPath;
+    for(CALayer *layer in glass.layer.sublayers)
+        if([layer isKindOfClass:CAShapeLayer.class] && [layer.name isEqualToString:@"fm.panel.rim"])
+            ((CAShapeLayer *)layer).path=outline.CGPath;
+    shadow.shadowPath=outline.CGPath;
+}
+
+@interface FMAppRowsStack : UIStackView
+@property(nonatomic,readonly) NSUInteger layoutGeneration;
+@end
+@implementation FMAppRowsStack
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    _layoutGeneration++;
+}
+@end
+
 static BOOL FMClearGlassEnabled(void) {
     if(@available(iOS 26.0,*)) return BoolPref(@"clearGlass",NO);
     return NO;
@@ -2158,7 +2183,7 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     // Outline rate limiting: when the last exact outline was made, the progress it was made
     // at, how much overshoot the transform already carries, and the tick itself.
     CFTimeInterval _morphFrameAt,_morphFrameTick;
-    CGFloat _morphShownT,_morphShownStretch;
+    CGFloat _morphShownT;
     CGFloat _morphBeadAlpha,_morphShadow,_morphElapsed,_panelDragStart;
     CGFloat _morphScale,_morphOmega,_morphZeta;
     CFTimeInterval _morphTick;
@@ -2170,7 +2195,9 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     UIView *_scrubLens,*_scrubLabel;
     NSArray<UIView *> *_scrubRows;
     NSArray<UIControl *> *_scrubControls;
-    NSArray<NSValue *> *_scrubFrames;
+    NSData *_scrubEdges; // Sorted row tops, followed by row bottoms, in stack coordinates.
+    __weak FMAppRowsStack *_scrubStack;
+    NSUInteger _scrubLayoutGeneration;
     CGRect _scrubViewport;
     CGFloat _scrubFirstMid,_scrubLastMid,_scrubHalf,_scrubStartY;
     CGPoint _scrubPoint;
@@ -3189,8 +3216,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     _morphCommitHaptic=NO;
     _morphBeadAlpha=self.orbUpdateAvailable?1:(self.orbNormalAlpha?:.72);
     _morphFrameAt=0;
-    _morphShownT=0;
-    _morphShownStretch=0;
+    _morphShownT=-1;
     // One outline rebuild per display frame is all a drag can show; faster input than the
     // screen would only be thrown away.
     CGFloat maximum=UIScreen.mainScreen.maximumFramesPerSecond;
@@ -3212,9 +3238,10 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     // rated at the display rate: an interior frame keeps the outline it already has and only
     // moves it, the first frame and the last one are always exact.
     BOOL ends=(t<=0||t>=1),fresh=NO;
-    if(ends || !clip.path || (_morphShownT<=1e-4 && t>0)) {
+    BOOL changed=t!=_morphShownT || !clip.path;
+    if(changed && (ends || !clip.path || _morphShownT<=1e-4)) {
         fresh=YES;
-    } else if(CACurrentMediaTime()-_morphFrameAt>=_morphFrameTick) {
+    } else if(changed && CACurrentMediaTime()-_morphFrameAt>=_morphFrameTick) {
         fresh=YES;
     }
     if(fresh) {
@@ -3224,20 +3251,15 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
             FMDrawerMorphPath(glass.bounds,_morphBead,_morphDroplet,_morphDrawer,self.left,_morphCompact,t);
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
-        clip.path=outline.CGPath;
-        for(CALayer *layer in glass.layer.sublayers)
-            if([layer.name isEqualToString:@"fm.panel.rim"] && [layer isKindOfClass:CAShapeLayer.class])
-                ((CAShapeLayer *)layer).path=outline.CGPath;
-        panel.layer.shadowPath=outline.CGPath;
+        FMSetDrawerOutline(glass,panel.layer,outline);
         [CATransaction commit];
         // The outline matches this progress exactly, so the transform only carries overshoot.
         _morphShownT=t;
-        _morphShownStretch=0;
     }
     // A frame that was skipped is caught up by scaling the drawer the last exact frame was
     // measured for. Between those two the shapes differ by a few points, which reads as the
     // same shape moving rather than as a jump.
-    CGFloat along=_morphShownT>1e-4?t/_morphShownT:1,owed=stretch-_morphShownStretch;
+    CGFloat along=_morphShownT>1e-4?t/_morphShownT:1,owed=stretch;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     // Stretch about the docking wall: scaling about the center moves the wall
@@ -3583,7 +3605,9 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
 }
 // point is in the scroll view's own coordinates.
 - (NSUInteger)scrubRowIndexAtPoint:(CGPoint)point {
-    NSArray<UIView *> *rows=[self scrubRowsWithControls:nil];
+    return [self scrubRowIndexAtPoint:point rows:[self scrubRowsWithControls:nil]];
+}
+- (NSUInteger)scrubRowIndexAtPoint:(CGPoint)point rows:(NSArray<UIView *> *)rows {
     for(NSUInteger index=0;index<rows.count;index++)
         if(CGRectContainsPoint([rows[index] convertRect:rows[index].bounds toView:self.appsScroll],point)) return index;
     return NSNotFound;
@@ -3643,9 +3667,12 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     _scrubLabel=holder;
 }
 // The app under the lens grows; the one it left settles back.
-- (void)scrubFocus:(NSInteger)index {
+- (void)scrubFocus:(NSInteger)index previous:(NSInteger)previous {
     BOOL calm=UIAccessibilityIsReduceMotionEnabled();
-    for(NSUInteger row=0;row<_scrubRows.count;row++) {
+    NSInteger affected[]={previous,index};
+    for(NSUInteger i=0;i<2;i++) {
+        NSInteger row=affected[i];
+        if(row<0 || row>=(NSInteger)_scrubRows.count) continue;
         UIView *icon=[_scrubRows[row] viewWithTag:9233];
         CGAffineTransform want=(NSInteger)row==index?CGAffineTransformMakeScale(1.16,1.16):CGAffineTransformIdentity;
         if(!icon || CGAffineTransformEqualToTransform(icon.transform,want)) continue;
@@ -3660,10 +3687,12 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     UIView *glass=[self.panel viewWithTag:9230],*content=FMGlassContent(glass);
     NSArray<UIControl *> *controls=nil;
     NSArray<UIView *> *rows=[self scrubRowsWithControls:&controls];
-    NSUInteger found=[self scrubRowIndexAtPoint:[g locationInView:self.appsScroll]];
+    NSUInteger found=[self scrubRowIndexAtPoint:[g locationInView:self.appsScroll] rows:rows];
     if(!glass || content==glass || found==NSNotFound || !self.isOpen || _morphActive) return;
     [glass layoutIfNeeded];
     _scrubRows=rows;_scrubControls=controls;
+    _scrubStack=(FMAppRowsStack *)rows[found].superview;
+    _scrubEdges=nil;
     _scrubViewport=[self.appsScroll convertRect:self.appsScroll.bounds toView:glass];
     _scrubIndex=(NSInteger)found;
     _scrubCancelling=NO;_scrubActive=YES;
@@ -3688,43 +3717,61 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
             options:UIViewAnimationOptionAllowUserInteraction
             animations:^{ lens.alpha=1;lens.transform=CGAffineTransformIdentity; } completion:nil];
     }
-    [self scrubFocus:_scrubIndex];
+    [self scrubFocus:_scrubIndex previous:-1];
     if(BoolPref(@"haptic",YES)) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurredWithIntensity:.9];
         _scrubTick=[UISelectionFeedbackGenerator new];
         [_scrubTick prepare];
     }
 }
-// Where every row is now, and how far the lens may travel: between the centres of the
-// first and last row in view. A long list scrolls under a sliding finger, so this is
-// measured again each time.
+// Scroll offsets change the viewport, while row edges stay in stack coordinates.
 - (void)scrubMeasure {
+    FMAppRowsStack *stack=_scrubStack;
     UIView *glass=[self.panel viewWithTag:9230];
-    NSMutableArray<NSValue *> *frames=[NSMutableArray array];
-    CGFloat first=CGFLOAT_MAX,last=-CGFLOAT_MAX;
-    for(UIView *row in _scrubRows) {
-        CGRect frame=[row convertRect:row.bounds toView:glass];
-        [frames addObject:[NSValue valueWithCGRect:frame]];
-        if(!CGRectIntersectsRect(frame,_scrubViewport)) continue;
-        first=MIN(first,CGRectGetMidY(frame));
-        last=MAX(last,CGRectGetMidY(frame));
+    NSUInteger count=_scrubRows.count;
+    if(!stack || !glass || !count) return;
+    if(!_scrubEdges || stack.layoutGeneration!=_scrubLayoutGeneration) {
+        NSMutableData *edges=[NSMutableData dataWithLength:2*count*sizeof(CGFloat)];
+        CGFloat *values=edges.mutableBytes;
+        for(NSUInteger i=0;i<count;i++) {
+            CGRect frame=_scrubRows[i].frame;
+            values[i]=CGRectGetMinY(frame);
+            values[count+i]=CGRectGetMaxY(frame);
+        }
+        _scrubEdges=edges;
+        _scrubLayoutGeneration=stack.layoutGeneration;
     }
-    _scrubFrames=frames;
-    _scrubFirstMid=MAX(CGRectGetMinY(_scrubViewport)+_scrubHalf,first);
-    _scrubLastMid=MIN(CGRectGetMaxY(_scrubViewport)-_scrubHalf,last);
+    UIScrollView *scroll=self.appsScroll;
+    _scrubViewport=[scroll convertRect:scroll.bounds toView:glass];
+    CGRect visible=[scroll convertRect:scroll.bounds toView:stack];
+    const CGFloat *tops=_scrubEdges.bytes,*bottoms=tops+count;
+    NSUInteger low=0,high=count;
+    while(low<high) {
+        NSUInteger mid=low+(high-low)/2;
+        if(bottoms[mid]<=CGRectGetMinY(visible)) low=mid+1; else high=mid;
+    }
+    NSUInteger first=low;
+    high=count;
+    while(low<high) {
+        NSUInteger mid=low+(high-low)/2;
+        if(tops[mid]<CGRectGetMaxY(visible)) low=mid+1; else high=mid;
+    }
+    _scrubFirstMid=CGRectGetMinY(_scrubViewport)+_scrubHalf;
+    _scrubLastMid=CGRectGetMaxY(_scrubViewport)-_scrubHalf;
+    if(first<low) {
+        NSUInteger last=low-1;
+        CGPoint a=[stack convertPoint:CGPointMake(0,(tops[first]+bottoms[first])*.5) toView:glass];
+        CGPoint b=[stack convertPoint:CGPointMake(0,(tops[last]+bottoms[last])*.5) toView:glass];
+        _scrubFirstMid=MAX(_scrubFirstMid,a.y);
+        _scrubLastMid=MIN(_scrubLastMid,b.y);
+    }
 }
-// The row under y (the lens centre), among the rows in view only: a row scrolled out of
-// sight has a frame over the header or footer, and must not be picked from there.
 - (NSInteger)scrubIndexAtLensY:(CGFloat)y {
-    NSUInteger count=_scrubFrames.count;
-    CGFloat tops[count+1],bottoms[count+1];
-    for(NSUInteger index=0;index<count;index++) {
-        CGRect frame=_scrubFrames[index].CGRectValue;
-        BOOL visible=CGRectIntersectsRect(frame,_scrubViewport);
-        tops[index]=visible?CGRectGetMinY(frame):CGFLOAT_MAX;
-        bottoms[index]=visible?CGRectGetMaxY(frame):-CGFLOAT_MAX;
-    }
-    return FMScrubIndexAtY(y,tops,bottoms,count,_scrubIndex);
+    if(!_scrubEdges || !_scrubStack || y<CGRectGetMinY(_scrubViewport) || y>=CGRectGetMaxY(_scrubViewport)) return _scrubIndex;
+    UIView *glass=[self.panel viewWithTag:9230];
+    CGFloat local=[_scrubStack convertPoint:CGPointMake(0,y) fromView:glass].y;
+    const CGFloat *tops=_scrubEdges.bytes;
+    return FMScrubIndexAtY(local,tops,tops+_scrubRows.count,_scrubRows.count,_scrubIndex);
 }
 // Puts the focus and the lens where the finger is, and on whichever row is now under the
 // lens when the list has moved beneath a finger that stayed put.
@@ -3736,13 +3783,14 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     CGFloat lensY=FMScrubLensCenter(point.y,_scrubFirstMid,_scrubLastMid);
     NSInteger index=[self scrubIndexAtLensY:lensY];
     BOOL outside=FMScrubIsOutside(point.x,CGRectGetWidth(glass.bounds));
-    BOOL moved=index!=_scrubIndex,flipped=outside!=_scrubCancelling;
+    NSInteger previous=_scrubIndex;
+    BOOL moved=index!=previous,flipped=outside!=_scrubCancelling;
     _scrubIndex=index;
     _scrubCancelling=outside;
     if(moved) {
         [_scrubTick selectionChanged];
         [_scrubTick prepare];
-        [self scrubFocus:index];
+        [self scrubFocus:index previous:previous];
     } else if(flipped) [self updateScrubLabel];
     // The lens follows the finger on a short spring; leaving the drawer shrinks and dims it.
     UIView *lens=_scrubLens;
@@ -3817,7 +3865,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     UIView *lens=_scrubLens,*label=_scrubLabel;
     NSArray<UIView *> *rows=_scrubRows;
     _scrubActive=NO;_scrubCancelling=NO;
-    _scrubLens=nil;_scrubLabel=nil;_scrubRows=nil;_scrubControls=nil;_scrubFrames=nil;_scrubTick=nil;
+    _scrubLens=nil;_scrubLabel=nil;_scrubRows=nil;_scrubControls=nil;_scrubEdges=nil;_scrubStack=nil;_scrubTick=nil;
     [_scrubLink invalidate];
     _scrubLink=nil;
     void (^settle)(void)=^{
@@ -4114,8 +4162,9 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     [container addSubview:close];
     return container;
 }
-- (UIStackView *)stack {
-    UIStackView *s=[UIStackView new]; s.axis=UILayoutConstraintAxisVertical;
+- (UIStackView *)stack { return [self stackOfClass:UIStackView.class]; }
+- (UIStackView *)stackOfClass:(Class)stackClass {
+    UIStackView *s=[stackClass new]; s.axis=UILayoutConstraintAxisVertical;
     s.spacing=9; s.alignment=UIStackViewAlignmentFill; s.distribution=UIStackViewDistributionFill;
     s.translatesAutoresizingMaskIntoConstraints=NO;
     return s;
@@ -4263,7 +4312,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
         scroll.clipsToBounds=YES;
         [self buildAppFooter:glass];
     }
-    UIStackView *stack=[self stack];
+    UIStackView *stack=small?[self stackOfClass:FMAppRowsStack.class]:[self stack];
     stack.spacing=small?(compact?3:4):10;
     [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
@@ -7703,7 +7752,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     NSUInteger _slideGeneration;
     CGFloat _pw,_ph,_actual,_fit,_closedHeight,_openHeight,_beadW,_beadH,_shadow,_builtWidth,_listTop,_headroom;
     CGFloat _idleAlpha,_fadedAlpha;
-    CGFloat _progress,_velocity,_omega,_zeta;
+    CGFloat _progress,_velocity,_omega,_zeta,_outlineProgress;
     CFTimeInterval _tick,_elapsed,_builtAt;
     CADisplayLink *_link;
     NSTimer *_fadeTimer;
@@ -8013,6 +8062,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     _bead=[manager orbPreviewWithFrame:CGRectMake(0,0,_beadW,_beadH) left:_left];
     [_scene addSubview:_bead];
     CGFloat shift=0;
+    _outlineProgress=-1;
     _placed=FMPlaceHandles(FMOrbHandleMetrics(YES),FMOrbHandleMetrics(NO),FMOrbHandleIsCapsule(),1/_actual,_pw,_ph,
                            _ph*.5,&_beadParams,&_dropletParams,&shift);
     _drawerParams=FMDrawerNotchParams(_pw,_ph,_compact);
@@ -8048,17 +8098,16 @@ static UIView *FMDockCard(UIStackView *rows) {
     [self syncHeight];
     if(!_glass) return;
     CGFloat raw=MAX(progress,0),t=MIN(raw,1);
-    __attribute__((objc_precise_lifetime)) UIBezierPath *outline=_placed?
-        FMDrawerMorphPath(_glass.bounds,_beadParams,_dropletParams,_drawerParams,_left,_compact,t):
-        FMSideNotchPath(_glass.bounds,_left,_compact,NO);
-    CAShapeLayer *clip=(CAShapeLayer *)_glass.layer.mask;
+    CGFloat outlineProgress=_placed?t:0;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    if([clip isKindOfClass:CAShapeLayer.class]) clip.path=outline.CGPath;
-    for(CALayer *layer in _glass.layer.sublayers)
-        if([layer.name isEqualToString:@"fm.panel.rim"] && [layer isKindOfClass:CAShapeLayer.class])
-            ((CAShapeLayer *)layer).path=outline.CGPath;
-    _drawer.layer.shadowPath=outline.CGPath;
+    if(_outlineProgress!=outlineProgress) {
+        UIBezierPath *outline=_placed?
+            FMDrawerMorphPath(_glass.bounds,_beadParams,_dropletParams,_drawerParams,_left,_compact,t):
+            FMSideNotchPath(_glass.bounds,_left,_compact,NO);
+        FMSetDrawerOutline(_glass,_drawer.layer,outline);
+        _outlineProgress=outlineProgress;
+    }
     _drawer.layer.shadowOpacity=_shadow*FMSmooth(t/.5);
     [CATransaction commit];
     BOOL reveal=_revealed?t>=.42:t>=.5,flipped=reveal!=_revealed,still=UIAccessibilityIsReduceMotionEnabled();
