@@ -154,7 +154,12 @@ checks = {
         "fabs(actual.top+missing-targetInset)>3" in diag and
         'actual.top>=0 && actual.top<=70' in diag and
         'missing>68' in diag and
-        'pipixia-list-v2' in diag and
+        'pipixia-list-v3' in diag and
+        'guest-uikit-baidu-list-inset-reconciled' in diag and
+        'fabs(current.top-target-menuHeight)<=2' in diag and
+        'saved.originalTop=menuHeight' in diag and
+        'saved.addedTop=target-menuHeight' in diag and
+        'fabs(offset.y+current.top)<=2' in diag and
         'guest-uikit-baidu-list-probe' in diag and
         'GuestBaiduListProbe' in diag and
         "scroll.contentSize.height<scroll.bounds.size.height*1.05" in diag and
