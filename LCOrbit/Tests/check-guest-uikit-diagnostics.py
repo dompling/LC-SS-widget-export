@@ -143,6 +143,28 @@ checks = {
         'fabs(scroll.contentOffset.y+scroll.adjustedContentInset.top)>1' in diag and
         'GuestInstagramNoScrollReported=NO' in diag and
         'GuestSafeAreaRepairTick();' in diag,
+    "Pipixia fixes only measured foreground vertical list overlap":
+        "GuestRepairBaiduListScroll" in diag and
+        "GuestBaiduForegroundList" in diag and
+        "BDSVerticalUICollectionView" in diag and
+        'BDSMixedListContainerV3ViewController' in diag and
+        "firstCellBefore" in diag and
+        "firstCellAfter" in diag and
+        "guest-uikit-baidu-list-inset-corrected" in diag and
+        "fabs(missing-listSafeTop)>3" in diag and
+        "scroll.contentSize.height<scroll.bounds.size.height*1.05" in diag and
+        "changed.top+=missing" in diag and
+        "offset.y-missing" in diag,
+    "Pipixia never edits the -769pt pager or changes geometry globally":
+        'BDSIMMPageScrollView' in diag and
+        'BDSVerticalUICollectionView' in diag and
+        "scroll.dragging || scroll.tracking || scroll.decelerating" in diag and
+        "GuestRestoreBaiduListInset" in diag and
+        "saved.originalTop=actual.top" in diag and
+        "offset.y+saved.addedTop" in diag and
+        "GuestRepairBaiduListScroll(window,root,top)" in diag and
+        "GuestRepairBaiduListScroll(strongWindow,root,top)" in diag and
+        "setFrame:" not in diag,
     "Pipixia diagnoses selected list content, scroll insets and custom header":
         "GuestBaiduPageScrolls" in diag and
         "GuestBaiduPageGeometry" in diag and
