@@ -5,7 +5,7 @@
 @end
 @implementation UIViewController @end
 static UIViewController *SceneController(UIViewController *window) { return window; }
-static char GeometryLogKey;
+static char GeometryLogKey,UIKitSyncSignatureKey;
 static NSMutableDictionary *Preferences;
 static NSUInteger Refreshes, ModeSyncs;
 static NSDictionary *LastEvent;
@@ -83,7 +83,12 @@ int main(void) {
             "unconfigured guest uses default full-window policy");
         EXPECT([LCOrbitMultitask topInsetModeForBundle:@"A.app"]==2,
             "legacy compatibility switch remains physical-avoidance mode");
+        objc_setAssociatedObject(a,&UIKitSyncSignatureKey,@"previous",OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(b,&UIKitSyncSignatureKey,@"other",OBJC_ASSOCIATION_COPY_NONATOMIC);
         [LCOrbitMultitask setTopInsetMode:1 forBundle:@"A.app"];
+        EXPECT(!objc_getAssociatedObject(a,&UIKitSyncSignatureKey) &&
+               [objc_getAssociatedObject(b,&UIKitSyncSignatureKey) isEqual:@"other"],
+            "UIKit mode change resets only the selected Guest's scene sync cache");
         EXPECT([LCOrbitMultitask topInsetModeForBundle:@"A.app"]==1,
             "UIKit mode is an independent third policy");
         EXPECT(GuestOwnsTopInset(@"A.app") && UIKitTopInsetEnhanced(@"A.app"),

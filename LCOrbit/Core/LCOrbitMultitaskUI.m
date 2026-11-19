@@ -74,6 +74,7 @@ BOOL OrbitMethodMatches(Class cls, NSString *name, const char *result, NSArray<N
 @end
 
 static char SnapshotKey, ConstraintsKey, HostingPlacementKey, GeometryLogKey, ViewportReadyKey;
+static char UIKitSyncSignatureKey, UIKitSyncPendingKey;
 static Class WindowClass, DockClass;
 static IMP OriginalInit, OriginalSetup, OriginalVertical, OriginalFrame;
 static IMP OriginalSafeArea, OriginalSettings, OriginalExit, OriginalInitialized;
@@ -391,6 +392,22 @@ static void RecordGeometry(NSString *stage,UIViewController *window,id settings)
         details[@"statusBarHeight"]=@([(id)settings statusBarHeight]);
     if(OrbitMethodMatches(cls,@"statusBarAvoidanceFrame",@encode(CGRect),@[]))
         details[@"statusBarAvoidanceFrame"]=NSStringFromCGRect([(id)settings statusBarAvoidanceFrame]);
+    // Compare the desired mutable transaction with the FBScene's last exposed
+    // settings. On the iOS 18+ hosting path these are not necessarily the same.
+    id presenter=[(id)scene presenter];
+    id remote=[presenter respondsToSelector:@selector(scene)]?[presenter scene]:nil;
+    id committed=[remote respondsToSelector:NSSelectorFromString(@"settings")]?
+        ((id(*)(id,SEL))objc_msgSend)(remote,NSSelectorFromString(@"settings")):nil;
+    Class committedClass=object_getClass(committed);
+    if(committed) {
+        details[@"remoteSettingsClass"]=NSStringFromClass(committedClass);
+        if(OrbitMethodMatches(committedClass,@"frame",@encode(CGRect),@[]))
+            details[@"remoteFrame"]=NSStringFromCGRect([(id)committed frame]);
+        for(NSString *name in @[@"peripheryInsets",@"safeAreaInsetsPortrait",@"safeAreaEdgeInsets"])
+            if(OrbitMethodMatches(committedClass,name,@encode(UIEdgeInsets),@[]))
+                details[ [@"remote." stringByAppendingString:name] ]=
+                    NSStringFromUIEdgeInsets(((UIEdgeInsets(*)(id,SEL))objc_msgSend)(committed,NSSelectorFromString(name)));
+    }
     [LCOrbitLog appendEvent:@"multitask-geometry-v2" details:details kind:@"runtime"];
 }
 static void ApplyGeometry(UIViewController *window,id settings,CGRect frame,UIInterfaceOrientation orientation,UIEdgeInsets insets) {
@@ -483,6 +500,22 @@ static void LayoutFullscreen(UIViewController *window) {
         objc_setAssociatedObject(window,&ConstraintsKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
+static NSString *UIKitGeometrySignature(UIViewController *window) {
+    if(!NSThread.isMainThread || !Fullscreen() || OrbitPiPProtectedWindow(window)) return nil;
+    UIViewController *scene=SceneController(window);
+    if(!UIKitTopInsetEnhanced([(id)scene bundleId]) ||
+       ![objc_getAssociatedObject(window,&ViewportReadyKey) boolValue]) return nil;
+    UIWindow *host=window.view.window ?: window.parentViewController.view.window;
+    if(!host || window.view.hidden || !window.view.window) return nil;
+    CGRect frame;UIInterfaceOrientation orientation;UIEdgeInsets insets;
+    if(!FullscreenGeometry(window,&frame,&orientation,&insets)) return nil;
+    UIStatusBarManager *bar=host.windowScene.statusBarManager;
+    // Include status-bar geometry because UIKit may resolve it independently
+    // from the ordinary safeAreaInsets callback.
+    return [NSString stringWithFormat:@"host=%p frame=%@ orientation=%ld insets=%@ status=%@ hidden=%d",
+        host,NSStringFromCGRect(frame),(long)orientation,NSStringFromUIEdgeInsets(insets),
+        NSStringFromCGRect(bar?bar.statusBarFrame:CGRectZero),bar?bar.statusBarHidden:YES];
+}
 static void UpdateScene(UIViewController *window,id baseSettings) {
     if(!NSThread.isMainThread || OrbitPiPProtectedWindow(window)) return;
     LayoutFullscreen(window);
@@ -492,6 +525,12 @@ static void UpdateScene(UIViewController *window,id baseSettings) {
     RecordGeometry(@"layout",window,nil);
     UIViewController *scene=SceneController(window);
     if(!scene) return;
+    // Remember only the resolved UIKit experiment geometry. A later host safe
+    // area change can then be resent once without spinning on layout callbacks.
+    if(UIKitTopInsetEnhanced([(id)scene bundleId]) &&
+       [objc_getAssociatedObject(window,&ViewportReadyKey) boolValue])
+        objc_setAssociatedObject(window,&UIKitSyncSignatureKey,
+            UIKitGeometrySignature(window),OBJC_ASSOCIATION_COPY_NONATOMIC);
     __weak UIViewController *weakWindow=window;
     [(id)scene updateSettingsWithBlock:^(id settings) {
         UIViewController *strongWindow=weakWindow;
@@ -506,6 +545,40 @@ static void UpdateScene(UIViewController *window,id baseSettings) {
         [settings setForeground:YES];
         ApplyGeometry(strongWindow,settings,frame,orientation,insets);
     }];
+}
+// A one-way, per-App experiment: only resend after the resolved host geometry
+// actually changes. Never move the physical Guest window or synthesize insets.
+static void UIKitResyncIfChanged(UIViewController *window,NSString *trigger) {
+    NSString *signature=UIKitGeometrySignature(window);
+    if(!signature) return;
+    NSString *previous=objc_getAssociatedObject(window,&UIKitSyncSignatureKey);
+    if([previous isEqualToString:signature]) return;
+    UIViewController *scene=SceneController(window);
+    [LCOrbitLog appendEvent:@"uikit-host-safe-area-change"
+        details:@{@"guestBundle":[(id)scene bundleId]?:@"unknown",
+                  @"trigger":trigger?:@"unknown",@"previous":previous?:@"none",
+                  @"resolved":signature} kind:@"runtime"];
+    RecordGeometry(@"uikit-before-resync",window,nil);
+    // UpdateScene caches the new signature before touching the FBScene. If the
+    // remote update itself causes another UIKit layout pass it cannot loop.
+    UpdateScene(window,nil);
+    RecordGeometry(@"uikit-after-resync",window,nil);
+}
+static void UIKitScheduleGeometryProbe(UIViewController *window,NSTimeInterval delay,NSString *trigger) {
+    if(!NSThread.isMainThread || !Fullscreen() || OrbitPiPProtectedWindow(window) ||
+       !UIKitTopInsetEnhanced([(id)SceneController(window) bundleId])) return;
+    if(delay<=0 && objc_getAssociatedObject(window,&UIKitSyncPendingKey)) return;
+    if(delay<=0) objc_setAssociatedObject(window,&UIKitSyncPendingKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIViewController *weakWindow=window;
+    void (^probe)(void)=^{
+        UIViewController *strongWindow=weakWindow;
+        if(!strongWindow) return;
+        if(delay<=0) objc_setAssociatedObject(strongWindow,&UIKitSyncPendingKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIKitResyncIfChanged(strongWindow,trigger);
+    };
+    if(delay<=0) dispatch_async(dispatch_get_main_queue(),probe);
+    else dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(delay*NSEC_PER_SEC)),
+                        dispatch_get_main_queue(),probe);
 }
 static void SceneSettings(id scene,SEL selector,void (^block)(id)) {
     UIViewController *window=[scene delegate];
@@ -586,6 +659,12 @@ static void PresenterReady(id scene,SEL selector) {
         RecordGeometry(@"presenter-mounted",window,nil);
         [window.view layoutIfNeeded];
         UpdateScene(window,nil);
+        // On iOS 27 the host UIWindow may resolve its Dynamic Island safe
+        // area after FBScene's first configure/activation transaction. Only
+        // the explicit per-App UIKit experiment runs these bounded checks.
+        UIKitScheduleGeometryProbe(window,.2,@"presenter+0.2s");
+        UIKitScheduleGeometryProbe(window,.8,@"presenter+0.8s");
+        UIKitScheduleGeometryProbe(window,2.0,@"presenter+2.0s");
     }
     Class automatic=NSClassFromString(@"LCOrbitAutomaticPiP");
     SEL refresh=NSSelectorFromString(@"refresh");
@@ -597,6 +676,8 @@ static void RestoreAppearance(UIViewController *window) {
     NSDictionary *snapshot=objc_getAssociatedObject(window,&SnapshotKey);
     if(!snapshot) return;
     objc_setAssociatedObject(window,&ViewportReadyKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window,&UIKitSyncSignatureKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window,&UIKitSyncPendingKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     PositionHostingView(window,NO);
     [NSLayoutConstraint deactivateConstraints:[(id)window activatedVerticalConstraints]?:@[]];
     [(id)window setActivatedVerticalConstraints:@[]];
@@ -691,7 +772,11 @@ static void Settings(UIViewController *window,SEL selector,id scene,id settings,
 }
 static void Layout(UIViewController *window,SEL selector) {
     ((void(*)(id,SEL))OriginalLayout)(window,selector);
-    if(Fullscreen()) LayoutFullscreen(window);
+    if(Fullscreen()) {
+        LayoutFullscreen(window);
+        // Never push FBScene settings synchronously from UIKit's layout pass.
+        UIKitScheduleGeometryProbe(window,0,@"host-layout");
+    }
 }
 static void Exited(UIViewController *window,SEL selector,id scene) {
     if([LCOrbitTaskSwitcher isPresentingWindow:window]) [LCOrbitTaskSwitcher dismiss];
@@ -875,8 +960,10 @@ static void PiPStarting(id manager,SEL selector,id controller) {
                       forKey:[@"uikitTopInset." stringByAppendingString:bundle]
                       module:@"LCFloatingMenu"];
     for(UIViewController *window in [self windows])
-        if([[(id)SceneController(window) bundleId] isEqual:bundle])
+        if([[(id)SceneController(window) bundleId] isEqual:bundle]) {
             objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(window,&UIKitSyncSignatureKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
     [LCOrbitGuestUIKitDiagnostics synchronizeUIKitModesToGuests];
     [LCOrbitLog appendEvent:@"guest-top-inset-mode"
                    details:@{@"guestBundle":bundle,@"mode":@(mode),
@@ -890,8 +977,10 @@ static void PiPStarting(id manager,SEL selector,id controller) {
     if(!bundle.length) return;
     [LCOrbitStorage setObject:@(enabled) forKey:[@"guestOwnTopInset." stringByAppendingString:bundle] module:@"LCFloatingMenu"];
     for(UIViewController *window in [self windows])
-        if([[(id)SceneController(window) bundleId] isEqual:bundle])
+        if([[(id)SceneController(window) bundleId] isEqual:bundle]) {
             objc_setAssociatedObject(window,&GeometryLogKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(window,&UIKitSyncSignatureKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
     [LCOrbitGuestUIKitDiagnostics synchronizeUIKitModesToGuests];
     [LCOrbitLog appendEvent:@"guest-top-inset-mode" details:@{@"guestBundle":bundle,@"physicalTopAvoidanceEnabled":@(enabled),@"appOwnsTopInset":@(GuestOwnsTopInset(bundle))} kind:@"runtime"];
     [self refreshPresentation];

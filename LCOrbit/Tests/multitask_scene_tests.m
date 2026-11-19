@@ -11,6 +11,14 @@ enum { UIInterfaceOrientationUnknown=0, UIInterfaceOrientationPortrait=1,
 static BOOL UIInterfaceOrientationIsLandscape(NSInteger value) { return value==3 || value==4; }
 typedef struct { CGFloat top,left,bottom,right; } UIEdgeInsets;
 static UIEdgeInsets UIEdgeInsetsMake(CGFloat top,CGFloat left,CGFloat bottom,CGFloat right) { return (UIEdgeInsets){top,left,bottom,right}; }
+static NSString *NSStringFromCGRect(CGRect frame) {
+    return [NSString stringWithFormat:@"{{%.3f,%.3f},{%.3f,%.3f}}",
+        frame.origin.x,frame.origin.y,frame.size.width,frame.size.height];
+}
+static NSString *NSStringFromUIEdgeInsets(UIEdgeInsets insets) {
+    return [NSString stringWithFormat:@"{%.3f,%.3f,%.3f,%.3f}",
+        insets.top,insets.left,insets.bottom,insets.right];
+}
 @interface OrbitStatusBarManager : NSObject
 @property CGRect statusBarFrame;
 @property BOOL statusBarHidden;
@@ -153,8 +161,16 @@ static UIEdgeInsets UIEdgeInsetsMake(CGFloat top,CGFloat left,CGFloat bottom,CGF
 + (instancetype)currentDevice { return [self new]; }
 @end
 @compatibility_alias UIDevice OrbitDevice;
-static char ViewportReadyKey;
+static char ViewportReadyKey,UIKitSyncSignatureKey,UIKitSyncPendingKey;
 static NSMutableDictionary *LayoutPreferences;
+@interface LCOrbitLog : NSObject
++ (void)appendEvent:(NSString *)event details:(NSDictionary *)details kind:(NSString *)kind;
+@end
+@implementation LCOrbitLog
++ (void)appendEvent:(NSString *)event details:(NSDictionary *)details kind:(NSString *)kind {
+    (void)event; (void)details; (void)kind;
+}
+@end
 @interface LCOrbitStorage : NSObject
 + (id)objectForKey:(NSString *)key module:(NSString *)module;
 @end
@@ -301,6 +317,21 @@ int main(void) {
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&
             readyFrame.size.height==844 && readyInsets.top==59 && readyInsets.bottom==34,
             @"UIKit mode recovers top safe area from window layout guide without compressing Guest");
+        // A delayed UIWindow guide update must reach the remote scene exactly
+        // once; an unchanged layout must not trigger a feedback loop.
+        UpdateScene(window,nil);
+        NSUInteger stableUIKitUpdates=Updates;
+        UIKitResyncIfChanged(window,@"fixture-unchanged");
+        Expect(Updates==stableUIKitUpdates,@"stable UIKit safe area does not resend FBScene geometry");
+        host.safeAreaLayoutGuide.layoutFrame=CGRectMake(0,64,390,746);
+        UIKitResyncIfChanged(window,@"fixture-guide-settled");
+        Expect(Updates==stableUIKitUpdates+1 && scene.settings.peripheryInsets.top==64 &&
+            scene.settings.frame.size.height==844,
+            @"delayed UIKit safe area is resubmitted without shrinking the Guest viewport");
+        UIKitResyncIfChanged(window,@"fixture-after-resend");
+        Expect(Updates==stableUIKitUpdates+1,
+            @"delayed UIKit safe-area resync is deduplicated after submitting the new geometry");
+        host.safeAreaLayoutGuide.layoutFrame=CGRectMake(0,59,390,751);
         // This catches the case where UIKit has not yet settled the guide.
         host.safeAreaLayoutGuide.layoutFrame=CGRectMake(0,0,390,810);
         Expect(FullscreenGeometry(window,&readyFrame,&readyOrientation,&readyInsets) &&

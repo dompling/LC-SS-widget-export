@@ -11,7 +11,9 @@ parts=[]
 for signature in ['static BOOL OrbitValidFrame(', 'static BOOL PhysicalTopAvoidanceEnabled(', 'static BOOL GuestOwnsTopInset(', 'static BOOL UIKitTopInsetEnhanced(', 'static CGRect GuestViewport(', 'static CGRect FullscreenHostingFrame(', 'static UIEdgeInsets PortraitInsets(',
                   'static BOOL OrbitInsetsInViewport(', 'static UIEdgeInsets HostUIKitSafeInsets(', 'static BOOL HostedSafeArea(',
                   'static BOOL FullscreenGeometry(', 'static void ApplyGeometry(',
-                  'static void ConfigureSafeArea(', 'static void UpdateScene(',
+                  'static void ConfigureSafeArea(', 'static NSString *UIKitGeometrySignature(',
+                  'static void UpdateScene(', 'static void UIKitResyncIfChanged(',
+                  'static void UIKitScheduleGeometryProbe(',
                   'static void SceneSettings(', 'static void FinalSceneSettings(',
                   'static void InitialSceneSettings(', 'static void PresenterReady(']:
     if signature in source:
