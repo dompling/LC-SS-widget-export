@@ -34,6 +34,9 @@ API_AVAILABLE(ios(16.0))
 @property(nonatomic) _UIScenePresenter *presenter;
 @property(nonatomic) _UISceneHostingController *hostingController API_AVAILABLE(ios(17.0));
 - (instancetype)initWithBundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUID delegate:(id<AppSceneViewControllerDelegate>)delegate;
+// Native scene hosts choose their presentation per task, without rewriting the
+// shared preference used by decorated virtual windows.
+- (instancetype)initWithBundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUID delegate:(id<AppSceneViewControllerDelegate>)delegate nativeWindow:(BOOL)nativeWindow;
 - (void)setBackgroundNotificationEnabled:(bool)enabled;
 - (void)updateFrameWithSettingsBlock:(void (^)(UIMutableApplicationSceneSettings *settings))block;
 - (void)updateSettingsWithBlock:(void(^)(UIMutableApplicationSceneSettings *settings))block;

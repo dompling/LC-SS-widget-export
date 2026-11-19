@@ -53,12 +53,16 @@ static NSURL *LaunchedURL;
 @end
 @interface FMManager (TestPresentationBoundary)
 - (void)confirmTitle:(NSString *)title action:(void(^)(void))action;
+- (void)confirmTitle:(NSString *)title action:(void(^)(void))action cancellation:(void(^)(void))cancel;
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
 - (void)launchApp:(NSDictionary *)app;
 - (void)openBuiltinSideStore;
 @end
 @implementation FMManager (TestPresentationBoundary)
 - (void)confirmTitle:(NSString *)title action:(void(^)(void))action { Confirmations++; action(); }
+- (void)confirmTitle:(NSString *)title action:(void(^)(void))action cancellation:(void(^)(void))cancel {
+    [self confirmTitle:title action:action];
+}
 - (void)showMessage:(NSString *)title details:(NSString *)detail { Notices++; }
 - (void)launchApp:(NSDictionary *)app { [LCOrbitGuestService launchGuest:app error:nil]; }
 - (void)openBuiltinSideStore { Launches++; }

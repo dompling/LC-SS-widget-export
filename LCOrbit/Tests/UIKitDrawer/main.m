@@ -4,6 +4,7 @@
 #import "LCOrbit/Core/LCOrbitStorage.h"
 #import "LCOrbit/Core/LCOrbitGuestService.h"
 #import "LCOrbit/Core/LCOrbitMultitask.h"
+#import "LCOrbit/Core/LCOrbitTaskSwitcher.h"
 #import "LCOrbit/Core/LCOrbitHost.h"
 #import "LCOrbit/Core/LCOrbitGitHub.h"
 #import "LCOrbit/Core/LCOrbitPluginUpdater.h"
@@ -46,6 +47,8 @@
 - (void)refreshSystemAppearance;
 - (void)refreshAppsContent;
 - (void)populateSettingsCategory:(NSString *)category stack:(UIStackView *)stack;
+- (void)multitaskModeChanged:(UISegmentedControl *)control;
+- (void)multitaskPresentationChanged:(UISegmentedControl *)control;
 - (void)closeTaskFromButton:(UIControl *)sender;
 - (void)closeMultitaskGuest;
 - (void)automaticPiPChanged:(UISwitch *)control;
@@ -101,10 +104,29 @@ static BOOL FixtureCurrent, FixtureRunning=YES, FixtureHost=YES;
 static CGFloat FixtureWidth=667;
 static NSUInteger CloseCount, PositionWrites;
 static NSUInteger PreferenceReads;
-static NSUInteger InstalledAppScans,DrawerBuilds,DropletOutlineUpdates;
+static NSUInteger InstalledAppScans,MainThreadAppScans,DrawerBuilds,DropletOutlineUpdates;
+static NSUInteger AdaptivePresentations;
+static NSArray *AdaptiveApps;
+static void (^AdaptiveLaunch)(NSDictionary *);
+static LCOrbitTaskDockIconProvider AdaptiveIconProvider;
+static CGFloat AdaptiveIconSize;
+@interface LCOrbitTaskSwitcher (DrawerEntryFixture)
++ (BOOL)fixturePresentInScene:(UIWindowScene *)scene apps:(NSArray *)apps dockIconSize:(CGFloat)size iconProvider:(LCOrbitTaskDockIconProvider)provider launchHandler:(void (^)(NSDictionary *))handler error:(NSError **)error;
+@end
+@implementation LCOrbitTaskSwitcher (DrawerEntryFixture)
++ (BOOL)fixturePresentInScene:(UIWindowScene *)scene apps:(NSArray *)apps dockIconSize:(CGFloat)size iconProvider:(LCOrbitTaskDockIconProvider)provider launchHandler:(void (^)(NSDictionary *))handler error:(NSError **)error {
+    AdaptivePresentations++;
+    AdaptiveApps=[apps copy];
+    AdaptiveIconSize=size;
+    AdaptiveIconProvider=[provider copy];
+    AdaptiveLaunch=[handler copy];
+    return YES;
+}
+@end
 static NSMutableDictionary *AutoPiPStates;
 static NSDictionary *LastAutoPiPTarget;
 static BOOL RejectAutoPiP;
+static BOOL RejectPresentation;
 static UIAlertController *CapturedAlert;
 static NSUInteger UpdatePromptPresentations,DownloadResumes,UpdateInstalls;
 static BOOL RejectUpdateSkipSave;
@@ -200,13 +222,20 @@ static void SwapClass(Class c,SEL a,SEL b) { method_exchangeImplementations(clas
 static void SwapInstance(Class c,SEL a,SEL b) { method_exchangeImplementations(class_getInstanceMethod(c,a),class_getInstanceMethod(c,b)); }
 @interface LCOrbitGuestService (DrawerFixture) @end
 @implementation LCOrbitGuestService (DrawerFixture)
-+ (NSArray *)fixtureApps { InstalledAppScans++;return FixtureApps; }
++ (NSArray *)fixtureApps { if(NSThread.isMainThread){InstalledAppScans++;MainThreadAppScans++;}return FixtureApps; }
 + (BOOL)fixtureCurrent:(NSDictionary *)app { return FixtureCurrent && [app[@"identity"] isEqual:FixtureApps.firstObject[@"identity"]]; }
 @end
 @interface LCOrbitMultitask (DrawerFixture) @end
 @implementation LCOrbitMultitask (DrawerFixture)
 + (BOOL)fixtureRunning:(NSDictionary *)app { return FixtureRunning && [app[@"identity"] isEqual:FixtureApps.firstObject[@"identity"]]; }
 + (BOOL)fixtureEnabled { return YES; }
++ (BOOL)fixtureSetTaskSwitcherPresentation:(NSInteger)presentation error:(NSError **)error {
+    if(RejectPresentation) {
+        if(error)*error=[NSError errorWithDomain:@"DrawerFixture" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Presentation write rejected"}];
+        return NO;
+    }
+    [[LCOrbitStorage preferences] setInteger:presentation forKey:@"LCFloatingMenu.taskSwitcherPresentation"];return YES;
+}
 + (BOOL)fixtureCurrent:(NSDictionary *)app { return FixtureCurrent && [app[@"identity"] isEqual:FixtureApps.firstObject[@"identity"]]; }
 + (BOOL)fixtureClose:(NSDictionary *)app error:(NSError **)error { CloseCount++;return YES; }
 + (BOOL)fixtureAutoPiP:(NSDictionary *)app { return [AutoPiPStates[app[@"identity"]] boolValue]; }
@@ -711,7 +740,7 @@ static void RunDropletReleaseTests(void) {
             Check([@"water-long-tracking-does-not-build-drawer-" stringByAppendingString:suffix],!menu.panel && InstalledAppScans==scans && DrawerBuilds==builds,nil);
             pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
             Check([@"water-release-opens-after-display-boundary-" stringByAppendingString:suffix],WaitForDrawerOpen(menu),nil);
-            Check([@"water-release-scans-and-builds-once-" stringByAppendingString:suffix],InstalledAppScans==scans+1 && DrawerBuilds==builds+1,
+            Check([@"water-release-reuses-inventory-and-builds-once-" stringByAppendingString:suffix],InstalledAppScans==scans && DrawerBuilds==builds+1,
                   @{@"scans":@(InstalledAppScans-scans),@"builds":@(DrawerBuilds-builds)});
 
         }
@@ -1659,6 +1688,64 @@ static void RunTests(void) {
     FixtureWidth=402;
     FMManager *portrait=Manager(NO,1,874,UIEdgeInsetsMake(62,0,34,0),NO,YES,@"apps");
     Snapshot(portrait,@"normal-portrait");
+    id savedSwitcherMode=[prefs objectForKey:@"LCFloatingMenu.taskSwitcherMode"];
+    [prefs setInteger:2 forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    SEL adaptiveEntry=@selector(presentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
+    SEL fixtureEntry=@selector(fixturePresentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
+    SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
+    for(NSNumber *compact in @[@NO,@YES]) {
+        FMManager *adaptive=Manager(compact.boolValue,1,874,UIEdgeInsetsMake(62,0,34,0),NO,NO,@"apps");
+        NSUInteger before=AdaptivePresentations,scans=MainThreadAppScans,builds=DrawerBuilds;
+        NSArray *expected=[adaptive orderedAppsForMenu];
+        [adaptive toggle];
+        Check(compact.boolValue?@"adaptive-compact-original-entry":@"adaptive-normal-original-entry",
+              AdaptivePresentations==before+1 && !adaptive.panel && !adaptive.isOpen && [AdaptiveApps isEqual:expected] && AdaptiveLaunch!=nil && MainThreadAppScans==scans && DrawerBuilds==builds,nil);
+        NSDictionary *blocked=@{@"title":@"Blocked",@"status":@"需要 JIT",@"blockReason":@"needs-jit",@"launchable":@NO};
+        UIView *blockedIcon=AdaptiveIconProvider?AdaptiveIconProvider(blocked,AdaptiveIconSize,NO):nil;
+        UIView *currentIcon=AdaptiveIconProvider?AdaptiveIconProvider(blocked,AdaptiveIconSize,YES):nil;
+        Check(compact.boolValue?@"adaptive-compact-drawer-artwork":@"adaptive-normal-drawer-artwork",
+              AdaptiveIconSize>0 && CGRectGetWidth(blockedIcon.bounds)==AdaptiveIconSize &&
+              [blockedIcon.accessibilityValue isEqualToString:@"需要 JIT"] &&
+              [currentIcon.accessibilityValue isEqualToString:@"当前"],nil);
+        UIView *plainIcon=AdaptiveIconProvider?AdaptiveIconProvider(@{@"launchable":@YES},AdaptiveIconSize,NO):nil;
+        UIView *sharedIcon=AdaptiveIconProvider?AdaptiveIconProvider(@{@"launchable":@YES,@"shared":@YES},AdaptiveIconSize,NO):nil;
+        Check(compact.boolValue?@"adaptive-compact-shared-and-jit-use-badges":@"adaptive-normal-shared-and-jit-use-badges",
+              [sharedIcon.accessibilityValue isEqualToString:@"共享"]&&Views(sharedIcon).count==Views(plainIcon).count+1&&
+              Views(blockedIcon).count==Views(plainIcon).count+1,nil);
+        adaptive.isOpen=YES;[adaptive draw];
+        Check(compact.boolValue?@"adaptive-compact-no-intermediate-drawer":@"adaptive-normal-no-intermediate-drawer",!adaptive.panel && AdaptivePresentations==before+2 && !Actions(adaptive,@"openTaskSwitcher").count,nil);
+        FixturePan *pull=[FixturePan new];CGPoint start=adaptive.orb.center;
+        pull.fixturePoint=start;pull.fixtureState=UIGestureRecognizerStateBegan;[adaptive pan:pull];
+        pull.fixturePoint=CGPointMake(start.x-80,start.y);pull.fixtureState=UIGestureRecognizerStateChanged;[adaptive pan:pull];
+        pull.fixtureState=UIGestureRecognizerStateEnded;[adaptive pan:pull];
+        Check(compact.boolValue?@"adaptive-compact-original-pull":@"adaptive-normal-original-pull",AdaptivePresentations==before+3 && !adaptive.panel && MainThreadAppScans==scans,nil);
+    }
+    FMManager *adaptiveSettings=Manager(NO,1,874,UIEdgeInsetsMake(62,0,34,0),NO,NO,@"apps");
+    UIStackView *adaptiveStack=[[UIStackView alloc] initWithFrame:CGRectMake(20,20,360,800)];adaptiveStack.axis=UILayoutConstraintAxisVertical;
+    [adaptiveSettings.overlayView addSubview:adaptiveStack];[adaptiveSettings populateSettingsCategory:@"behavior" stack:adaptiveStack];
+    BOOL hasAdaptiveChoice=NO;
+    for(UIView *view in Views(adaptiveStack)) if([view isKindOfClass:UISegmentedControl.class]) {
+        UISegmentedControl *segments=(UISegmentedControl *)view;
+        if(segments.numberOfSegments==3 && [[segments titleForSegmentAtIndex:2] isEqual:@"自适应"] && segments.selectedSegmentIndex==2) hasAdaptiveChoice=YES;
+    }
+    Check(@"adaptive-mode-shares-existing-settings-page",hasAdaptiveChoice,nil);
+    BOOL hasPresentationChoice=NO;
+    UISegmentedControl *presentation=nil;
+    for(UIView *view in Views(adaptiveStack)) if([view isKindOfClass:UISegmentedControl.class]) {
+        UISegmentedControl *segments=(UISegmentedControl *)view;
+        if(segments.numberOfSegments==2 && [[segments titleForSegmentAtIndex:0] isEqual:@"iPhone"] && [[segments titleForSegmentAtIndex:1] isEqual:@"iPad"]) {hasPresentationChoice=YES;presentation=segments;}
+    }
+    Check(@"adaptive-presentation-chooses-iphone-or-ipad-on-every-device",hasPresentationChoice,nil);
+    if(presentation) {
+        presentation.selectedSegmentIndex=1;[adaptiveSettings multitaskPresentationChanged:presentation];
+        Check(@"adaptive-ipad-choice-persists-from-phone",[[prefs objectForKey:@"LCFloatingMenu.taskSwitcherPresentation"] integerValue]==1,nil);
+        presentation.selectedSegmentIndex=0;[adaptiveSettings multitaskPresentationChanged:presentation];
+        Check(@"adaptive-iphone-choice-persists-from-phone",[[prefs objectForKey:@"LCFloatingMenu.taskSwitcherPresentation"] integerValue]==0,nil);
+        RejectPresentation=YES;presentation.selectedSegmentIndex=1;[adaptiveSettings multitaskPresentationChanged:presentation];
+        Check(@"failed-presentation-save-restores-choice",presentation.selectedSegmentIndex==0&&[[prefs objectForKey:@"LCFloatingMenu.taskSwitcherPresentation"] integerValue]==0,nil);RejectPresentation=NO;
+    }
+    [prefs setObject:savedSwitcherMode forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
     FixtureWidth=667;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3.8*NSEC_PER_SEC),dispatch_get_main_queue(),^{
         UIView *bead=[legacy.orb viewWithTag:9202];
@@ -1679,7 +1766,7 @@ static void RunTests(void) {
     Results=[NSMutableArray array];Managers=[NSMutableArray array];AutoPiPStates=[NSMutableDictionary dictionary];GitHubCompletions=[NSMutableArray array];NSMutableArray *apps=[NSMutableArray array];
     for(NSUInteger i=0;i<8;i++) {NSString *folder=[home stringByAppendingFormat:@"/Documents/Fixture%lu.app",(unsigned long)i];[NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];[@{@"CFBundleName":[NSString stringWithFormat:@"App %lu",(unsigned long)i]} writeToFile:[folder stringByAppendingPathComponent:@"Info.plist"] atomically:YES];[apps addObject:@{@"folder":folder,@"title":[NSString stringWithFormat:@"App %lu",(unsigned long)i],@"identity":folder,@"path":folder,@"launchable":@YES}];}FixtureApps=apps;
     SwapClass(LCOrbitGuestService.class,@selector(installedApps),@selector(fixtureApps));SwapClass(LCOrbitGuestService.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));
-    SwapClass(LCOrbitMultitask.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));SwapClass(LCOrbitMultitask.class,@selector(isRunningGuest:),@selector(fixtureRunning:));SwapClass(LCOrbitMultitask.class,@selector(closeGuest:error:),@selector(fixtureClose:error:));SwapClass(LCOrbitMultitask.class,@selector(isEnabled),@selector(fixtureEnabled));SwapClass(LCOrbitHost.class,@selector(isHostUI),@selector(fixtureHost));
+    SwapClass(LCOrbitMultitask.class,@selector(isCurrentGuest:),@selector(fixtureCurrent:));SwapClass(LCOrbitMultitask.class,@selector(isRunningGuest:),@selector(fixtureRunning:));SwapClass(LCOrbitMultitask.class,@selector(closeGuest:error:),@selector(fixtureClose:error:));SwapClass(LCOrbitMultitask.class,@selector(isEnabled),@selector(fixtureEnabled));SwapClass(LCOrbitMultitask.class,@selector(setTaskSwitcherPresentation:error:),@selector(fixtureSetTaskSwitcherPresentation:error:));SwapClass(LCOrbitHost.class,@selector(isHostUI),@selector(fixtureHost));
     SwapClass(LCOrbitMultitask.class,@selector(automaticPiPEnabledForGuest:),@selector(fixtureAutoPiP:));
     SwapClass(LCOrbitMultitask.class,@selector(setAutomaticPiPEnabled:forGuest:error:),@selector(fixtureSetAutoPiP:forGuest:error:));
     SwapClass(LCOrbitTweakSync.class,@selector(pluginInventory),@selector(fixturePluginInventory));

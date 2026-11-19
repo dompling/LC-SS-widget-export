@@ -12,6 +12,7 @@
 #import "../LCOrbit/Core/LCOrbitOverlayManager.h"
 #import "../LCOrbit/Core/LCOrbitGuestService.h"
 #import "../LCOrbit/Core/LCOrbitMultitask.h"
+#import "../LCOrbit/Core/LCOrbitTaskSwitcher.h"
 #import "../LCOrbit/Core/LCOrbitHostSettings.h"
 #import "../LCOrbit/Core/LCOrbitPluginUpdater.h"
 #import "../LCOrbit/Core/LCOrbitTweakAudit.h"
@@ -24,10 +25,11 @@
 #import <objc/runtime.h>
 #import <math.h>
 #import <stdlib.h>
+#import <string.h>
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.38"
+#define FM_MENU_VERSION @"1.0.41"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -165,21 +167,29 @@ static void FMBeginPreferenceSnapshotUsingValues(NSDictionary *values) {
     if(FMSnapshotDepth++) return;
     FMSnapshot=[FMPreferenceSnapshot new];
     FMSnapshot.values=values?:[[LCOrbitStorage preferences] dictionaryRepresentation];
+    [LCOrbitStorage beginReadSnapshot:FMSnapshot.values];
 }
 static void FMBeginPreferenceSnapshot(void) {
     FMBeginPreferenceSnapshotUsingValues(nil);
 }
 static void FMEndPreferenceSnapshot(void) {
-    if(FMSnapshotDepth && !--FMSnapshotDepth) FMSnapshot=nil;
+    if(FMSnapshotDepth && !--FMSnapshotDepth) {
+        [LCOrbitStorage endReadSnapshot];
+        FMSnapshot=nil;
+    }
 }
 static NSDictionary *GuestInfo(void) { return [LCOrbitHost guestInfo]; }
 static BOOL FMHostUI(void) { return [LCOrbitHost isHostUI]; }
 static NSString *GuestID(void) { return [LCOrbitHost guestIdentifier]; }
 static NSString *FMAppKey(NSDictionary *app) { return app[@"identity"] ?: app[@"path"] ?: @""; }
+static NSString *FMAppStatus(NSDictionary *app,BOOL current) {
+    NSString *state=current?@"当前":app[@"status"];
+    if(!state.length && [app[@"shared"] boolValue]) state=@"共享";
+    return state;
+}
 static NSString *FMAppCaption(NSDictionary *app) {
     NSString *title=app[@"title"] ?: @"";
-    NSString *state=[LCOrbitGuestService isCurrentGuest:app]?@"当前":app[@"status"];
-    if(!state.length && [app[@"shared"] boolValue]) state=@"共享";
+    NSString *state=FMAppStatus(app,[LCOrbitGuestService isCurrentGuest:app]);
     return state.length?[NSString stringWithFormat:@"%@ · %@",title,state]:title;
 }
 // What a row shows. The current app already wears a green light, so its title does not
@@ -276,6 +286,29 @@ static void FMLog(NSString *event, NSString *detail) {
 // Public Guest APIs are implemented in LCOrbitGuestService for all future modules.
 static NSArray<NSDictionary*> *InstalledApps(void) { return [LCOrbitGuestService installedApps]; }
 
+// One drawer opening used to walk the inventory four to five times: the toggle,
+// the active-app bookkeeping and every visibleApps caller each rescanned both
+// roots, parsed LCAppInfo.plist plus Info.plist per app and canonicalised every
+// folder. A snapshot holds a single opening to one scan. Writes invalidate it
+// explicitly, so hidden/locked state never comes back stale.
+static NSArray<NSDictionary*> *FMInstalledAppsSnapshot;
+static CFTimeInterval FMInstalledAppsSnapshotAt;
+static BOOL FMInstalledAppsSnapshotValid;
+static void FMInvalidateInstalledApps(void) {
+    FMInstalledAppsSnapshotValid=NO;
+    FMInstalledAppsSnapshot=nil;
+}
+static NSArray<NSDictionary*> *InstalledAppsCached(void) {
+    CFTimeInterval now=CACurrentMediaTime();
+    if(FMInstalledAppsSnapshotValid && FMInstalledAppsSnapshot && now-FMInstalledAppsSnapshotAt<1.5)
+        return FMInstalledAppsSnapshot;
+    NSArray<NSDictionary*> *fresh=InstalledApps();
+    FMInstalledAppsSnapshot=fresh?:@[];
+    FMInstalledAppsSnapshotAt=now;
+    FMInstalledAppsSnapshotValid=YES;
+    return FMInstalledAppsSnapshot;
+}
+
 static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
     NSString *folder=app[@"folder"];
     if(![folder isKindOfClass:NSString.class] || !folder.length) return NO;
@@ -293,6 +326,7 @@ static BOOL FMSetAppHidden(NSDictionary *app, BOOL hidden) {
         format:NSPropertyListBinaryFormat_v1_0 options:0 error:&error];
     BOOL ok=data && [data writeToFile:file options:NSDataWritingAtomic error:&error];
     if(ok) {
+        FMInvalidateInstalledApps();
         FMLog(@"app-hide-toggle",[NSString stringWithFormat:@"app=%@ hidden=%d",FMAppKey(app),hidden]);
     }
     return ok;
@@ -1564,13 +1598,45 @@ static UIView *FMGlassContent(UIView *surface) {
             return ((UIVisualEffectView *)child).contentView;
     return surface;
 }
-static UIImage *FMGuestIcon(NSDictionary *app) {
+// LiveContainer exports the full-size icon (often 1024x1024) into LCAppIconLight.png.
+// A drawer row is at most ~50pt, so decoding the original costs megabytes of backing
+// store per app and blows up the moment a device has more apps than the cache holds.
+static size_t FMImageCost(UIImage *image) {
+    if(![image isKindOfClass:UIImage.class]) return 0;
+    CGImageRef cg=image.CGImage;
+    if(!cg) return (size_t)MAX(1,image.size.width*image.size.height*4);
+    return (size_t)CGImageGetBytesPerRow(cg)*(size_t)CGImageGetHeight(cg);
+}
+static UIImage *FMResampleIcon(UIImage *image, CGFloat pixels) {
+    if(!image || pixels<=0) return image;
+    CGImageRef cg=image.CGImage;
+    if(!cg) return image;
+    CGFloat widest=MAX((CGFloat)CGImageGetWidth(cg),(CGFloat)CGImageGetHeight(cg));
+    if(widest<=pixels*1.05) return image;
+    CGFloat ratio=pixels/widest;
+    CGSize target=CGSizeMake(MAX(1,floor(CGImageGetWidth(cg)*ratio)),
+                             MAX(1,floor(CGImageGetHeight(cg)*ratio)));
+    UIGraphicsImageRendererFormat *format=UIGraphicsImageRendererFormat.defaultFormat;
+    format.scale=1; format.opaque=NO;
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:target format:format];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx){
+        [image drawInRect:CGRectMake(0,0,target.width,target.height)];
+    }];
+}
+// pixels is the on-screen edge already multiplied by the screen scale.
+static UIImage *FMGuestIconSized(NSDictionary *app, CGFloat pixels) {
     NSString *folder=app[@"folder"];
     if(![folder isKindOfClass:NSString.class] || !folder.length) return nil;
     static NSCache *cache;
     static dispatch_once_t once;
-    dispatch_once(&once,^{ cache=[NSCache new];cache.countLimit=90; });
-    NSString *cacheKey=folder;
+    dispatch_once(&once,^{
+        cache=[NSCache new];
+        cache.countLimit=400;
+        cache.totalCostLimit=32*1024*1024;
+    });
+    // Bucket to 4px steps so the handful of real row sizes share one entry.
+    NSInteger edge=(NSInteger)MIN(1024.0,MAX(24.0,round(pixels/4.0)*4.0));
+    NSString *cacheKey=[NSString stringWithFormat:@"%@#%ld",folder,(long)edge];
     id saved=[cache objectForKey:cacheKey];
     if(saved) return saved==NSNull.null?nil:saved;
     NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[folder stringByAppendingPathComponent:@"Info.plist"]];
@@ -1615,7 +1681,9 @@ static UIImage *FMGuestIcon(NSDictionary *app) {
         }
         if(result) break;
     }
-    if(result) [cache setObject:result forKey:cacheKey];
+    if(result) result=FMResampleIcon(result,(CGFloat)edge);
+    if(result) [cache setObject:result forKey:cacheKey cost:FMImageCost(result)];
+    else [cache setObject:NSNull.null forKey:cacheKey cost:0];
     return result;
 }
 
@@ -1963,6 +2031,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,copy) NSArray<UIView *> *appsHeaderTiles;
 @property(nonatomic,assign) BOOL appsScrollRestorePending;
 @property(nonatomic,assign) BOOL appsRefreshScheduled;
+@property(nonatomic,assign) BOOL inventoryRefreshPending;
 @property(nonatomic,assign) NSUInteger morphGeneration;
 @property(nonatomic,assign) NSUInteger launchGeneration;
 @property(nonatomic,assign) BOOL launchPending;
@@ -1998,6 +2067,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,strong) NSTimer *orbUpdateTimer;
 @property(nonatomic,copy) NSString *page;
 @property(nonatomic,strong) NSArray<NSDictionary*> *apps;
+// visibleApps sorts a copy on every call and one drawer build calls it seven
+// times. Remember the last result until the inventory or the order changes.
 + (instancetype)shared;
 - (void)installIfPossible;
 - (void)checkOrbUpdateIfNeeded;
@@ -2014,6 +2085,9 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)refreshUI;
 - (void)refreshAppsContent;
 - (void)requestAppsRefresh;
+- (void)refreshInventoryInBackground;
+- (BOOL)usesAdaptiveDrawer;
+- (void)presentAdaptiveDrawer;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
 - (void)rememberCurrentApp;
@@ -2024,6 +2098,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)updateSettingsContent;
 - (void)appendResetStyleRow:(UIStackView *)stack;
 - (void)launchApp:(NSDictionary *)app;
+- (void)switchToApp:(NSDictionary *)app;
 - (void)invalidatePendingLaunch;
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
 - (void)showMultitaskMenuExpanded:(BOOL)expanded;
@@ -2163,7 +2238,7 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     self.orbY=Clamp(FloatPref(@"orbY",.50),.10,.90);
     self.left=BoolPref(@"onLeft",NO);
     self.page=@"apps";
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     [self rememberCurrentApp];
     if(!self.screenTouchObserver) {
         __weak typeof(self) weakSelf=self;
@@ -2334,14 +2409,18 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
         nightBacking.userInteractionEnabled=NO;
         [material.contentView addSubview:nightBacking];
     }
-    // LC's colorful app cards and translucent TabView show through the
-    // native drawer. Give only the host drawer a light readability backing.
-    if(strong && FMHostUI()) {
+    // Regular glass adapts to the sampled background on iOS 26+.
+    // A dark drawer over a light host/guest used the same weak backing as
+    // daytime, so the light application could visibly wash through it.
+    // Keep daytime and the explicit Clear setting's lighter treatment intact.
+    if(strong && (FMHostUI() || (nativeGlass && FMMenuDark()))) {
         UIView *backing=[[UIView alloc] initWithFrame:material.contentView.bounds];
         backing.tag=9231; // Material backing, not content: the drawer morph leaves it alone.
         backing.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-        backing.backgroundColor=[FMThemeColor(FMColorSurface) colorWithAlphaComponent:
-            clear?.42:.26];
+        BOOL night=FMMenuDark();
+        UIColor *base=night?FMThemeColor(FMColorBackground):FMThemeColor(FMColorSurface);
+        CGFloat opacity=night?(clear?.56:.74):(clear?.42:.26);
+        backing.backgroundColor=[base colorWithAlphaComponent:opacity];
         backing.userInteractionEnabled=NO;
         [material.contentView addSubview:backing];
     }
@@ -2644,6 +2723,10 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
         [self.orb removeFromSuperview];self.orb=nil;
         return;
     }
+    if(self.isOpen && [self.page isEqualToString:@"apps"] && [self usesAdaptiveDrawer]) {
+        [self presentAdaptiveDrawer];
+        return;
+    }
     [self removePanel];
     [self drawOrb];
     if(self.isOpen) {
@@ -2794,8 +2877,9 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
         // With Reduce Motion nothing follows the finger: a long enough pull
         // opens the drawer once it is let go.
         BOOL capsule=FMOrbHandleIsCapsule();
-        _panUsesDroplet=!capsule && BoolPref(@"orbDropletPull",NO) && !UIAccessibilityIsReduceMotionEnabled();
-        _panUsesMorph=capsule && !UIAccessibilityIsReduceMotionEnabled();
+        BOOL adaptive=[self usesAdaptiveDrawer];
+        _panUsesDroplet=!adaptive && !capsule && BoolPref(@"orbDropletPull",NO) && !UIAccessibilityIsReduceMotionEnabled();
+        _panUsesMorph=!adaptive && capsule && !UIAccessibilityIsReduceMotionEnabled();
         [self.orb.layer removeAllAnimations];
         UIView *glass=[self.orb viewWithTag:9202];
         [glass.layer.mask removeAnimationForKey:@"fm.droplet.return"];
@@ -3037,6 +3121,11 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     [self stopDropletPull];
     [self endScrubAnimated:NO];
     BOOL opening=!self.isOpen;
+    if(opening && [self usesAdaptiveDrawer]) {
+        [self cancelOrbFade];
+        [self presentAdaptiveDrawer];
+        return;
+    }
     if(opening) {
         [self cancelOrbFade];
         [self loadAppsScroll];
@@ -3045,7 +3134,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     }
     self.isOpen=opening; self.page=@"apps";
     if(self.isOpen) {
-        self.apps=InstalledApps();
+        self.apps=InstalledAppsCached();
         [self rememberCurrentApp];
     }
     [self announceDrawerState];
@@ -3213,7 +3302,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     if(self.panel || self.settingsWindow || !self.orb) return;
     self.page=@"apps";
     [self loadAppsScroll];
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     [self buildPanel];
     if(!self.panel) return;
     _dropletPanelPrepared=YES;
@@ -3244,7 +3333,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     [self cancelOrbFade];
     self.page=@"apps";
     [self loadAppsScroll];
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     [self rememberCurrentApp];
     [self buildPanel];
     if(![self prepareDrawerMorph]) {
@@ -3786,6 +3875,17 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     if(action) [row addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return row;
 }
+// The icon plate is a continuous rounded rect with clipsToBounds (that clip is what
+// trims the system icon's 1px highlight ring), so a status badge parked flush in the
+// bottom-right corner gets its outer sliver shaved off by the corner arc. Nudge the
+// badge inside the arc instead of shrinking it: a circular badge of diameter `side`
+// stays clear once its centre sits r*(1-1/sqrt2) further in along both edges, where
+// r = size*.225 is the plate's corner radius.
+static CGFloat FMBadgeCornerInset(CGFloat size,CGFloat side) {
+    CGFloat r=size*.225;
+    CGFloat needed=MAX(0,(r-side*.5))*(1.0-1.0/M_SQRT2);
+    return MAX(0.5,needed+0.5);
+}
 // A restrained emerald status light, not a large success badge.
 // The outer halo breathes subtly; the solid center always stays readable.
 static UIView *FMRunningBreathingLight(CGFloat size) {
@@ -3814,13 +3914,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     return light;
 }
-// The icon is a full interactive control: tapping it switches immediately,
-// and long pressing it toggles hidden state. Since it is a UIButton, the
-// scroll view's scrub lens recognizer naturally yields (![hit isKindOfClass:UIButton.class]).
-- (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
-    UIButton *box=[UIButton buttonWithType:UIButtonTypeCustom];
-    box.frame=CGRectMake(0,0,size,size);
-    box.tag=9233; // The long-press scrub enlarges the icon under its lens.
+static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL current) {
     box.layer.cornerRadius=size*.225;
     if (@available(iOS 13.0, *)) {
         box.layer.cornerCurve=kCACornerCurveContinuous;
@@ -3828,7 +3922,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     box.clipsToBounds=YES;
     box.layer.masksToBounds=YES;
     box.backgroundColor=UIColor.clearColor;
-    UIImage *real=FMGuestIcon(app);
+    UIImage *real=FMGuestIconSized(app,(size+3)*MAX(1.0,UIScreen.mainScreen.scale));
     if(real) {
         // 彻底消除四角白边：系统 IconServices 生成的图标图片外圈自带 1px 高光描边与四角抗锯齿高亮杂色，
         // 将图片略微外扩 1.5pt（3x 屏幕约 4.5 物理像素），由 box 的超椭圆连续曲率统一进行严格 masksToBounds 裁切，
@@ -3848,14 +3942,14 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         fallback.userInteractionEnabled=NO;
         [box addSubview:fallback];
     }
-    BOOL current=[LCOrbitGuestService isCurrentGuest:app];
     BOOL blocked=![app[@"launchable"] boolValue] && ![app[@"builtin"] boolValue];
     BOOL hidden=[app[@"hidden"] boolValue];
     BOOL locked=[app[@"locked"] boolValue];
     if(current) {
         CGFloat side=MIN(13,MAX(10,size*.30));
+        CGFloat inset=FMBadgeCornerInset(size,side);
         UIView *light=FMRunningBreathingLight(side);
-        light.frame=CGRectMake(size-side,size-side,side,side);
+        light.frame=CGRectMake(size-side-inset,size-side-inset,side,side);
         light.userInteractionEnabled=NO;
         [box addSubview:light];
     } else if(hidden) {
@@ -3866,9 +3960,10 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         darkMask.userInteractionEnabled=NO;
         [box addSubview:darkMask];
 
-        // 原生 lock.circle.fill 红底白锁角标
+        // 原生 lock.circle.fill 红底白锁角标。位置需内缩到圆角弧内，否则右下角被裁。
         CGFloat side=MIN(16,MAX(14,size*.34));
-        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        CGFloat inset=FMBadgeCornerInset(size,side);
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side-inset,size-side-inset,side,side)];
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.userInteractionEnabled=NO;
 
@@ -3884,7 +3979,8 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     } else if(locked) {
         // 单独在 LiveContainer 设置锁定：原生 lock.circle.fill 暖橙黄底白锁角标（与红底白锁同尺寸）
         CGFloat side=MIN(16,MAX(14,size*.34));
-        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        CGFloat inset=FMBadgeCornerInset(size,side);
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side-inset,size-side-inset,side,side)];
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.userInteractionEnabled=NO;
 
@@ -3901,14 +3997,24 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     } else if(blocked) {
         // JIT 需求角标：改用 LCFloatingMenu 紫色圆形闪电徽标（fm.logo），
         // 尺寸与左侧锁定/隐藏徽标完全一致，替换原来的灰色感叹号。
+        // 该徽标是近方形自绘图形，四角都是实的，更需要避开圆角裁切。
         CGFloat side=MIN(16,MAX(14,size*.34));
-        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side,size-side,side,side)];
+        CGFloat inset=FMBadgeCornerInset(size,side);
+        UIImageView *mark=[[UIImageView alloc] initWithFrame:CGRectMake(size-side-inset,size-side-inset,side,side)];
         mark.contentMode=UIViewContentModeScaleAspectFit;
         mark.image=FMLogoBadgeImage(side);
         mark.userInteractionEnabled=NO;
         [box addSubview:mark];
     }
 
+}
+
+- (UIView *)iconViewForApp:(NSDictionary*)app size:(CGFloat)size {
+    UIButton *box=[UIButton buttonWithType:UIButtonTypeCustom];
+    box.frame=CGRectMake(0,0,size,size);
+    box.tag=9233; // The long-press scrub enlarges the icon under its lens.
+    BOOL current=[LCOrbitGuestService isCurrentGuest:app];
+    FMDrawAppIcon(box,app,size,current);
     objc_setAssociatedObject(box,@selector(switchFromRow:),app,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [box addTarget:self action:@selector(switchFromRow:) forControlEvents:UIControlEventTouchUpInside];
 
@@ -3930,7 +4036,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
             }
         }
-        self.apps=InstalledApps();
+        self.apps=InstalledAppsCached();
         [self draw];
     }
 }
@@ -4221,15 +4327,25 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     NSMutableArray *found=[self.apps mutableCopy] ?: [NSMutableArray array];
     NSArray *order=[HostDefaults() arrayForKey:Pref(@"menuOrder")];
     if([order isKindOfClass:NSArray.class] && order.count) {
+        // indexOfObject: inside the comparator is a linear scan on an NSArray of
+        // strings; a 50-app drawer then pays O(n log n * n) string comparisons.
+        // Build the first-occurrence table once instead.
+        NSMutableDictionary<NSString*,NSNumber*> *rank=[NSMutableDictionary dictionaryWithCapacity:order.count];
+        for(NSUInteger i=0;i<order.count;i++) {
+            id key=order[i];
+            if([key isKindOfClass:NSString.class] && !rank[key]) rank[key]=@(i);
+        }
         [found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
             BOOL hiddenA=[a[@"hidden"] boolValue];
             BOOL hiddenB=[b[@"hidden"] boolValue];
             if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
-            NSUInteger ai=[order indexOfObject:a[@"identity"] ?: a[@"path"]];
-            NSUInteger bi=[order indexOfObject:b[@"identity"] ?: b[@"path"]];
+            NSNumber *ar=rank[a[@"identity"] ?: a[@"path"] ?: @""];
+            NSNumber *br=rank[b[@"identity"] ?: b[@"path"] ?: @""];
             // Read pre-fix preferences without merging new private/shared keys.
-            if(ai==NSNotFound) ai=[order indexOfObject:a[@"path"]];
-            if(bi==NSNotFound) bi=[order indexOfObject:b[@"path"]];
+            if(!ar && a[@"path"]) ar=rank[a[@"path"]];
+            if(!br && b[@"path"]) br=rank[b[@"path"]];
+            NSUInteger ai=ar?ar.unsignedIntegerValue:NSNotFound;
+            NSUInteger bi=br?br.unsignedIntegerValue:NSNotFound;
             if(ai!=bi) return ai<bi?NSOrderedAscending:NSOrderedDescending;
             return [a[@"title"] localizedStandardCompare:b[@"title"]];
         }];
@@ -4257,7 +4373,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                 if([LCOrbitMultitask windows].count==0) SetPref(@"lastActiveAppKey",@"ui");
                 return;
             }
-            for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
+            for(NSDictionary *app in (self.apps.count?self.apps:InstalledAppsCached())) {
                 if([LCOrbitMultitask isCurrentGuest:app]) {
                     FMRememberOpenedApp(app);
                     return;
@@ -4272,7 +4388,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         }
     }
     // 处于子 App 内部环境
-    for(NSDictionary *app in (self.apps.count?self.apps:InstalledApps())) {
+    for(NSDictionary *app in (self.apps.count?self.apps:InstalledAppsCached())) {
         if([LCOrbitGuestService isCurrentGuest:app]) {
             FMRememberOpenedApp(app);
             break;
@@ -4285,18 +4401,37 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     id preference=[HostDefaults() objectForKey:Pref(@"recentOpenedAppKeys")];
     NSArray *recent=[preference isKindOfClass:NSArray.class]?preference:@[];
     NSMutableArray<NSDictionary *> *sorted=[apps mutableCopy];
+    // The comparator used to call isCurrentGuest: twice per comparison (each one
+    // realpaths two folders) plus two linear scans. Resolve all three keys once.
+    NSMutableSet<NSValue *> *current=[[NSMutableSet alloc] initWithCapacity:apps.count];
+    NSMutableDictionary<NSString *,NSNumber *> *recentRank=[NSMutableDictionary dictionaryWithCapacity:recent.count];
+    NSMutableDictionary<NSValue *,NSNumber *> *manualRank=[NSMutableDictionary dictionaryWithCapacity:apps.count];
+    for(NSUInteger i=0;i<apps.count;i++) {
+        NSDictionary *app=apps[i];
+        if([LCOrbitGuestService isCurrentGuest:app])
+            [current addObject:[NSValue valueWithPointer:(__bridge const void *)app]];
+        NSString *key=FMAppKey(app);
+        if(key && !recentRank[key]) {
+            NSUInteger recentIndex=[recent indexOfObject:key];
+            if(recentIndex!=NSNotFound) recentRank[key]=@(recentIndex);
+        }
+        manualRank[[NSValue valueWithPointer:(__bridge const void *)app]]=@(i);
+    }
     [sorted sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
         BOOL hiddenA=[a[@"hidden"] boolValue];
         BOOL hiddenB=[b[@"hidden"] boolValue];
         if(hiddenA!=hiddenB) return hiddenA?NSOrderedDescending:NSOrderedAscending;
-        BOOL currentA=[LCOrbitGuestService isCurrentGuest:a];
-        BOOL currentB=[LCOrbitGuestService isCurrentGuest:b];
+        BOOL currentA=[current containsObject:[NSValue valueWithPointer:(__bridge const void *)a]];
+        BOOL currentB=[current containsObject:[NSValue valueWithPointer:(__bridge const void *)b]];
         if(currentA!=currentB) return currentA?NSOrderedAscending:NSOrderedDescending;
-        NSUInteger indexA=[recent indexOfObject:FMAppKey(a)];
-        NSUInteger indexB=[recent indexOfObject:FMAppKey(b)];
+        NSNumber *ra=recentRank[FMAppKey(a)]?:nil, *rb=recentRank[FMAppKey(b)]?:nil;
+        NSUInteger indexA=ra?ra.unsignedIntegerValue:NSNotFound;
+        NSUInteger indexB=rb?rb.unsignedIntegerValue:NSNotFound;
         if(indexA!=indexB) return indexA<indexB?NSOrderedAscending:NSOrderedDescending;
-        NSUInteger manualA=[apps indexOfObjectIdenticalTo:a];
-        NSUInteger manualB=[apps indexOfObjectIdenticalTo:b];
+        NSNumber *ma=manualRank[[NSValue valueWithPointer:(__bridge const void *)a]];
+        NSNumber *mb=manualRank[[NSValue valueWithPointer:(__bridge const void *)b]];
+        NSUInteger manualA=ma?ma.unsignedIntegerValue:NSNotFound;
+        NSUInteger manualB=mb?mb.unsignedIntegerValue:NSNotFound;
         return manualA<manualB?NSOrderedAscending:manualA>manualB?NSOrderedDescending:NSOrderedSame;
     }];
     return sorted;
@@ -4712,10 +4847,33 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     if(self.settingsWindow) [self updateSettingsContent];
     else [self draw];
 }
+- (void)refreshInventoryInBackground {
+    if(self.inventoryRefreshPending || !self.window) return;
+    self.inventoryRefreshPending=YES;
+    UIWindow *window=self.window;
+    NSArray *previousApps=self.apps;
+    __weak typeof(self) weakSelf=self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        NSArray *apps=nil;
+        [LCOrbitStorage beginReadSnapshot:nil];
+        @try { apps=InstalledApps(); }
+        @finally { [LCOrbitStorage endReadSnapshot]; }
+        dispatch_async(dispatch_get_main_queue(),^{
+            typeof(self) manager=weakSelf;
+            if(!manager) return;
+            manager.inventoryRefreshPending=NO;
+            if(manager.window!=window || manager.apps!=previousApps) return;
+            manager.apps=apps?:@[];
+            if(manager.isOpen && manager.panel) [manager requestAppsRefresh];
+        });
+    });
+}
 // A task closing changes only the running badges/actions, not the drawer's
 // glass, layout, handle, or scroll view. Update those rows in-place instead
 // of tearing down the entire overlay (which caused a visible glass flash).
 - (void)refreshAppsContent {
+    FMBeginPreferenceSnapshot();
+    @try {
     if(!self.isOpen || !self.panel || !self.appsScroll ||
        ![self.page isEqualToString:@"apps"]) return;
     UIScrollView *scroll=self.appsScroll;
@@ -4738,6 +4896,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
                           scroll.adjustedContentInset.bottom);
     [scroll setContentOffset:CGPointMake(0,MIN(MAX(0,saved),maxY)) animated:NO];
     self.appsScrollRestorePending=NO;
+    } @finally { FMEndPreferenceSnapshot(); }
 }
 - (void)requestAppsRefresh {
     // didActivateWindow and forgetWindow may notify during one close. Merge
@@ -4832,7 +4991,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     }
     self.page=@"apps";
     self.isOpen=visible;
-    self.apps=InstalledApps();
+    self.apps=InstalledAppsCached();
     if(visible) { [self rememberCurrentApp]; [self loadAppsScroll]; }
     FMLog(@"settings-close",FMHostUI()?@"lc-host-foreground":@"guest-foreground");
     [self draw];
@@ -4914,13 +5073,25 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
         if(FMHostUI()) {
             [self section:@"多任务" sub:@"开启后切换 App 会保留其他任务；子任务不需要单独启用微珠。" in:s];
             [self settingSwitch:s title:@"开启多任务" key:@"fullscreenMultitask" defaultValue:NO tag:19];
-            [self section:@"多任务切换模式" sub:@"系统模式沿用 LC 窗口设置并隐藏微珠；微珠模式全屏切换，需要在 LC 设置中选择虚拟窗口，不会自动修改 LC 设置。" in:s];
-            UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"系统（LC）",@"微珠"]];
-            mode.selectedSegmentIndex=[LCOrbitMultitask usesSystemMenu]?0:1;
+            [self section:@"多任务切换模式" sub:@"iPhone 和 iPad 都可选用阶梯卡片或 iPad 布局。iPad 布局在支持多窗口时交给系统，单窗口宿主中以 LC 网格呈现。" in:s];
+            UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"系统（LC）",@"微珠",@"自适应"]];
+            mode.selectedSegmentIndex=[LCOrbitMultitask usesAdaptiveSwitcher]?2:([LCOrbitMultitask usesSystemMenu]?0:1);
             mode.enabled=[LCOrbitMultitask isEnabled];
             mode.accessibilityLabel=@"多任务切换菜单";
             [mode addTarget:self action:@selector(multitaskModeChanged:) forControlEvents:UIControlEventValueChanged];
             [self addRow:mode height:38 to:s];
+            if([LCOrbitMultitask usesAdaptiveSwitcher]) {
+                UISegmentedControl *presentation=[[UISegmentedControl alloc] initWithItems:@[@"iPhone",@"iPad"]];
+                presentation.selectedSegmentIndex=[LCOrbitMultitask taskSwitcherPresentation];
+                presentation.accessibilityLabel=@"自适应任务切换呈现方式";
+                [presentation addTarget:self action:@selector(multitaskPresentationChanged:) forControlEvents:UIControlEventValueChanged];
+                [self addRow:presentation height:38 to:s];
+                if(![LCOrbitMultitask usesNativeTaskWindows]) {
+                    [self spacer:s size:10];
+                    [self section:@"自适应 Dock 位置" sub:@"向右移动滑块可将 Dock 上移，0 为最贴近底部安全区；重新打开切换界面后生效。" in:s];
+                    [self settingSlider:s title:@"距底部距离" key:@"adaptiveDockBottomGap" min:0 max:80 def:4 tag:112];
+                }
+            }
             [self spacer:s size:14];
         }
         [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，播放视频时可保持屏幕常亮防息屏。" in:s];
@@ -5114,6 +5285,7 @@ static UIView *FMRunningBreathingLight(CGFloat size) {
     [s addArrangedSubview:l];
     UISlider *slider=[UISlider new];slider.minimumValue=min;slider.maximumValue=max;
     slider.value=FloatPref(key,def);slider.tag=tag;
+    if(tag==112) slider.continuous=NO; // One persisted write on release, not each frame.
     slider.tintColor=FMAccent();
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
     [self addRow:slider height:28 to:s];
@@ -5898,6 +6070,8 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     [self addRow:guestDiag height:40 to:stack];
     [self spacer:stack size:14];
 
+    // Settings is a one-off screen, not the drawer's hot path; keep the
+    // uncached scan so the switches never render a stale inventory.
     NSArray<NSDictionary *> *apps=InstalledApps();
     NSMutableArray<UIView *> *rows=[NSMutableArray arrayWithCapacity:apps.count];
     for(NSDictionary *app in apps) {
@@ -5973,12 +6147,23 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 - (void)multitaskModeChanged:(UISegmentedControl *)control {
     NSError *error=nil;
-    BOOL bead=control.selectedSegmentIndex==1;
-    if(![LCOrbitMultitask setUseSystemMenu:!bead error:&error]) {
-        control.selectedSegmentIndex=[LCOrbitMultitask usesSystemMenu]?0:1;
+    BOOL saved=control.selectedSegmentIndex==2?[LCOrbitMultitask setUseAdaptiveSwitcher:YES error:&error]:
+        [LCOrbitMultitask setUseSystemMenu:control.selectedSegmentIndex==0 error:&error];
+    if(!saved) {
+        control.selectedSegmentIndex=[LCOrbitMultitask usesAdaptiveSwitcher]?2:([LCOrbitMultitask usesSystemMenu]?0:1);
         [self showMessage:@"无法切换多任务菜单" details:error.localizedDescription?:@"当前 LC 不支持此功能。"];
     } else {
-        FMLog(@"multitask-mode",bead?@"bead-fullscreen":@"lc-system");
+        FMLog(@"multitask-mode",control.selectedSegmentIndex==2?@"adaptive":(control.selectedSegmentIndex==1?@"bead-fullscreen":@"lc-system"));
+        [self refreshUI];
+    }
+}
+- (void)multitaskPresentationChanged:(UISegmentedControl *)control {
+    NSError *error=nil;NSInteger presentation=control.selectedSegmentIndex==1?1:0;
+    if(![LCOrbitMultitask setTaskSwitcherPresentation:presentation error:&error]) {
+        control.selectedSegmentIndex=[LCOrbitMultitask taskSwitcherPresentation];
+        [self showMessage:@"无法切换任务呈现方式" details:error.localizedDescription?:@"当前 LC 宿主暂不支持此模式。"];
+    } else {
+        FMLog(@"multitask-presentation",presentation==1?@"ipad":@"iphone");
         [self refreshUI];
     }
 }
@@ -6037,6 +6222,13 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 // The per-app bead opacity slider.
 - (void)sliderChanged:(UISlider*)slider {
+    if(slider.tag==112) {
+        CGFloat bottomGap=round(Clamp(slider.value,0,80));
+        slider.value=bottomGap;
+        SetPref(@"adaptiveDockBottomGap",@(bottomGap));
+        FMLog(@"adaptive-dock-position",[NSString stringWithFormat:@"bottom-gap=%.0f",bottomGap]);
+        return;
+    }
     if(slider.tag!=12) return;
     SetPref([@"appAlpha." stringByAppendingString:GuestID()],@(slider.value));
     [self refreshOrbPreview];
@@ -6175,12 +6367,16 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     self.launchPending=NO;
 }
 - (void)launchApp:(NSDictionary *)app {
+    NSUUID *dockToken=[LCOrbitTaskSwitcher dockLaunchTokenForApp:app];
     UIWindowScene *scene=self.settingsWindow.windowScene?:self.window.windowScene;
     LCOrbitContext *context=self.orbitContext;
     if(self.launchPending || !context || !scene ||
        ![[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"] ||
        scene.activationState!=UISceneActivationStateForegroundActive ||
-       UIApplication.sharedApplication.applicationState!=UIApplicationStateActive) return;
+       UIApplication.sharedApplication.applicationState!=UIApplicationStateActive) {
+        [LCOrbitTaskSwitcher cancelDockLaunch:dockToken];
+        return;
+    }
     // Reserve before sharing (and before publishing events that may reenter).
     // A mode change must cancel this request rather than choose a new backend.
     NSUInteger generation=++self.launchGeneration;
@@ -6199,7 +6395,10 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     __weak typeof(self) weakSelf=self;
     FMSyncSharedTweaks(^{
         typeof(self) manager=weakSelf;
-        if(!manager || manager.launchGeneration!=generation || !manager.launchPending) return;
+        if(!manager || manager.launchGeneration!=generation || !manager.launchPending) {
+            [LCOrbitTaskSwitcher cancelDockLaunch:dockToken];
+            return;
+        }
         UIWindowScene *currentScene=manager.settingsWindow.windowScene?:manager.window.windowScene;
         if(manager.orbitContext!=context || currentScene!=scene ||
            scene.activationState!=UISceneActivationStateForegroundActive ||
@@ -6208,14 +6407,20 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
            [LCOrbitMultitask isEnabled]!=multitask || [LCOrbitMultitask usesSystemMenu]!=systemMenu ||
            FMHostUI()!=hostUI || ![(GuestID()?:@"") isEqualToString:guestID]) {
             [manager invalidatePendingLaunch];
+            [LCOrbitTaskSwitcher cancelDockLaunch:dockToken];
             FMLog(@"switch-cancelled",@"launch-context-changed");
             return;
         }
         NSError *error=nil;
+        [LCOrbitTaskSwitcher beginDockLaunch:dockToken];
         BOOL accepted=[LCOrbitGuestService launchGuest:target error:&error];
-        if(manager.launchGeneration!=generation) return;
+        if(manager.launchGeneration!=generation) {
+            [LCOrbitTaskSwitcher cancelDockLaunch:dockToken];
+            return;
+        }
         manager.launchPending=NO;
         if(!accepted) {
+            [LCOrbitTaskSwitcher cancelDockLaunch:dockToken];
             FMLog(@"switch-rejected",error.localizedDescription);
             [manager showMessage:@"暂不可切换" details:error.localizedDescription];
             return;
@@ -6226,18 +6431,22 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     });
 }
 - (void)showMultitaskMenuExpanded:(BOOL)expanded {
+    FMBeginPreferenceSnapshot();
+    @try {
     if(![LCOrbitMultitask isEnabled]) return;
     [self installIfPossible];
     if(!self.window || self.settingsWindow) return;
     if([LCOrbitMultitask usesSystemMenu]) { [self draw];return; }
-    self.apps=InstalledApps();self.page=@"apps";
+    self.apps=InstalledAppsCached();self.page=@"apps";
     [self rememberCurrentApp];
+    if(expanded && [self usesAdaptiveDrawer]) { [self presentAdaptiveDrawer];return; }
     if(expanded && !self.isOpen) {
         [self loadAppsScroll];
         self.isOpen=YES;
     }
     if(self.isOpen && self.appsScroll && self.panel) [self requestAppsRefresh];
     else [self draw];
+    } @finally { FMEndPreferenceSnapshot(); }
 }
 - (void)launchPath:(NSString *)path uuid:(NSString *)uuid {
     [self persistAppsScroll];
@@ -6294,7 +6503,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         // 若已不再处于宿主 UI，或正在拉起/处于设置页面，则安全取消
         if(!FMHostUI() || manager.launchPending || manager.settingsWindow) return;
 
-        NSArray<NSDictionary *> *allApps=InstalledApps();
+        NSArray<NSDictionary *> *allApps=InstalledAppsCached();
         NSDictionary *target=nil;
         for(NSDictionary *app in allApps) {
             if([FMAppKey(app) isEqualToString:lastAppKey] || [app[@"identity"] isEqualToString:lastAppKey]) {
@@ -6330,6 +6539,9 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     }
 }
 - (void)confirmTitle:(NSString*)title action:(void(^)(void))action {
+    [self confirmTitle:title action:action cancellation:nil];
+}
+- (void)confirmTitle:(NSString *)title action:(void (^)(void))action cancellation:(void (^)(void))cancel {
     BOOL independent=BoolPref([@"override." stringByAppendingString:GuestID()],NO);
     BOOL confirm=independent?BoolPref(AppPref(),BoolPref(@"confirm",YES)):BoolPref(@"confirm",YES);
     if(!confirm) {action();return;}
@@ -6337,10 +6549,12 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         message:([LCOrbitMultitask isEnabled] && ![title containsString:@"SideStore"])?
             @"将打开或切回目标任务，其他任务继续保留。":@"经典单任务切换会结束当前 App 的内存状态；请先保存进度。"
         preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *a){if(cancel)cancel();}]];
     [alert addAction:[UIAlertAction actionWithTitle:@"继续" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){action();}]];
-    if(!self.window.rootViewController.presentedViewController)
-        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+    UIViewController *presenter=self.window.rootViewController;
+    if(presenter&&!presenter.presentedViewController)
+        [presenter presentViewController:alert animated:YES completion:nil];
+    else if(cancel)cancel();
 }
 - (void)openBuiltinSideStore {
     [self persistAppsScroll];
@@ -6372,6 +6586,53 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         return;
     }
     [self launchPath:@"ui" uuid:nil];
+}
+- (BOOL)usesAdaptiveDrawer {
+    return [LCOrbitMultitask isEnabled] && [LCOrbitMultitask usesAdaptiveSwitcher] && ![LCOrbitMultitask usesNativeTaskWindows];
+}
+- (void)presentAdaptiveDrawer {
+    if(![self usesAdaptiveDrawer] || self.settingsWindow || !self.window) return;
+    UIWindowScene *scene=self.window.windowScene ?: [LCOrbitHost activeScene];
+    [self persistAppsScroll];
+    self.page=@"apps";self.isOpen=NO;
+    [self removePanel];[self drawOrb];
+    [self rememberCurrentApp];
+    NSArray *apps=[self orderedAppsForMenu];
+    BOOL compact=BoolPref(@"compactMode",NO);
+    CGFloat iconSize=FMMenuStyleValue(compact?@"menuCompactIconSize":@"menuListIconSize");
+    UIColor *iconFrameColor=compact&&BoolPref(@"iconFrame",NO)?
+        [FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74]:nil;
+    __weak typeof(self) weakSelf=self;
+    NSError *error=nil;
+    if(![LCOrbitTaskSwitcher presentInScene:scene apps:apps dockIconSize:iconSize iconProvider:^UIView *(NSDictionary *app,CGFloat size,BOOL current) {
+        UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
+        UIView *icon=tile;
+        if(iconFrameColor) {
+            tile.backgroundColor=iconFrameColor;
+            tile.layer.cornerRadius=size*.26;
+            tile.layer.cornerCurve=kCACornerCurveContinuous;
+            icon=[[UIView alloc] initWithFrame:CGRectInset(tile.bounds,3,3)];
+            [tile addSubview:icon];
+        }
+        FMDrawAppIcon(icon,app,CGRectGetWidth(icon.bounds),current);
+        if([app[@"shared"] boolValue]) {
+            CGFloat side=MIN(14,floor(CGRectGetWidth(icon.bounds)*.42));
+            UIImageSymbolConfiguration *configuration=[UIImageSymbolConfiguration configurationWithPointSize:side*.52 weight:UIImageSymbolWeightBold];
+            UIImageView *badge=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"arrowshape.turn.up.left.fill" withConfiguration:configuration]];
+            badge.frame=CGRectMake(0,0,side,side);
+            badge.layer.cornerRadius=side/2;
+            badge.backgroundColor=[UIColor colorNamed:@"BadgeColor"]?:UIColor.systemOrangeColor;
+            badge.tintColor=UIColor.whiteColor;
+            badge.contentMode=UIViewContentModeCenter;
+            [icon addSubview:badge];
+        }
+        tile.accessibilityValue=FMAppStatus(app,current);
+        return tile;
+    } launchHandler:^(NSDictionary *app){
+        [weakSelf switchToApp:app];
+    } error:&error])
+        [self showMessage:@"无法打开任务切换" details:error.localizedDescription?:@"请稍后重试。"];
+    [self refreshInventoryInBackground];
 }
 - (void)goHome {
     SetPref(@"lastActiveAppKey",@"ui");
@@ -6422,6 +6683,17 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     [self draw];
 }
 - (void)closeMultitaskGuest {
+    if([LCOrbitMultitask usesNativeTaskWindows]) {
+        NSString *sceneIdentifier=self.window.windowScene.session.persistentIdentifier;
+        for(NSDictionary *task in [LCOrbitMultitask runningTasks]) {
+            if(!sceneIdentifier || ![task[@"sceneIdentifier"] isEqual:sceneIdentifier]) continue;
+            NSError *error=nil;
+            if([LCOrbitMultitask closeTask:task error:&error]) {self.isOpen=NO;[self draw];}
+            else [self showMessage:@"关闭任务失败" details:error.localizedDescription];
+            return;
+        }
+        [self showMessage:@"没有当前任务" details:@"当前窗口没有正在运行的 App。"];return;
+    }
     for(NSDictionary *app in self.apps)
         if([LCOrbitMultitask isCurrentGuest:app]) {
             [self closeApp:app sender:nil collapse:YES];return;
@@ -6442,8 +6714,17 @@ static BOOL sHasAttemptedAutoLaunch=NO;
 }
 - (void)switchFromRow:(UIControl *)sender {
     NSDictionary *app=objc_getAssociatedObject(sender,@selector(switchFromRow:));
-    if(!app || [LCOrbitGuestService isCurrentGuest:app]) return;
+    [self switchToApp:app];
+}
+- (void)switchToApp:(NSDictionary *)app {
+    if(!app)return;
+    NSUUID *dockToken=[LCOrbitTaskSwitcher dockLaunchTokenForApp:app];
+    if([LCOrbitGuestService isCurrentGuest:app]) {
+        [LCOrbitTaskSwitcher cancelDockLaunch:dockToken];
+        return;
+    }
     if(![app[@"builtin"] boolValue] && ![app[@"launchable"] boolValue]) {
+        [LCOrbitTaskSwitcher cancelDockLaunch:dockToken];
         NSString *detail=app[@"status"] ?: @"请从 LC 启动。";
         if([app[@"hidden"] boolValue]) {
             detail=@"App 已隐藏无法开启，请解除隐藏状态或去 LiveContainer 验证启用";
@@ -6461,7 +6742,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     }
     [self confirmTitle:[NSString stringWithFormat:@"切换到 %@？",app[@"title"]] action:^{
         [self launchApp:app];
-    }];
+    } cancellation:^{[LCOrbitTaskSwitcher cancelDockLaunch:dockToken];}];
 }
 @end
 

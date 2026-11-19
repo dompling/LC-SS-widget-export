@@ -13,6 +13,18 @@ FOUNDATION_EXPORT NSString *const LCOrbitMultitaskConfigurationChangedNotificati
 + (BOOL)setEnabled:(BOOL)enabled error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)usesSystemMenu;
 + (BOOL)setUseSystemMenu:(BOOL)system error:(NSError * _Nullable * _Nullable)error;
++ (BOOL)usesAdaptiveSwitcher;
++ (BOOL)setUseAdaptiveSwitcher:(BOOL)enabled error:(NSError * _Nullable * _Nullable)error;
+// 0 = iPhone cards, 1 = iPad layout. The latter uses native system windows
+// when available, and the LC grid on hosts with a single system scene.
++ (NSInteger)taskSwitcherPresentation;
++ (BOOL)setTaskSwitcherPresentation:(NSInteger)presentation error:(NSError * _Nullable * _Nullable)error;
++ (BOOL)usesNativeTaskWindows;
+// Immutable exact-task handles. Tokens prevent old cards from targeting a restarted task.
++ (NSArray<NSDictionary *> *)runningTasks;
++ (NSArray<NSDictionary *> *)runningTasksForApps:(NSArray<NSDictionary *> *)apps;
++ (BOOL)activateTask:(NSDictionary *)task error:(NSError * _Nullable * _Nullable)error;
++ (BOOL)closeTask:(NSDictionary *)task error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)shouldShowFloatingMenu;
 + (BOOL)launchGuest:(NSDictionary *)guest error:(NSError * _Nullable * _Nullable)error;
 + (BOOL)isCurrentGuest:(NSDictionary *)guest;

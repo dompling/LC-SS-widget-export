@@ -14,6 +14,8 @@ BUILD_COMMIT_FLAG="-DFM_BUILD_COMMIT=@\"$BUILD_COMMIT\""
 # complete plugin-management flow. A failed regression stops this build.
 sh "$ROOT/LCOrbit/Tests/run-core-lifecycle-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-storage-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-storage-status-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-drawer-entry-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-json-log-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-github-access-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-update-release-tests.sh"
@@ -22,6 +24,9 @@ sh "$ROOT/LCOrbit/Tests/run-guest-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-jit-favorites-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-tweak-center-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-multitask-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-task-ownership-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-native-window-registry-tests.sh"
+sh "$ROOT/LCOrbit/Tests/run-native-startup-cancellation-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-automatic-pip-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-side-notch-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-floating-launch-tests.sh"
@@ -32,6 +37,7 @@ sh "$ROOT/LCOrbit/Tests/run-multitask-restore-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-multitask-parent-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-bootstrap-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-multitask-scene-tests.sh"
+python3 "$ROOT/LCOrbit/Tests/check-adaptive-dock-layout.py"
 sh "$ROOT/LCOrbit/Tests/run-multitask-viewport-tests.sh"
 sh "$ROOT/LCOrbit/Tests/run-app-compatibility-tests.sh"
 python3 "$ROOT/LCOrbit/Tests/check-guest-uikit-diagnostics.py"
@@ -49,6 +55,7 @@ xcrun clang "$BUILD_COMMIT_FLAG" -arch arm64 -isysroot "$SDK" -miphoneos-version
     "$ROOT/LCOrbit/Core/LCOrbitMultitask.m" \
     "$ROOT/LCOrbit/Core/LCOrbitAutomaticPiP.m" \
     "$ROOT/LCOrbit/Core/LCOrbitMultitaskUI.m" \
+    "$ROOT/LCOrbit/Core/LCOrbitTaskSwitcher.m" \
     "$ROOT/LCOrbit/Core/LCOrbitHostSettings.m" \
     "$ROOT/LCOrbit/Core/LCOrbitEventBus.m" \
     "$ROOT/LCOrbit/Core/LCOrbitOverlayManager.m" \

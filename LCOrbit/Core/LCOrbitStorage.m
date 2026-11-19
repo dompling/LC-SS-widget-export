@@ -9,6 +9,20 @@
 static NSError *StorageError;
 static NSMutableDictionary<NSString *,NSDictionary *> *LastGood;
 static const NSUInteger MaximumConfigSize=1048576;
+static NSString *const ReadSnapshotsKey=@"LCOrbitStorage.readSnapshots";
+@interface LCOrbitReadSnapshot : NSObject
+@property(nonatomic,copy) NSString *root;
+@property(nonatomic,copy) NSDictionary *values;
+@end
+@implementation LCOrbitReadSnapshot @end
+static NSMutableArray<LCOrbitReadSnapshot *> *ReadSnapshots(void) {
+    return NSThread.currentThread.threadDictionary[ReadSnapshotsKey];
+}
+static BOOL SameRoot(NSString *a,NSString *b) { return a==b || [a isEqualToString:b]; }
+static void RefreshReadSnapshots(NSString *root,NSDictionary *values) {
+    for(LCOrbitReadSnapshot *snapshot in ReadSnapshots())
+        if(SameRoot(snapshot.root,root)) snapshot.values=values;
+}
 static BOOL PluginKey(id key) {
     return [key isKindOfClass:NSString.class] &&
         ![key isEqualToString:@"LCFloatingMenu.previousMultitaskMode"] &&
@@ -30,6 +44,10 @@ static BOOL JSONValue(id value) {
 static BOOL PreferenceValue(NSString *key,id value) {
     if(!JSONValue(value)) return NO;
     NSString *name=[key hasPrefix:@"LCFloatingMenu."]?[key substringFromIndex:15]:key;
+    if([name isEqual:@"taskSwitcherMode"])
+        return [value isKindOfClass:NSNumber.class] && [@[@0,@1,@2] containsObject:value];
+    if([name isEqual:@"taskSwitcherPresentation"])
+        return [value isKindOfClass:NSNumber.class] && [@[@0,@1] containsObject:value];
     if([@[@"favoritePaths",@"menuOrder",@"autoPiPApps"] containsObject:name]) {
         if(![value isKindOfClass:NSArray.class]) return NO;
         for(id item in value) if(![item isKindOfClass:NSString.class]) return NO;
@@ -131,7 +149,7 @@ static NSDictionary *Load(NSString *root,BOOL *valid,NSError **error) {
     LastGood[root]=[recovered copy];
     return recovered;
 }
-static NSDictionary *ReadValues(void) {
+static NSDictionary *ReadValuesFromDisk(void) {
     @synchronized(LCOrbitStorage.class) {
         NSError *error=nil;NSString *root=[LCOrbitStorage rootPath];int lock=LockRoot(root,&error);
         if(lock<0) {
@@ -141,6 +159,12 @@ static NSDictionary *ReadValues(void) {
         BOOL valid=NO;NSDictionary *values=Load(root,&valid,&error);
         Unlock(lock);StorageError=error;return values;
     }
+}
+static NSDictionary *ReadValues(void) {
+    NSString *root=[LCOrbitStorage rootPath];
+    for(LCOrbitReadSnapshot *snapshot in ReadSnapshots().reverseObjectEnumerator)
+        if(SameRoot(snapshot.root,root)) return snapshot.values;
+    return ReadValuesFromDisk();
 }
 @implementation LCOrbitPreferences
 - (id)objectForKey:(NSString *)key {
@@ -171,6 +195,7 @@ static NSDictionary *ReadValues(void) {
             if(value) next[key]=value;else [next removeObjectForKey:key];
             if(WriteDocument(ConfigPath(root),next,&error)) {
                 LastGood[root]=[next copy];WriteDocument(BackupPath(root),next,nil);
+                RefreshReadSnapshots(root,next);
             }
         }
         Unlock(lock);StorageError=error;
@@ -199,8 +224,27 @@ static NSDictionary *ReadValues(void) {
     static LCOrbitPreferences *preferences;static dispatch_once_t once;
     dispatch_once(&once,^{preferences=[LCOrbitPreferences new];});return preferences;
 }
++ (void)beginReadSnapshot:(NSDictionary *)values {
+    LCOrbitReadSnapshot *snapshot=[LCOrbitReadSnapshot new];
+    snapshot.root=[self rootPath];
+    snapshot.values=values?:ReadValuesFromDisk();
+    NSMutableDictionary *thread=NSThread.currentThread.threadDictionary;
+    NSMutableArray *snapshots=thread[ReadSnapshotsKey];
+    if(!snapshots) thread[ReadSnapshotsKey]=snapshots=[NSMutableArray array];
+    [snapshots addObject:snapshot];
+}
++ (void)endReadSnapshot {
+    NSMutableArray *snapshots=ReadSnapshots();
+    [snapshots removeLastObject];
+    if(!snapshots.count) [NSThread.currentThread.threadDictionary removeObjectForKey:ReadSnapshotsKey];
+}
 + (BOOL)reloadWithError:(NSError **)error {
-    @synchronized(self) { ReadValues();if(error) *error=StorageError;return StorageError==nil; }
+    @synchronized(self) {
+        NSDictionary *values=ReadValuesFromDisk();
+        if(!StorageError) RefreshReadSnapshots([self rootPath],values);
+        if(error) *error=StorageError;
+        return StorageError==nil;
+    }
 }
 + (NSError *)lastError { @synchronized(self) { return StorageError; } }
 @end

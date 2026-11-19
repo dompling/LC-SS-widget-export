@@ -25,6 +25,14 @@ extern NSUserDefaults *OrbitTestDefaults(void);
 static NSString *GuestID(void) { return OrbitTestGuestID(); }
 static NSUserDefaults *HostDefaults(void) { return OrbitTestDefaults(); }
 static NSString *Pref(NSString *key) { return [@"test." stringByAppendingString:key]; }
+@interface LCOrbitTaskSwitcher : NSObject
++ (NSUUID *)dockLaunchTokenForApp:(NSDictionary *)app;
++ (void)cancelDockLaunch:(NSUUID *)token;
+@end
+@implementation LCOrbitTaskSwitcher
++ (NSUUID *)dockLaunchTokenForApp:(NSDictionary *)app { return nil; }
++ (void)cancelDockLaunch:(NSUUID *)token {}
+@end
 @interface FMManager : NSObject
 @property(nonatomic,copy) NSArray<NSDictionary *> *apps;
 - (NSArray<NSDictionary *> *)visibleApps;
@@ -32,6 +40,7 @@ static NSString *Pref(NSString *key) { return [@"test." stringByAppendingString:
 @end
 @interface FMManager (TestPresentationBoundary)
 - (void)confirmTitle:(NSString *)title action:(void(^)(void))action;
+- (void)confirmTitle:(NSString *)title action:(void(^)(void))action cancellation:(void(^)(void))cancel;
 - (void)showMessage:(NSString *)title details:(NSString *)detail;
 - (void)launchApp:(NSDictionary *)app;
 - (void)openBuiltinSideStore;
