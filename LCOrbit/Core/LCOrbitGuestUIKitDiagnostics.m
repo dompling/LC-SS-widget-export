@@ -193,6 +193,23 @@ static void GuestTopViews(UIView *view,UIWindow *window,
         GuestTopViews(child,window,views,depth+1);
     }
 }
+// Follow the visible top buttons through custom containers without reading labels.
+static NSArray *GuestTopHitPath(UIWindow *window, CGPoint point) {
+    NSMutableArray *path=[NSMutableArray array];
+    for(UIView *view=[window hitTest:point withEvent:nil];view && path.count<32;view=view.superview) {
+        CGRect frame=[view convertRect:view.bounds toView:window];
+        NSMutableDictionary *entry=[@{@"class":NSStringFromClass(view.class),
+            @"frame":NSStringFromCGRect(frame)} mutableCopy];
+        if([view isKindOfClass:UIScrollView.class]) {
+            UIScrollView *scroll=(UIScrollView *)view;
+            entry[@"contentInset"]=NSStringFromUIEdgeInsets(scroll.contentInset);
+            entry[@"adjustedContentInset"]=NSStringFromUIEdgeInsets(scroll.adjustedContentInset);
+            entry[@"contentOffset"]=NSStringFromCGPoint(scroll.contentOffset);
+        }
+        [path addObject:entry];
+    }
+    return path;
+}
 static NSDictionary *GuestNavigationGeometry(UIWindow *window) {
     UIViewController *root=window.rootViewController;
     UINavigationController *nav=[root isKindOfClass:UINavigationController.class]?
@@ -473,6 +490,13 @@ static void GuestTakeSnapshot(NSString *reason) {
         @"statusBarHidden":@(scene?scene.statusBarManager.statusBarHidden:YES),
         @"statusBarFrame":scene?NSStringFromCGRect(scene.statusBarManager.statusBarFrame):@"unknown"
     } mutableCopy];
+    if([GuestInstallPath() isEqualToString:@"com.burbn.instagram.app"] &&
+       UIInterfaceOrientationIsPortrait(scene.interfaceOrientation)) {
+        CGFloat y=CGRectGetMinY(window.bounds)+MIN(28,CGRectGetHeight(window.bounds)/2);
+        CGFloat margin=MIN(36,CGRectGetWidth(window.bounds)/2);
+        details[@"topLeftHitPath"]=GuestTopHitPath(window,CGPointMake(CGRectGetMinX(window.bounds)+margin,y));
+        details[@"topRightHitPath"]=GuestTopHitPath(window,CGPointMake(CGRectGetMaxX(window.bounds)-margin,y));
+    }
     if(rootView && rootView.window==window)
         details[@"rootFrameInWindow"]=NSStringFromCGRect([rootView convertRect:rootView.bounds toView:window]);
     GuestWriteEvent(@"guest-uikit-snapshot",details);
