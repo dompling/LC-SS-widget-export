@@ -523,6 +523,7 @@ static NSArray<NSDictionary *> *FMMenuStyleOptions(void) {
         @{@"key":@"menuCurveSoftness",@"title":@"凹角弧度",@"min":@.2,@"max":@.9,@"default":@.64,@"unit":@"%",@"step":@.01},
         @{@"key":@"menuCompactIconSize",@"title":@"图标模式图标大小",@"min":@28,@"max":@50,@"default":@46,@"unit":@"点",@"step":@1},
         @{@"key":@"menuListIconSize",@"title":@"列表模式图标大小",@"min":@24,@"max":@44,@"default":@36,@"unit":@"点",@"step":@1},
+        @{@"key":@"adaptiveDockIconSize",@"title":@"自适应 Dock 图标大小",@"min":@24,@"max":@50,@"default":@36,@"unit":@"点",@"step":@1},
         // On top of whatever the head needs cleared, none of it by default; below zero it
         // lifts the whole block instead, as far as the top edge.
         @{@"key":@"menuTopPadding",@"title":@"上方留白",@"min":@(-16),@"max":@40,@"default":@0,@"unit":@"点",@"step":@1}
@@ -6622,7 +6623,9 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     [self rememberCurrentApp];
     NSArray *apps=[self orderedAppsForMenu];
     BOOL compact=BoolPref(@"compactMode",NO);
-    CGFloat iconSize=FMMenuStyleValue(compact?@"menuCompactIconSize":@"menuListIconSize");
+    // Adaptive Dock is a different surface from the legacy drawer. Its icon
+    // size follows the dedicated slider, regardless of compact/list mode.
+    CGFloat iconSize=FMMenuStyleValue(@"adaptiveDockIconSize");
     UIColor *iconFrameColor=compact&&BoolPref(@"iconFrame",NO)?
         [FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74]:nil;
     __weak typeof(self) weakSelf=self;
@@ -7576,7 +7579,7 @@ typedef NS_ENUM(NSInteger, FMDockGroup) {
 };
 // When a row shows inside its open group.
 typedef NS_ENUM(NSInteger, FMDockWhen) {
-    FMDockWhenAlways,FMDockWhenCapsule,FMDockWhenDroplet,FMDockWhenFade,FMDockWhenCompact,FMDockWhenList
+    FMDockWhenAlways,FMDockWhenCapsule,FMDockWhenDroplet,FMDockWhenFade,FMDockWhenCompact,FMDockWhenList,FMDockWhenAdaptive
 };
 
 @interface FMDockSlider : UISlider
@@ -8315,6 +8318,10 @@ static UIView *FMDockCard(UIStackView *rows) {
 }
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    // A slider can still have its last value staged when the settings page
+    // closes. Commit it now so the next adaptive Dock reads the chosen size.
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitStagedSlider) object:nil];
+    [self commitStagedSlider];
     FMManager *manager=[FMManager shared];
     if(manager.dimensionsPreview!=self.preview) return;
     manager.dimensionsPreview=nil;
@@ -8571,6 +8578,7 @@ static UIView *FMDockCard(UIStackView *rows) {
     // The two layouts each keep their own icon size; only the one in use shows.
     [self addSlider:FMDockOption(@"menuCompactIconSize",@"图标大小") to:rows group:group when:FMDockWhenCompact];
     [self addSlider:FMDockOption(@"menuListIconSize",@"图标大小") to:rows group:group when:FMDockWhenList];
+    [self addSlider:FMDockOption(@"adaptiveDockIconSize",@"Dock 图标大小") to:rows group:group when:FMDockWhenAdaptive];
     [self add:[self segmentRow:@"弹出动画" items:@[@"逐个",@"一起",@"关"] key:@"popAnimation" selected:FMPopMode()]
            to:rows group:group when:FMDockWhenAlways];
     if(@available(iOS 26.0,*)) {
@@ -8619,8 +8627,9 @@ static UIView *FMDockCard(UIStackView *rows) {
         case FMDockWhenCapsule: return FMOrbHandleIsCapsule();
         case FMDockWhenDroplet: return !FMOrbHandleIsCapsule();
         case FMDockWhenFade: return BoolPref(@"idleFade",YES);
-        case FMDockWhenCompact: return BoolPref(@"compactMode",NO);
-        case FMDockWhenList: return !BoolPref(@"compactMode",NO);
+        case FMDockWhenCompact: return ![LCOrbitMultitask usesAdaptiveSwitcher] && BoolPref(@"compactMode",NO);
+        case FMDockWhenList: return ![LCOrbitMultitask usesAdaptiveSwitcher] && !BoolPref(@"compactMode",NO);
+        case FMDockWhenAdaptive: return [LCOrbitMultitask usesAdaptiveSwitcher];
         default: return YES;
     }
 }
