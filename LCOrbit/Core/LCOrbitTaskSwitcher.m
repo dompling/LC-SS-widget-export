@@ -89,7 +89,10 @@ static void SuppressRemoteLayers(CALayer *layer,Class hostClass,NSMapTable<CALay
     if((self=[super init])) {
         _controller=controller;_view=controller.view;_parent=_view.superview;
         _hidden=_view.hidden;_interactive=_view.userInteractionEnabled;
-        _accessibilityHidden=_view.accessibilityElementsHidden;_firstResponder=TaskFirstResponder(_view);
+        _accessibilityHidden=_view.accessibilityElementsHidden;
+        // Only the foreground guest can own the active responder. Searching the
+        // full UIKit tree of every background guest stalls large task decks.
+        _firstResponder=controller==[LCOrbitMultitask activeWindow]?TaskFirstResponder(_view):nil;
         _originalFrame=[_view convertRect:_view.bounds toView:_parent];
         _center=_view.center;_transform=_view.transform;_alpha=_view.alpha;_depth=_view.layer.zPosition;
         _clipsToBounds=_view.clipsToBounds;_cornerRadius=_view.layer.cornerRadius;_cornerCurve=_view.layer.cornerCurve;
@@ -281,7 +284,8 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic) BOOL gridPresentation;
 @property(nonatomic) BOOL initialDockVisible;
 @property(nonatomic) NSUInteger cardsPerPage;
-@property(nonatomic,strong) UIVisualEffectView *dock;
+@property(nonatomic,strong) UIView *dock;
+@property(nonatomic,strong) UIVisualEffectView *dockGlass;
 @property(nonatomic,strong) UIVisualEffectView *backdrop;
 @property(nonatomic,strong) UILabel *emptyLabel;
 @property(nonatomic,strong) UIScrollView *dockScroll;
@@ -357,8 +361,13 @@ static UIWindow *OverviewWindow;
         UILabel *empty=[UILabel new];empty.accessibilityIdentifier=@"orbit.task.empty";empty.text=@"没有正在运行的 App";empty.textAlignment=NSTextAlignmentCenter;empty.font=[UIFont systemFontOfSize:15 weight:UIFontWeightMedium];empty.textColor=[UIColor.whiteColor colorWithAlphaComponent:.82];[self.view addSubview:empty];self.emptyLabel=empty;
     }
     if(self.apps.count) {
-        self.dock=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];self.dock.accessibilityIdentifier=@"orbit.dock";self.dock.layer.cornerRadius=19;self.dock.layer.cornerCurve=kCACornerCurveContinuous;self.dock.clipsToBounds=YES;self.dock.layer.borderWidth=.5;self.dock.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.16].CGColor;[self.view addSubview:self.dock];
-        self.dockScroll=[UIScrollView new];self.dockScroll.accessibilityIdentifier=@"orbit.dock.scroll";self.dockScroll.delegate=self;self.dockScroll.showsHorizontalScrollIndicator=NO;self.dockScroll.showsVerticalScrollIndicator=NO;self.dockScroll.alwaysBounceHorizontal=YES;self.dockScroll.directionalLockEnabled=YES;self.dockScroll.contentInsetAdjustmentBehavior=UIScrollViewContentInsetAdjustmentNever;[self.dock.contentView addSubview:self.dockScroll];
+        // The icons must not live inside UIVisualEffectView.contentView. On
+        // newer UIKit glass implementations its internal content tree can
+        // change when the effect is animated to nil, leaving a visible rail
+        // with no icon artwork. Keep glass and icons as sibling layers.
+        self.dock=[UIView new];self.dock.accessibilityIdentifier=@"orbit.dock";self.dock.layer.cornerRadius=19;self.dock.layer.cornerCurve=kCACornerCurveContinuous;self.dock.clipsToBounds=YES;self.dock.layer.borderWidth=.5;self.dock.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.16].CGColor;[self.view addSubview:self.dock];
+        self.dockGlass=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];self.dockGlass.accessibilityIdentifier=@"orbit.dock.glass";self.dockGlass.userInteractionEnabled=NO;self.dockGlass.frame=self.dock.bounds;self.dockGlass.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;[self.dock addSubview:self.dockGlass];
+        self.dockScroll=[UIScrollView new];self.dockScroll.accessibilityIdentifier=@"orbit.dock.scroll";self.dockScroll.delegate=self;self.dockScroll.showsHorizontalScrollIndicator=NO;self.dockScroll.showsVerticalScrollIndicator=NO;self.dockScroll.alwaysBounceHorizontal=YES;self.dockScroll.directionalLockEnabled=YES;self.dockScroll.contentInsetAdjustmentBehavior=UIScrollViewContentInsetAdjustmentNever;[self.dock addSubview:self.dockScroll];
         NSDictionary *active=nil;
         for(NSDictionary *task in self.tasks)if([task[@"active"] boolValue]){active=task;break;}
         for(NSUInteger index=0;index<self.apps.count;index++) {
@@ -520,7 +529,17 @@ static UIWindow *OverviewWindow;
 }
 - (void)updateLiveGeometry {
     if(self.restoring)return;
+    // During a swipe, update only the currently visible cards and one
+    // neighboring stride on either side. Every task has already received its
+    // initial offscreen placement before dragging begins. This avoids
+    // reconfiguring every remote app layer at each scroll callback.
+    BOOL scrolling=self.scrollingDeck||self.pages.dragging||self.pages.decelerating;
+    CGFloat preload=MAX(1,self.stride);
+    CGRect nearby=CGRectMake(self.pages.contentOffset.x-preload,-1,
+                             self.pages.bounds.size.width+preload*2,
+                             self.pages.bounds.size.height+2);
     for(LCOrbitTaskCard *card in self.cards) {
+        if(scrolling&&!CGRectIntersectsRect(card.frame,nearby))continue;
         LCOrbitTaskPlacement *placement=card.placement;
         if(!placement)continue;
         CGRect frame=[card.preview convertRect:card.preview.bounds toView:placement.parent];
@@ -556,9 +575,13 @@ static UIWindow *OverviewWindow;
             CGFloat scale=1+.018*MAX(-3,MIN(1,distance));
             card.restingTransform=CGAffineTransformMake(scale,0,0,scale,deckX-pageX,0);
         }
-        if(card!=self.draggingCard&&card!=self.reboundingCard)card.transform=card.restingTransform;
-        card.placement.view.layer.zPosition=2+card.index;
-        card.alpha=1;
+        if(card!=self.draggingCard&&card!=self.reboundingCard &&
+           !CGAffineTransformEqualToTransform(card.transform,card.restingTransform))
+            card.transform=card.restingTransform;
+        CGFloat z=2+card.index;
+        if(card.placement && card.placement.view.layer.zPosition!=z)
+            card.placement.view.layer.zPosition=z;
+        if(card.alpha!=1)card.alpha=1;
     }
     CGFloat leftEdge=self.pages.contentOffset.x,rightEdge=leftEdge+self.pages.bounds.size.width;
     for(LCOrbitTaskCard *card in self.cards) {
@@ -637,7 +660,7 @@ static UIWindow *OverviewWindow;
 - (void)setDockVisible:(BOOL)visible {
     self.lastDockVisibilityReason=visible?@"visible":@"hidden";
     self.dock.transform=visible?CGAffineTransformIdentity:CGAffineTransformMakeTranslation(0,32);
-    self.dock.effect=visible?[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]:nil;
+    self.dockGlass.effect=visible?[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]:nil;
     self.dockScroll.alpha=visible?1:0;
     self.emptyLabel.alpha=visible?1:0;
 }
@@ -979,15 +1002,25 @@ static UIWindow *OverviewWindow;
         for(LCOrbitTaskPlacement *placement in owner.placements)placement.view.alpha=1;
         [owner updateLiveGeometry];
         if(staged) {
+            // Stagger the visible cards only; the rest of the live scenes
+            // should not receive three offscreen CA animations each.
             NSUInteger step=0;
+            NSUInteger currentPage=owner.selectedIndex/MAX((NSUInteger)1,owner.cardsPerPage);
             for(LCOrbitTaskCard *other in owner.cards) {
+                NSUInteger page=other.index/MAX((NSUInteger)1,owner.cardsPerPage);
+                if(page>currentPage+1 || (currentPage>0 && page+1<currentPage))continue;
                 TaskFadeInLayer(other.layer,.045*step);
                 TaskFadeInLayer(other.placement.view.layer,.045*step);
                 TaskFadeInLayer(other.placement.shadow.layer,.045*step);
                 step++;
             }
             NSUInteger buttonStep=0;
-            for(UIView *button in owner.dockScroll.subviews)TaskFadeInLayer(button.layer,.03*buttonStep++);
+            CGRect visibleDock=CGRectMake(owner.dockScroll.contentOffset.x,0,
+                                          owner.dockScroll.bounds.size.width,
+                                          owner.dockScroll.bounds.size.height);
+            for(UIView *button in owner.dockScroll.subviews)
+                if(CGRectIntersectsRect(button.frame,visibleDock))
+                    TaskFadeInLayer(button.layer,.03*buttonStep++);
         }
     }];
     [self.entranceAnimator addCompletion:^(UIViewAnimatingPosition position){weakSelf.entranceAnimator=nil;}];
