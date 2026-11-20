@@ -29,7 +29,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.46"
+#define FM_MENU_VERSION @"1.0.47"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -208,15 +208,30 @@ static BOOL BoolPref(NSString *key,BOOL def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v boolValue]:def;
 }
+// 0 关闭，0.5 是此前版本固定的手感，1 为两倍。旧版本只存开/关布尔，缺少
+// hapticStrength 时回退读 haptic：关 → 0，开 → 0.5，于是升级后的默认手感不变。
+static CGFloat HapticStrength(void) {
+    id v=FMStaged[Pref(@"hapticStrength")] ?: [HostDefaults() objectForKey:Pref(@"hapticStrength")];
+    if([v isKindOfClass:NSNumber.class]) return Clamp([v doubleValue],0,1);
+    return BoolPref(@"haptic",YES)?.5:0;
+}
+static NSString *FMHapticSliderHint(CGFloat value) {
+    if(value<=.001) return @"已关闭";
+    if(fabs(value-.5)<.02) return @"默认强度（原版手感）";
+    if(value<.5) return [NSString stringWithFormat:@"%@（约原版 %d%%）",@"较弱",(int)lround(value/.5*100)];
+    return [NSString stringWithFormat:@"%@（约原版 %d%%）",@"较强",(int)lround(value/.5*100)];
+}
 // Every tap-confirmation goes through here so one setting decides whether it
 // happens and how strong it feels. iOS 13 gained an intensity argument; older
 // systems keep their fixed weight, so callers pass a value that matches the
-// style they picked.
+// style they picked. The slider's midpoint leaves that value untouched.
 static void FMHaptic(UIImpactFeedbackStyle style,CGFloat intensity) {
-    if(!BoolPref(@"haptic",YES)) return;
+    CGFloat strength=HapticStrength();
+    if(strength<=0) return;
+    CGFloat scaled=Clamp(intensity*strength/.5,0,1);
     UIImpactFeedbackGenerator *generator=[[UIImpactFeedbackGenerator alloc] initWithStyle:style];
     [generator prepare];
-    if(@available(iOS 13.0,*)) [generator impactOccurredWithIntensity:intensity];
+    if(@available(iOS 13.0,*)) [generator impactOccurredWithIntensity:scaled];
     else [generator impactOccurred];
 }
 static CGFloat FloatPref(NSString *key,CGFloat def) {
@@ -4095,7 +4110,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     BOOL current=[app[@"hidden"] boolValue];
     BOOL target=!current;
     if(FMSetAppHidden(app, target)) {
-        if(BoolPref(@"haptic", YES)) {
+        if(HapticStrength()>0) {
             if(@available(iOS 13.0, *)) {
                 [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
             }
@@ -5163,7 +5178,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
         [self note:@"LiveContainer 右横屏有 BUG，默认禁止向右横屏，按需启用。" in:s];
         [self spacer:s size:14];
         [self section:@"悬浮控件" sub:nil in:s];
-        [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
+        [self settingHapticSlider:s];
         [self spacer:s size:14];
         [self section:@"应用切换" sub:nil in:s];
         UIView *sw4=[self switchRowWithTitle:@"最近打开的 App 置顶" key:@"recentAppsFirst" defaultValue:NO tag:20];
@@ -5340,6 +5355,46 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     UIView *card=FMCreateGroupedCard(@[row],16);
     if(card) [s addArrangedSubview:card];
 }
+// A switch can only say off or on. The slider keeps that off position at its left
+// end, puts the old fixed feel in the middle and lets the right end reach twice
+// the intensity. Only the release writes, so dragging does not hammer the config
+// file, and the touch that lands the value previews the new strength.
+- (void)settingHapticSlider:(UIStackView*)s {
+    UIView *row=[UIView new];
+    row.translatesAutoresizingMaskIntoConstraints=NO;
+    [row.heightAnchor constraintEqualToConstant:76].active=YES;
+    UILabel *title=[self label:@"触觉反馈" size:15 weight:UIFontWeightMedium];
+    title.translatesAutoresizingMaskIntoConstraints=NO;
+    [row addSubview:title];
+    UILabel *hint=[self label:@"" size:12 weight:UIFontWeightRegular];
+    hint.tag=1113;
+    hint.textColor=FMThemeColor(FMColorSecondary);
+    hint.translatesAutoresizingMaskIntoConstraints=NO;
+    [row addSubview:hint];
+    UISlider *slider=[UISlider new];
+    slider.minimumValue=0;slider.maximumValue=1;
+    slider.value=HapticStrength();slider.tag=113;
+    slider.continuous=NO; // One persisted write on release, not each frame.
+    slider.tintColor=FMAccent();
+    slider.accessibilityLabel=@"触觉反馈强度";
+    slider.translatesAutoresizingMaskIntoConstraints=NO;
+    [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    [row addSubview:slider];
+    [NSLayoutConstraint activateConstraints:@[
+        [title.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
+        [title.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
+        [title.topAnchor constraintEqualToAnchor:row.topAnchor constant:12],
+        [slider.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
+        [slider.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
+        [slider.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
+        [hint.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
+        [hint.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
+        [hint.topAnchor constraintEqualToAnchor:slider.bottomAnchor constant:2]
+    ]];
+    hint.text=FMHapticSliderHint(slider.value);
+    UIView *card=FMCreateGroupedCard(@[row],16);
+    if(card) [s addArrangedSubview:card];
+}
 - (void)settingSlider:(UIStackView*)s title:(NSString*)title key:(NSString*)key min:(float)min max:(float)max def:(float)def tag:(NSInteger)tag {
     UILabel *l=[self label:title size:14 weight:UIFontWeightMedium];
     [s addArrangedSubview:l];
@@ -5368,7 +5423,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     [self section:@"基础交互" sub:nil in:s];
     [self settingSwitch:s title:@"最近打开的 App 置顶"
                  key:@"recentAppsFirst" defaultValue:NO tag:20];
-    [self settingSwitch:s title:@"触觉反馈" key:@"haptic" defaultValue:YES tag:1];
+    [self settingHapticSlider:s];
     [self settingSwitch:s title:@"切换前二次确认" key:@"confirm" defaultValue:YES tag:2];
     [self spacer:s size:10];
     [self diyPage:s];
@@ -6280,6 +6335,18 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 // The per-app bead opacity slider.
 - (void)sliderChanged:(UISlider*)slider {
+    if(slider.tag==113) {
+        CGFloat strength=round(Clamp(slider.value,0,1)*20)/20; // 5% steps keep the middle a real midpoint
+        slider.value=strength;
+        FMStagePreference(@"hapticStrength",@(strength));
+        // The boolean is what older builds read. Keep it in step with the slider.
+        SetPref(@"haptic",@(strength>0));
+        FMCommitStagedPreferences();
+        UILabel *hint=(UILabel *)[slider.superview viewWithTag:1113];
+        hint.text=FMHapticSliderHint(strength);
+        FMHaptic(UIImpactFeedbackStyleLight,.40);
+        return;
+    }
     if(slider.tag==112) {
         CGFloat bottomGap=round(Clamp(slider.value,0,80));
         slider.value=bottomGap;
@@ -6405,7 +6472,10 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 }
 - (void)performResetAllSettings {
     [self resetDockSettings];
-    SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
+    SetPref(@"showRestart",@YES);
+    SetPref(@"haptic",@YES);
+    FMStagePreference(@"hapticStrength",@(.5));
+    FMCommitStagedPreferences();
     SetPref(@"recentAppsFirst",@NO);
     SetPref(@"appearanceMode",@(0));
     SetPref(@"unlockOrientation",@YES);
@@ -6896,10 +6966,12 @@ static BOOL sHasAttemptedAutoLaunch=NO;
     BOOL newState=!current;
     SetPref(@"easterEggIOSTheme", @(newState));
     
-    if(@available(iOS 10.0, *)) {
-        UINotificationFeedbackGenerator *feedback=[UINotificationFeedbackGenerator new];
-        [feedback prepare];
-        [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
+    if(HapticStrength()>0) {
+        if(@available(iOS 10.0, *)) {
+            UINotificationFeedbackGenerator *feedback=[UINotificationFeedbackGenerator new];
+            [feedback prepare];
+            [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
+        }
     }
     
     [[FMManager shared] refreshUI];
