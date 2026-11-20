@@ -29,7 +29,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.43"
+#define FM_MENU_VERSION @"1.0.44"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -2450,11 +2450,16 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     // A dark drawer over a light host/guest used the same weak backing as
     // daytime, so the light application could visibly wash through it.
     // Keep daytime and the explicit Clear setting's lighter treatment intact.
-    if(strong && (FMHostUI() || (nativeGlass && FMMenuDark()))) {
+    //
+    // 精简模式保持原样：窄抽屉里那层不透明的夜间底把磨砂压成了实心色块，
+    // 拖拽时尤其明显。这一档只做宿主界面原有的轻微底衬。
+    BOOL compactDrawer=BoolPref(@"compactMode",NO);
+    BOOL wantsBacking=strong && (FMHostUI() || (nativeGlass && FMMenuDark() && !compactDrawer));
+    if(wantsBacking) {
         UIView *backing=[[UIView alloc] initWithFrame:material.contentView.bounds];
         backing.tag=9231; // Material backing, not content: the drawer morph leaves it alone.
         backing.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-        BOOL night=FMMenuDark();
+        BOOL night=FMMenuDark() && !compactDrawer;
         UIColor *base=night?FMThemeColor(FMColorBackground):FMThemeColor(FMColorSurface);
         CGFloat opacity=night?(clear?.56:.74):(clear?.42:.26);
         backing.backgroundColor=[base colorWithAlphaComponent:opacity];
