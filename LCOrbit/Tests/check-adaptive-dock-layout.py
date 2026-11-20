@@ -81,3 +81,13 @@ assert 'key:@"adaptiveActivePreviewOnly" defaultValue:NO tag:27' in menu
 assert 'case 27:key=@"adaptiveActivePreviewOnly";break;' in menu
 assert "for(NSDictionary *task in CurrentOverview.tasks)if(task[@\"window\"]==window)return YES;" in source
 print("Active-only preview option and static-icon ownership: PASS")
+
+# Host-owned icon posters must animate with the overview, otherwise a
+# plain pages.alpha dismissal leaves static cards visible on top of the app.
+assert "TaskFadeInLayer(other.staticPoster.layer,.045*step);" in source
+assert "if(card.staticPoster)card.preview.alpha=0;" in source
+assert "if(card.staticPoster)card.staticPoster.alpha=0;" in source
+assert "if(card.staticPoster)card.staticPoster.layer.cornerRadius=0;" in source
+assert '[card.staticPoster.layer removeAnimationForKey:@"task.stagger.in"];' in source
+assert '[self.pages insertSubview:' not in source
+print("Host poster animation synchronization: PASS")
