@@ -3369,9 +3369,10 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
         if(child.tag!=9217 && child.tag!=9231) child.alpha=hidden?0:1;
 }
 // Water handles use the 1.0.13 entrance: the complete drawer slides in as one
-// piece, with its final outline already in place. The items still honour the
-// pop-in setting: they stay hidden while the shell slides, then come in
-// one by one (or all at once) once it has landed.
+// piece, with its final outline already in place, and the items come in on the
+// same beat rather than after it. Hiding them until the shell landed left the
+// user looking at an empty drawer that filled up afterwards, which reads as two
+// separate events instead of one motion.
 - (void)slideDropletDrawerOpen {
     UIView *drawer=self.panel;
     if(!drawer) return;
@@ -3381,8 +3382,8 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     _morphTarget=1;
     _drawerSlideActive=YES;
     _drawerSlideRestCenter=drawer.center;
-    _popRevealed=instant;_popStarted=instant;
-    if(!instant) [self setDrawerContentsHidden:YES inPanel:drawer];
+    _popRevealed=YES;_popStarted=YES;
+    [self setDrawerContentsHidden:NO inPanel:drawer];
     drawer.hidden=NO;self.dismissLayer.hidden=NO;
     drawer.userInteractionEnabled=NO;self.dismissLayer.userInteractionEnabled=NO;
     self.orb.alpha=0;self.orb.userInteractionEnabled=NO;
@@ -3397,18 +3398,17 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     drawer.center=CGPointMake(destination.x+(self.left?-travel:travel),destination.y);
     self.dismissLayer.alpha=0;
     NSUInteger generation=++self.morphGeneration;
+    // The items ride along with the shell: the stagger starts on this frame while
+    // the drawer is still travelling, so the content arrives with it.
+    [self popContent:YES];
     [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.86
         initialSpringVelocity:.3 options:UIViewAnimationOptionBeginFromCurrentState
         animations:^{
             drawer.center=destination;
             self.dismissLayer.alpha=1;
         } completion:^(BOOL finished) {
-            [self setDrawerContentsHidden:NO inPanel:drawer];
-            if(self.panel==drawer && generation==self.morphGeneration && self->_drawerSlideActive) {
-                self->_popRevealed=YES;self->_popStarted=YES;
-                [self popContent:YES];
+            if(self.panel==drawer && generation==self.morphGeneration && self->_drawerSlideActive)
                 [self finishDrawerMorph];
-            }
         }];
 }
 // Plays the open or close transition of a drawer that is already built.
