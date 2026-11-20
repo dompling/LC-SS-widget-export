@@ -276,6 +276,7 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic,strong) UIView *touchShield;
 @property(nonatomic,strong) UIImageView *icon;
 @property(nonatomic,strong) UIImageView *centerIcon;
+@property(nonatomic,strong) UIView *staticPoster;
 @property(nonatomic,strong) UILabel *name;
 @property(nonatomic,strong) LCOrbitTaskPlacement *placement;
 @property(nonatomic) CGAffineTransform restingTransform;
@@ -410,23 +411,48 @@ static UIWindow *OverviewWindow;
             // transparent overview is the sole touch surface for gestures.
             placement.view.userInteractionEnabled=NO;placement.view.accessibilityElementsHidden=YES;
         } else {
-            card.preview.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
-            card.preview.layer.borderWidth=.5;
-            card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
             if(self.activePreviewOnly && !TaskUsesPiP(controller)) {
-                // Keep the app's real window in its existing LC state.
-                // The solid preview shields it; just this icon is rendered.
-                UIImage *artwork=card.icon.image;
-                card.centerIcon=[[UIImageView alloc] initWithImage:artwork];
+                // The overview lives in a *higher UIWindow*. Any opaque icon
+                // card in it will cover the live scene regardless of card order.
+                // Render static artwork beside the real scene instead, using
+                // the same host-layer zPosition as all the live task previews.
+                UIView *posterParent=self.placements.firstObject.parent ?: self.backdrop.superview;
+                UIView *poster=[UIView new];
+                poster.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
+                poster.layer.cornerRadius=28;
+                poster.layer.cornerCurve=kCACornerCurveContinuous;
+                poster.clipsToBounds=YES;
+                poster.layer.borderWidth=.5;
+                poster.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
+                poster.userInteractionEnabled=NO;
+                poster.accessibilityIdentifier=[@"orbit.task.static-poster." stringByAppendingString:token];
+                if(posterParent) {
+                    [posterParent addSubview:poster];
+                    card.staticPoster=poster;
+                } else {
+                    // Defensive fallback: no host available, so leave the icon
+                    // card in the overview rather than showing an empty card.
+                    [poster removeFromSuperview];
+                    poster=card.preview;
+                }
+                if(poster==card.preview) {
+                    poster.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
+                    poster.layer.borderWidth=.5;
+                    poster.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
+                }
+                card.centerIcon=[[UIImageView alloc] initWithImage:card.icon.image];
                 card.centerIcon.accessibilityIdentifier=[@"orbit.task.center-icon." stringByAppendingString:token];
                 card.centerIcon.contentMode=UIViewContentModeScaleAspectFit;
                 card.centerIcon.tintColor=UIColor.whiteColor;
                 card.centerIcon.layer.cornerRadius=18;
                 card.centerIcon.layer.cornerCurve=kCACornerCurveContinuous;
                 card.centerIcon.clipsToBounds=YES;
-                [card.preview addSubview:card.centerIcon];
+                [poster addSubview:card.centerIcon];
                 card.accessibilityHint=@"静态图标预览，轻点切换到此 App";
             } else {
+                card.preview.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
+                card.preview.layer.borderWidth=.5;
+                card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
                 UIImageView *pip=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pip.fill"]];
                 pip.contentMode=UIViewContentModeScaleAspectFit;
                 pip.tintColor=UIColor.whiteColor;
@@ -549,7 +575,7 @@ static UIWindow *OverviewWindow;
         card.center=CGPointMake(centerX+(index/self.cardsPerPage)*self.stride,centerY);
         card.preview.frame=CGRectMake(0,34,cardWidth,cardHeight);card.touchShield.frame=card.preview.frame;
         [card.preview viewWithTag:12].frame=CGRectMake((cardWidth-54)/2,(cardHeight-54)/2,54,54);
-        if(card.centerIcon) {
+        if(card.centerIcon && !card.staticPoster) {
             CGFloat iconSize=MIN(94,MAX(44,MIN(cardWidth,cardHeight)*.30));
             card.centerIcon.frame=CGRectMake((cardWidth-iconSize)*.5,(cardHeight-iconSize)*.5,iconSize,iconSize);
             card.centerIcon.layer.cornerRadius=iconSize*.225;
@@ -573,6 +599,22 @@ static UIWindow *OverviewWindow;
                              self.pages.bounds.size.height+2);
     for(LCOrbitTaskCard *card in self.cards) {
         if(scrolling&&!CGRectIntersectsRect(card.frame,nearby))continue;
+        if(card.staticPoster) {
+            UIView *poster=card.staticPoster;
+            CGRect frame=[card.preview convertRect:card.preview.bounds toView:poster.superview];
+            if(!CGRectIsEmpty(frame) && isfinite(frame.origin.x) && isfinite(frame.origin.y)
+               && isfinite(frame.size.width) && isfinite(frame.size.height)) {
+                poster.frame=frame;
+                poster.layer.cornerRadius=card.preview.layer.cornerRadius*fabs(card.transform.a);
+                CGFloat iconSize=MIN(94,MAX(44,MIN(frame.size.width,frame.size.height)*.30));
+                card.centerIcon.frame=CGRectMake((frame.size.width-iconSize)*.5,
+                                                 (frame.size.height-iconSize)*.5,
+                                                 iconSize,iconSize);
+                card.centerIcon.layer.cornerRadius=iconSize*.225;
+            }
+            poster.alpha=card.alpha*card.preview.alpha;
+            poster.hidden=card.hidden||card.preview.hidden;
+        }
         LCOrbitTaskPlacement *placement=card.placement;
         if(!placement)continue;
         CGRect frame=[card.preview convertRect:card.preview.bounds toView:placement.parent];
@@ -622,6 +664,8 @@ static UIWindow *OverviewWindow;
         CGFloat z=2+card.index;
         if(card.placement && card.placement.view.layer.zPosition!=z)
             card.placement.view.layer.zPosition=z;
+        if(card.staticPoster && card.staticPoster.layer.zPosition!=z)
+            card.staticPoster.layer.zPosition=z;
         if(card.alpha!=1)card.alpha=1;
     }
     CGFloat leftEdge=self.pages.contentOffset.x,rightEdge=leftEdge+self.pages.bounds.size.width;
@@ -982,6 +1026,7 @@ static UIWindow *OverviewWindow;
     NSMutableArray *cards=[self.cards mutableCopy];
     LCOrbitTaskCard *closed=cards[index];
     [cards removeObjectAtIndex:index];
+    [closed.staticPoster removeFromSuperview];
     [closed removeFromSuperview];
 
     self.tasks=tasks;
@@ -1132,6 +1177,12 @@ static UIWindow *OverviewWindow;
     [self.transitionAnimator stopAnimation:YES];self.transitionAnimator=nil;
     [self.reboundAnimator stopAnimation:YES];self.reboundAnimator=nil;
     [self.backdrop removeFromSuperview];self.backdrop=nil;
+    // The static posters are temporary host-surface siblings, not Guest views.
+    // Remove them before restoring any real windows or their constraints.
+    for(LCOrbitTaskCard *card in self.cards) {
+        [card.staticPoster removeFromSuperview];
+        card.staticPoster=nil;
+    }
     NSArray *ordered=[self.placements copy];
     for(LCOrbitTaskPlacement *placement in ordered) [placement restore];
     for(LCOrbitTaskPlacement *placement in ordered) [placement restoreConstraints];
