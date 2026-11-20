@@ -582,6 +582,59 @@ static void Run(UIWindowScene *scene) {
         Check(@"failed-or-cancelled-launch-clears-cover",coverBeforeCancel&&!LaunchCover(scene));
         [coldWindow.view removeFromSuperview];[coldWindow removeFromParentViewController];
     }
+
+    // Verify the optional low-power preview mode against the real production
+    // switcher and UIKit host. Background scenes must remain untouched.
+    NSArray *savedTasks=[Tasks copy];
+    UIViewController *savedActive=DockActiveWindow;
+    id savedMode=[NSUserDefaults.standardUserDefaults objectForKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
+    NSMutableDictionary *iconOnly=[Task(@"STATIC",UIColor.systemOrangeColor) mutableCopy];
+    NSMutableDictionary *liveOnly=[Task(@"LIVE",UIColor.systemBlueColor) mutableCopy];
+    iconOnly[@"active"]=@NO;liveOnly[@"active"]=@YES;
+    UIViewController *staticWindow=iconOnly[@"window"],*liveWindow=liveOnly[@"window"];
+    staticWindow.view.hidden=YES;
+    UIView *staticParent=staticWindow.view.superview;
+    CGRect staticFrame=staticWindow.view.frame;
+    [Tasks removeAllObjects];[Tasks addObjectsFromArray:@[iconOnly,liveOnly]];
+    DockActiveWindow=liveWindow;
+    [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
+    [switcher presentInScene:scene apps:@[iconOnly,liveOnly] launchHandler:nil error:NULL];
+    UIWindow *iconOverview=Overview(scene);
+    UIView *placeholder=Find(Host.rootViewController.view,@"orbit.task.center-icon.STATIC");
+    UIView *poster=Find(Host.rootViewController.view,@"orbit.task.static-poster.STATIC");
+    UIView *realCard=Find(iconOverview,@"orbit.task.preview.LIVE");
+    Check(@"icon-only-preview-centers-background-app-artwork",
+          placeholder&&poster&&placeholder.superview==poster&&
+          fabs(CGRectGetMidX(placeholder.frame)-CGRectGetMidX(poster.bounds))<1&&
+          fabs(CGRectGetMidY(placeholder.frame)-CGRectGetMidY(poster.bounds))<1);
+    Check(@"icon-only-preview-keeps-original-live-card-depth",
+          poster&&realCard&&poster.superview==liveWindow.view.superview&&
+          poster.layer.zPosition<liveWindow.view.layer.zPosition&&
+          !Find(iconOverview,@"orbit.task.center-icon.STATIC")&&
+          !Find(iconOverview,@"orbit.task.static-poster.STATIC"));
+    Check(@"icon-only-preview-does-not-borrow-background-window",
+          staticWindow.view.hidden&&staticWindow.view.superview==staticParent&&
+          CGRectEqualToRect(staticWindow.view.frame,staticFrame)&&realCard!=nil&&
+          !liveWindow.view.hidden&&[switcher isPresentingWindow:staticWindow]);
+    [switcher dismiss];
+    Check(@"icon-only-poster-cleans-up-on-dismiss",
+          !Find(Host.rootViewController.view,@"orbit.task.static-poster.STATIC")&&
+          !Find(Host.rootViewController.view,@"orbit.task.center-icon.STATIC"));
+    Check(@"icon-only-preview-restores-live-app-window",liveWindow.view.superview!=nil&&
+          ![switcher isPresentingWindow:liveWindow]);
+    [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
+    [switcher presentInScene:scene apps:@[iconOnly,liveOnly] launchHandler:nil error:NULL];
+    Check(@"preview-toggle-off-keeps-all-running-apps-live",
+          !Find(Overview(scene),@"orbit.task.center-icon.STATIC") &&
+          !staticWindow.view.hidden);
+    [switcher dismiss];
+    if(savedMode) [NSUserDefaults.standardUserDefaults setObject:savedMode forKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
+    DockActiveWindow=savedActive;
+    [Tasks removeAllObjects];[Tasks addObjectsFromArray:savedTasks];
+    [staticWindow.view removeFromSuperview];[staticWindow removeFromParentViewController];
+    [liveWindow.view removeFromSuperview];[liveWindow removeFromParentViewController];
+
     GridPresentation=[NSProcessInfo.processInfo.environment[@"ORBIT_GRID_SCREENSHOT"] boolValue];
     if(!GridPresentation&&visualStatusIcons)
         [switcher presentInScene:scene apps:visualStatusApps dockIconSize:36 iconProvider:visualStatusIcons launchHandler:nil error:NULL];

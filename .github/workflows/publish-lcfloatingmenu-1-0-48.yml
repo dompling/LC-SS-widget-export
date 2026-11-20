@@ -1,0 +1,45 @@
+name: One-off LCFloatingMenu 1.0.48 tag dispatch
+
+# The release itself is ALWAYS built by lc-floating-menu.yml from the
+# immutable semantic-version tag. This one-shot bridge is removed after use.
+on:
+  push:
+    branches: [lcss-original]
+    paths:
+      - 'LCFloatingMenu/RELEASE_NOTES_1.0.48.md'
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: lcfloatingmenu-tag-1.0.48
+  cancel-in-progress: false
+jobs:
+  dispatch-version-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify version and create version tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="1.0.48"
+          test "$GITHUB_REF_NAME" = "lcss-original"
+          grep -Fqx '#define FM_MENU_VERSION @"1.0.48"' <(grep '^#define FM_MENU_VERSION ' LCFloatingMenu/LCFloatingMenu.m)
+          test -s "LCFloatingMenu/RELEASE_NOTES_${TAG}.md"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} already exists; refusing to move it."
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag "${TAG}" "$GITHUB_SHA"
+          git push origin "refs/tags/${TAG}"
+          # GITHUB_TOKEN-created tag pushes do not automatically trigger CI.
+          # Explicit workflow_dispatch is allowed, and the downstream
+          # publish job still requires refs/tags/1.0.48.
+          gh workflow run lc-floating-menu.yml --ref "${TAG}"
+          echo "Tagged ${TAG} at $GITHUB_SHA and requested tag build."

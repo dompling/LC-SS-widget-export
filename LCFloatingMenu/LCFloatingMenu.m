@@ -29,7 +29,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.47"
+#define FM_MENU_VERSION @"1.0.48"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -5163,6 +5163,8 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
                 [self addRow:presentation height:38 to:s];
                 if(![LCOrbitMultitask usesNativeTaskWindows]) {
                     [self spacer:s size:10];
+                    [self settingSwitch:s title:@"仅当前任务显示实时画面" key:@"adaptiveActivePreviewOnly" defaultValue:NO tag:27];
+                    [self spacer:s size:10];
                     [self section:@"自适应 Dock 位置" sub:@"向右移动滑块可将 Dock 上移，0 为最贴近底部安全区；重新打开切换界面后生效。" in:s];
                     [self settingSlider:s title:@"距底部距离" key:@"adaptiveDockBottomGap" min:0 max:80 def:4 tag:112];
                 }
@@ -6309,6 +6311,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         case 24:key=@"lockBanRightLandscape";break;
         case 25:key=@"autoCheckUpdate";break;
         case 26:key=@"autoLaunchLastApp";break;
+        case 27:key=@"adaptiveActivePreviewOnly";break;
         case 4:key=AppPref();break;
         default:return;
     }
@@ -6329,6 +6332,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
     if(sw.tag==26) {
         FMLog(@"auto-launch-last-app",sw.isOn?@"on":@"off");
+    }
+    if(sw.tag==27) {
+        FMLog(@"adaptive-active-preview-only",sw.isOn?@"on":@"off");
     }
     if(sw.tag==23) {
         [self syncScreenAwakeState];

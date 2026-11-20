@@ -10,6 +10,12 @@ static id TaskObject(id object,SEL selector) {
 }
 // 0 means closest to the home-indicator safe area; larger values lift the Dock.
 // Read once when the overview opens instead of loading preferences during layout.
+// A low-power switcher option. One real scene stays live; other cards render
+// static app icons without ever un-hiding or resizing their remote windows.
+static BOOL TaskActivePreviewOnly(void) {
+    id stored=[[LCOrbitStorage preferences] objectForKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
+    return stored?[stored boolValue]:NO;
+}
 static CGFloat TaskDockBottomGap(void) {
     id stored=[[LCOrbitStorage preferences] objectForKey:@"LCFloatingMenu.adaptiveDockBottomGap"];
     CGFloat gap=stored?[stored doubleValue]:4;
@@ -89,7 +95,10 @@ static void SuppressRemoteLayers(CALayer *layer,Class hostClass,NSMapTable<CALay
     if((self=[super init])) {
         _controller=controller;_view=controller.view;_parent=_view.superview;
         _hidden=_view.hidden;_interactive=_view.userInteractionEnabled;
-        _accessibilityHidden=_view.accessibilityElementsHidden;_firstResponder=TaskFirstResponder(_view);
+        _accessibilityHidden=_view.accessibilityElementsHidden;
+        // Only the foreground guest can own the active responder. Searching the
+        // full UIKit tree of every background guest stalls large task decks.
+        _firstResponder=controller==[LCOrbitMultitask activeWindow]?TaskFirstResponder(_view):nil;
         _originalFrame=[_view convertRect:_view.bounds toView:_parent];
         _center=_view.center;_transform=_view.transform;_alpha=_view.alpha;_depth=_view.layer.zPosition;
         _clipsToBounds=_view.clipsToBounds;_cornerRadius=_view.layer.cornerRadius;_cornerCurve=_view.layer.cornerCurve;
@@ -266,6 +275,8 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic,strong) UIView *preview;
 @property(nonatomic,strong) UIView *touchShield;
 @property(nonatomic,strong) UIImageView *icon;
+@property(nonatomic,strong) UIImageView *centerIcon;
+@property(nonatomic,strong) UIView *staticPoster;
 @property(nonatomic,strong) UILabel *name;
 @property(nonatomic,strong) LCOrbitTaskPlacement *placement;
 @property(nonatomic) CGAffineTransform restingTransform;
@@ -279,9 +290,11 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic) CGFloat dockIconSize;
 @property(nonatomic) CGFloat dockBottomGap;
 @property(nonatomic) BOOL gridPresentation;
+@property(nonatomic) BOOL activePreviewOnly;
 @property(nonatomic) BOOL initialDockVisible;
 @property(nonatomic) NSUInteger cardsPerPage;
-@property(nonatomic,strong) UIVisualEffectView *dock;
+@property(nonatomic,strong) UIView *dock;
+@property(nonatomic,strong) UIVisualEffectView *dockGlass;
 @property(nonatomic,strong) UIVisualEffectView *backdrop;
 @property(nonatomic,strong) UILabel *emptyLabel;
 @property(nonatomic,strong) UIScrollView *dockScroll;
@@ -357,8 +370,13 @@ static UIWindow *OverviewWindow;
         UILabel *empty=[UILabel new];empty.accessibilityIdentifier=@"orbit.task.empty";empty.text=@"没有正在运行的 App";empty.textAlignment=NSTextAlignmentCenter;empty.font=[UIFont systemFontOfSize:15 weight:UIFontWeightMedium];empty.textColor=[UIColor.whiteColor colorWithAlphaComponent:.82];[self.view addSubview:empty];self.emptyLabel=empty;
     }
     if(self.apps.count) {
-        self.dock=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];self.dock.accessibilityIdentifier=@"orbit.dock";self.dock.layer.cornerRadius=19;self.dock.layer.cornerCurve=kCACornerCurveContinuous;self.dock.clipsToBounds=YES;self.dock.layer.borderWidth=.5;self.dock.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.16].CGColor;[self.view addSubview:self.dock];
-        self.dockScroll=[UIScrollView new];self.dockScroll.accessibilityIdentifier=@"orbit.dock.scroll";self.dockScroll.delegate=self;self.dockScroll.showsHorizontalScrollIndicator=NO;self.dockScroll.showsVerticalScrollIndicator=NO;self.dockScroll.alwaysBounceHorizontal=YES;self.dockScroll.directionalLockEnabled=YES;self.dockScroll.contentInsetAdjustmentBehavior=UIScrollViewContentInsetAdjustmentNever;[self.dock.contentView addSubview:self.dockScroll];
+        // The icons must not live inside UIVisualEffectView.contentView. On
+        // newer UIKit glass implementations its internal content tree can
+        // change when the effect is animated to nil, leaving a visible rail
+        // with no icon artwork. Keep glass and icons as sibling layers.
+        self.dock=[UIView new];self.dock.accessibilityIdentifier=@"orbit.dock";self.dock.layer.cornerRadius=19;self.dock.layer.cornerCurve=kCACornerCurveContinuous;self.dock.clipsToBounds=YES;self.dock.layer.borderWidth=.5;self.dock.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.16].CGColor;[self.view addSubview:self.dock];
+        self.dockGlass=[[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];self.dockGlass.accessibilityIdentifier=@"orbit.dock.glass";self.dockGlass.userInteractionEnabled=NO;self.dockGlass.frame=self.dock.bounds;self.dockGlass.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;[self.dock addSubview:self.dockGlass];
+        self.dockScroll=[UIScrollView new];self.dockScroll.accessibilityIdentifier=@"orbit.dock.scroll";self.dockScroll.delegate=self;self.dockScroll.showsHorizontalScrollIndicator=NO;self.dockScroll.showsVerticalScrollIndicator=NO;self.dockScroll.alwaysBounceHorizontal=YES;self.dockScroll.directionalLockEnabled=YES;self.dockScroll.contentInsetAdjustmentBehavior=UIScrollViewContentInsetAdjustmentNever;[self.dock addSubview:self.dockScroll];
         NSDictionary *active=nil;
         for(NSDictionary *task in self.tasks)if([task[@"active"] boolValue]){active=task;break;}
         for(NSUInteger index=0;index<self.apps.count;index++) {
@@ -393,10 +411,55 @@ static UIWindow *OverviewWindow;
             // transparent overview is the sole touch surface for gestures.
             placement.view.userInteractionEnabled=NO;placement.view.accessibilityElementsHidden=YES;
         } else {
-            card.preview.backgroundColor=[UIColor colorWithWhite:.18 alpha:1];
-            card.preview.layer.borderWidth=.5;
-            card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.25].CGColor;
-            UIImageView *pip=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pip.fill"]];pip.contentMode=UIViewContentModeScaleAspectFit;pip.tintColor=UIColor.whiteColor;pip.tag=12;pip.accessibilityIdentifier=[@"orbit.task.pip." stringByAppendingString:token];[card.preview addSubview:pip];card.accessibilityHint=@"此 App 的画面保留在画中画中";
+            if(self.activePreviewOnly && !TaskUsesPiP(controller)) {
+                // The overview lives in a *higher UIWindow*. Any opaque icon
+                // card in it will cover the live scene regardless of card order.
+                // Render static artwork beside the real scene instead, using
+                // the same host-layer zPosition as all the live task previews.
+                UIView *posterParent=self.placements.firstObject.parent ?: self.backdrop.superview;
+                UIView *poster=[UIView new];
+                poster.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
+                poster.layer.cornerRadius=28;
+                poster.layer.cornerCurve=kCACornerCurveContinuous;
+                poster.clipsToBounds=YES;
+                poster.layer.borderWidth=.5;
+                poster.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
+                poster.userInteractionEnabled=NO;
+                poster.accessibilityIdentifier=[@"orbit.task.static-poster." stringByAppendingString:token];
+                if(posterParent) {
+                    [posterParent addSubview:poster];
+                    card.staticPoster=poster;
+                } else {
+                    // Defensive fallback: no host available, so leave the icon
+                    // card in the overview rather than showing an empty card.
+                    [poster removeFromSuperview];
+                    poster=card.preview;
+                }
+                if(poster==card.preview) {
+                    poster.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
+                    poster.layer.borderWidth=.5;
+                    poster.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
+                }
+                card.centerIcon=[[UIImageView alloc] initWithImage:card.icon.image];
+                card.centerIcon.accessibilityIdentifier=[@"orbit.task.center-icon." stringByAppendingString:token];
+                card.centerIcon.contentMode=UIViewContentModeScaleAspectFit;
+                card.centerIcon.tintColor=UIColor.whiteColor;
+                card.centerIcon.layer.cornerRadius=18;
+                card.centerIcon.layer.cornerCurve=kCACornerCurveContinuous;
+                card.centerIcon.clipsToBounds=YES;
+                [poster addSubview:card.centerIcon];
+                card.accessibilityHint=@"静态图标预览，轻点切换到此 App";
+            } else {
+                card.preview.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
+                card.preview.layer.borderWidth=.5;
+                card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
+                UIImageView *pip=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pip.fill"]];
+                pip.contentMode=UIViewContentModeScaleAspectFit;
+                pip.tintColor=UIColor.whiteColor;
+                pip.tag=12;
+                pip.accessibilityIdentifier=[@"orbit.task.pip." stringByAppendingString:token];
+                [card.preview addSubview:pip];card.accessibilityHint=@"此 App 的画面保留在画中画中";
+            }
         }
         // The entire App-content rectangle belongs to task gestures, including
         // areas that depict buttons, lists, web views or a playing video.
@@ -512,6 +575,11 @@ static UIWindow *OverviewWindow;
         card.center=CGPointMake(centerX+(index/self.cardsPerPage)*self.stride,centerY);
         card.preview.frame=CGRectMake(0,34,cardWidth,cardHeight);card.touchShield.frame=card.preview.frame;
         [card.preview viewWithTag:12].frame=CGRectMake((cardWidth-54)/2,(cardHeight-54)/2,54,54);
+        if(card.centerIcon && !card.staticPoster) {
+            CGFloat iconSize=MIN(94,MAX(44,MIN(cardWidth,cardHeight)*.30));
+            card.centerIcon.frame=CGRectMake((cardWidth-iconSize)*.5,(cardHeight-iconSize)*.5,iconSize,iconSize);
+            card.centerIcon.layer.cornerRadius=iconSize*.225;
+        }
     }
     self.selectedIndex=selectedIndex;
     self.pages.contentOffset=CGPointMake((selectedIndex/self.cardsPerPage)*self.stride,0);
@@ -520,7 +588,33 @@ static UIWindow *OverviewWindow;
 }
 - (void)updateLiveGeometry {
     if(self.restoring)return;
+    // During a swipe, update only the currently visible cards and one
+    // neighboring stride on either side. Every task has already received its
+    // initial offscreen placement before dragging begins. This avoids
+    // reconfiguring every remote app layer at each scroll callback.
+    BOOL scrolling=self.scrollingDeck||self.pages.dragging||self.pages.decelerating;
+    CGFloat preload=MAX(1,self.stride);
+    CGRect nearby=CGRectMake(self.pages.contentOffset.x-preload,-1,
+                             self.pages.bounds.size.width+preload*2,
+                             self.pages.bounds.size.height+2);
     for(LCOrbitTaskCard *card in self.cards) {
+        if(scrolling&&!CGRectIntersectsRect(card.frame,nearby))continue;
+        if(card.staticPoster) {
+            UIView *poster=card.staticPoster;
+            CGRect frame=[card.preview convertRect:card.preview.bounds toView:poster.superview];
+            if(!CGRectIsEmpty(frame) && isfinite(frame.origin.x) && isfinite(frame.origin.y)
+               && isfinite(frame.size.width) && isfinite(frame.size.height)) {
+                poster.frame=frame;
+                poster.layer.cornerRadius=card.preview.layer.cornerRadius*fabs(card.transform.a);
+                CGFloat iconSize=MIN(94,MAX(44,MIN(frame.size.width,frame.size.height)*.30));
+                card.centerIcon.frame=CGRectMake((frame.size.width-iconSize)*.5,
+                                                 (frame.size.height-iconSize)*.5,
+                                                 iconSize,iconSize);
+                card.centerIcon.layer.cornerRadius=iconSize*.225;
+            }
+            poster.alpha=card.alpha*card.preview.alpha;
+            poster.hidden=card.hidden||card.preview.hidden;
+        }
         LCOrbitTaskPlacement *placement=card.placement;
         if(!placement)continue;
         CGRect frame=[card.preview convertRect:card.preview.bounds toView:placement.parent];
@@ -546,7 +640,15 @@ static UIWindow *OverviewWindow;
 - (void)updateDeck {
     if(self.restoring||self.transitioning||!self.stride||!self.cards.count)return;
     CGFloat pagePosition=self.pages.contentOffset.x/self.stride;
+    // During scrolling, skip visual updates for cards beyond the visible
+    // page and its immediate neighbors. They catch up on entering the range.
+    BOOL scrolling=self.scrollingDeck||self.pages.dragging||self.pages.decelerating;
+    CGFloat preload=MAX(1,self.stride);
+    CGRect nearby=CGRectMake(self.pages.contentOffset.x-preload,-1,
+                             self.pages.bounds.size.width+preload*2,
+                             self.pages.bounds.size.height+2);
     for(LCOrbitTaskCard *card in self.cards) {
+        if(scrolling&&!CGRectIntersectsRect(card.frame,nearby))continue;
         card.restingTransform=CGAffineTransformIdentity;
         if(!self.gridPresentation) {
             CGFloat distance=(CGFloat)card.index-pagePosition;
@@ -556,9 +658,15 @@ static UIWindow *OverviewWindow;
             CGFloat scale=1+.018*MAX(-3,MIN(1,distance));
             card.restingTransform=CGAffineTransformMake(scale,0,0,scale,deckX-pageX,0);
         }
-        if(card!=self.draggingCard&&card!=self.reboundingCard)card.transform=card.restingTransform;
-        card.placement.view.layer.zPosition=2+card.index;
-        card.alpha=1;
+        if(card!=self.draggingCard&&card!=self.reboundingCard &&
+           !CGAffineTransformEqualToTransform(card.transform,card.restingTransform))
+            card.transform=card.restingTransform;
+        CGFloat z=2+card.index;
+        if(card.placement && card.placement.view.layer.zPosition!=z)
+            card.placement.view.layer.zPosition=z;
+        if(card.staticPoster && card.staticPoster.layer.zPosition!=z)
+            card.staticPoster.layer.zPosition=z;
+        if(card.alpha!=1)card.alpha=1;
     }
     CGFloat leftEdge=self.pages.contentOffset.x,rightEdge=leftEdge+self.pages.bounds.size.width;
     for(LCOrbitTaskCard *card in self.cards) {
@@ -586,8 +694,14 @@ static UIWindow *OverviewWindow;
         NSUInteger lastPage=(self.cards.count-1)/self.cardsPerPage;
         [self selectPage:MIN(lastPage,(NSUInteger)MAX(0,llround(scrollView.contentOffset.x/self.stride)))];
     }
+    // UIKit scroll delegates run every frame. Disable Core Animation's
+    // implicit actions for the geometry updates, without disabling the
+    // explicit spring animations used by entry, exit, and task selection.
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     [self updateDeck];
     [self updateLiveGeometry];
+    [CATransaction commit];
 }
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
     if(scrollView!=self.pages)return;
@@ -637,7 +751,7 @@ static UIWindow *OverviewWindow;
 - (void)setDockVisible:(BOOL)visible {
     self.lastDockVisibilityReason=visible?@"visible":@"hidden";
     self.dock.transform=visible?CGAffineTransformIdentity:CGAffineTransformMakeTranslation(0,32);
-    self.dock.effect=visible?[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]:nil;
+    self.dockGlass.effect=visible?[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]:nil;
     self.dockScroll.alpha=visible?1:0;
     self.emptyLabel.alpha=visible?1:0;
 }
@@ -705,7 +819,10 @@ static UIWindow *OverviewWindow;
         card.preview.alpha=card.placement?0:1;
         [self alignPreviewOfCard:card toFrame:[self expandedFrameForCard:card]];
         [self updateLiveGeometry];
-        card.placement.view.layer.cornerRadius=card.placement.cornerRadius;
+        // Icon-only posters live in the host layer and must expand with the
+        // card instead of remaining a rounded tile during task activation.
+        if(card.staticPoster)card.staticPoster.layer.cornerRadius=0;
+        if(card.placement)card.placement.view.layer.cornerRadius=card.placement.cornerRadius;
     } completion:completion];
 }
 - (void)dockAppTapped:(LCOrbitTaskDockButton *)button {
@@ -750,6 +867,10 @@ static UIWindow *OverviewWindow;
             placement.view.alpha=0;
             placement.shadow.alpha=0;
         }
+        // The icon-only cards live outside the overview's pages/window.
+        // Hide those host-layer posters alongside the live task views.
+        for(LCOrbitTaskCard *card in self.cards)
+            if(card.staticPoster)card.staticPoster.alpha=0;
         [self setDockVisible:NO];
         surface.frame=self.view.bounds;
         surface.layer.cornerRadius=0;
@@ -912,6 +1033,7 @@ static UIWindow *OverviewWindow;
     NSMutableArray *cards=[self.cards mutableCopy];
     LCOrbitTaskCard *closed=cards[index];
     [cards removeObjectAtIndex:index];
+    [closed.staticPoster removeFromSuperview];
     [closed removeFromSuperview];
 
     self.tasks=tasks;
@@ -979,15 +1101,26 @@ static UIWindow *OverviewWindow;
         for(LCOrbitTaskPlacement *placement in owner.placements)placement.view.alpha=1;
         [owner updateLiveGeometry];
         if(staged) {
+            // Stagger the visible cards only; the rest of the live scenes
+            // should not receive three offscreen CA animations each.
             NSUInteger step=0;
+            NSUInteger currentPage=owner.selectedIndex/MAX((NSUInteger)1,owner.cardsPerPage);
             for(LCOrbitTaskCard *other in owner.cards) {
+                NSUInteger page=other.index/MAX((NSUInteger)1,owner.cardsPerPage);
+                if(page>currentPage+1 || (currentPage>0 && page+1<currentPage))continue;
                 TaskFadeInLayer(other.layer,.045*step);
                 TaskFadeInLayer(other.placement.view.layer,.045*step);
                 TaskFadeInLayer(other.placement.shadow.layer,.045*step);
+                TaskFadeInLayer(other.staticPoster.layer,.045*step);
                 step++;
             }
             NSUInteger buttonStep=0;
-            for(UIView *button in owner.dockScroll.subviews)TaskFadeInLayer(button.layer,.03*buttonStep++);
+            CGRect visibleDock=CGRectMake(owner.dockScroll.contentOffset.x,0,
+                                          owner.dockScroll.bounds.size.width,
+                                          owner.dockScroll.bounds.size.height);
+            for(UIView *button in owner.dockScroll.subviews)
+                if(CGRectIntersectsRect(button.frame,visibleDock))
+                    TaskFadeInLayer(button.layer,.03*buttonStep++);
         }
     }];
     [self.entranceAnimator addCompletion:^(UIViewAnimatingPosition position){weakSelf.entranceAnimator=nil;}];
@@ -1030,8 +1163,12 @@ static UIWindow *OverviewWindow;
         self.pages.alpha=0;
         for(LCOrbitTaskCard *card in self.cards) {
             [card.layer removeAnimationForKey:@"task.stagger.in"];
+            [card.staticPoster.layer removeAnimationForKey:@"task.stagger.in"];
             card.transform=CGAffineTransformConcat(CGAffineTransformScale(card.restingTransform,.86,.86),CGAffineTransformMakeTranslation(0,46));
             card.placement.view.alpha=0;
+            // pages.alpha alone cannot fade sibling views in the host.
+            // UpdateLiveGeometry derives their opacity from preview.alpha.
+            if(card.staticPoster)card.preview.alpha=0;
         }
         [self updateLiveGeometry];
     } completion:completion];
@@ -1052,6 +1189,12 @@ static UIWindow *OverviewWindow;
     [self.transitionAnimator stopAnimation:YES];self.transitionAnimator=nil;
     [self.reboundAnimator stopAnimation:YES];self.reboundAnimator=nil;
     [self.backdrop removeFromSuperview];self.backdrop=nil;
+    // The static posters are temporary host-surface siblings, not Guest views.
+    // Remove them before restoring any real windows or their constraints.
+    for(LCOrbitTaskCard *card in self.cards) {
+        [card.staticPoster removeFromSuperview];
+        card.staticPoster=nil;
+    }
     NSArray *ordered=[self.placements copy];
     for(LCOrbitTaskPlacement *placement in ordered) [placement restore];
     for(LCOrbitTaskPlacement *placement in ordered) [placement restoreConstraints];
@@ -1090,13 +1233,23 @@ static UIWindow *OverviewWindow;
         if(controller.isViewLoaded&&controller.view.superview&&controller.view.window.windowScene==scene)[tasks addObject:task];
     }
     if(!tasks.count&&!apps.count){[LCOrbitMultitask showHome];return YES;}
+    BOOL activePreviewOnly=TaskActivePreviewOnly();
+    UIViewController *liveWindow=[LCOrbitMultitask activeWindow];
+    BOOL isTracked=NO;
+    for(NSDictionary *task in tasks)if(task[@"window"]==liveWindow){isTracked=YES;break;}
+    if(!isTracked) {
+        liveWindow=nil;
+        for(NSDictionary *task in tasks)if([task[@"active"] boolValue]){liveWindow=task[@"window"];break;}
+    }
     NSMutableArray *placements=[NSMutableArray array];
-    for(NSDictionary *task in tasks)if(!TaskUsesPiP(task[@"window"])) {
+    for(NSDictionary *task in tasks)if(!TaskUsesPiP(task[@"window"]) &&
+            (!activePreviewOnly || task[@"window"]==liveWindow)) {
         LCOrbitTaskPlacement *placement=[[LCOrbitTaskPlacement alloc] initWithController:task[@"window"]];
         [placements addObject:placement];
     }
     LCOrbitTaskOverviewController *controller=[LCOrbitTaskOverviewController new];controller.hostScene=scene;controller.tasks=tasks;controller.apps=[apps copy];controller.launchHandler=handler;controller.placements=placements;controller.sceneBounds=scene.coordinateSpace.bounds;
     controller.gridPresentation=[LCOrbitMultitask taskSwitcherPresentation]==1;
+    controller.activePreviewOnly=activePreviewOnly;
     controller.initialDockVisible=restoredDock;
     controller.dockIconSize=MIN(50,MAX(24,size));
     controller.dockBottomGap=TaskDockBottomGap();
@@ -1134,5 +1287,11 @@ static UIWindow *OverviewWindow;
 + (void)cancelDockLaunch:(NSUUID *)token {
     if(token&&[ActiveLaunchCover.token isEqual:token])[ActiveLaunchCover stop];
 }
-+ (BOOL)isPresentingWindow:(UIViewController *)window { if(!window)return NO;for(LCOrbitTaskPlacement *placement in CurrentOverview.placements)if(placement.controller==window)return YES;return NO; }
++ (BOOL)isPresentingWindow:(UIViewController *)window {
+    if(!window)return NO;
+    // Icon-only cards are still part of the overview even though they don't
+    // borrow the live scene. Preserve task-exit ownership and notifications.
+    for(NSDictionary *task in CurrentOverview.tasks)if(task[@"window"]==window)return YES;
+    return NO;
+}
 @end
