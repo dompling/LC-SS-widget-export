@@ -5126,13 +5126,13 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
         [self spacer:s size:16];
         [self diyPage:s];
     } else if([category isEqualToString:@"behavior"]) {
-        if(FMHostUI()) {
+        {
             [self section:@"多任务" sub:@"开启后切换 App 会保留其他任务；子任务不需要单独启用微珠。" in:s];
             [self settingSwitch:s title:@"开启多任务" key:@"fullscreenMultitask" defaultValue:NO tag:19];
             [self section:@"多任务切换模式" sub:@"iPhone 和 iPad 都可选用阶梯卡片或 iPad 布局。iPad 布局在支持多窗口时交给系统，单窗口宿主中以 LC 网格呈现。" in:s];
             UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"系统（LC）",@"微珠",@"自适应"]];
             mode.selectedSegmentIndex=[LCOrbitMultitask usesAdaptiveSwitcher]?2:([LCOrbitMultitask usesSystemMenu]?0:1);
-            mode.enabled=[LCOrbitMultitask isEnabled];
+            mode.enabled=FMHostUI() && [LCOrbitMultitask isEnabled];
             mode.accessibilityLabel=@"多任务切换菜单";
             [mode addTarget:self action:@selector(multitaskModeChanged:) forControlEvents:UIControlEventValueChanged];
             [self addRow:mode height:38 to:s];
@@ -5149,6 +5149,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
                 }
             }
             [self spacer:s size:14];
+            if(!FMHostUI()) [self note:@"多任务需要运行在 LiveContainer 本体：在 LiveContainer 设置里连点版本号 5 次进入开发者模式，开启「Load Tweaks to LiveContainer Itself」。" in:s];
         }
         [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，播放视频时可保持屏幕常亮防息屏。" in:s];
         UIView *sw1=[self switchRowWithTitle:@"左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
@@ -5317,7 +5318,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     l.minimumScaleFactor=.79;
     [row addSubview:l];
     UISwitch *sw=[UISwitch new]; sw.on=BoolPref(key,def); sw.tag=tag;
-    if(tag==19) sw.enabled=[[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"];
+    if(tag==19) sw.enabled=FMHostUI() && [[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"];
     sw.translatesAutoresizingMaskIntoConstraints=NO;
     sw.onTintColor=FMSwitchGreen();
     [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
