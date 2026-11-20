@@ -34,7 +34,9 @@ grep -Fq 'lc-host-foreground' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'if(hostUI) safeBottom=MAX(safeBottom,100);' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'FMLog(@"panel-layout"' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 # Dark drawers in Guests must receive a readability backing without changing day/Clear behavior.
-grep -Fq 'if(strong && (FMHostUI() || (nativeGlass && FMMenuDark())))' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+# The compact drawer is exempt: its narrow panel turned the night backing into a flat plate.
+grep -Fq 'BOOL wantsBacking=strong && (FMHostUI() || (nativeGlass && FMMenuDark() && !compactDrawer));' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'BOOL compactDrawer=BoolPref(@"compactMode",NO);' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'CGFloat opacity=night?(clear?.56:.74):(clear?.42:.26);' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'appearancePollGeneration!=generation' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'self.overlayView.overrideUserInterfaceStyle=' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
