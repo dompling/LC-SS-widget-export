@@ -69,6 +69,13 @@ assert 'LCFloatingMenu.adaptiveActivePreviewOnly' in source
 assert 'controller.activePreviewOnly=activePreviewOnly;' in source
 assert '(!activePreviewOnly || task[@"window"]==liveWindow)' in source
 assert 'orbit.task.center-icon.' in source
+assert 'orbit.task.static-poster.' in source
+assert '[posterParent addSubview:poster];' in source
+assert 'card.staticPoster.layer.zPosition=z;' in source
+assert 'CGRect frame=[card.preview convertRect:card.preview.bounds toView:poster.superview];' in source
+assert 'for(LCOrbitTaskCard *card in self.cards) {' in source
+assert '[card.staticPoster removeFromSuperview];' in source
+assert '[closed.staticPoster removeFromSuperview];' in source
 assert "card.centerIcon.frame=CGRectMake((cardWidth-iconSize)*.5,(cardHeight-iconSize)*.5,iconSize,iconSize);" in source
 assert 'key:@"adaptiveActivePreviewOnly" defaultValue:NO tag:27' in menu
 assert 'case 27:key=@"adaptiveActivePreviewOnly";break;' in menu
