@@ -565,7 +565,15 @@ static UIWindow *OverviewWindow;
 - (void)updateDeck {
     if(self.restoring||self.transitioning||!self.stride||!self.cards.count)return;
     CGFloat pagePosition=self.pages.contentOffset.x/self.stride;
+    // During scrolling, skip visual updates for cards beyond the visible
+    // page and its immediate neighbors. They catch up on entering the range.
+    BOOL scrolling=self.scrollingDeck||self.pages.dragging||self.pages.decelerating;
+    CGFloat preload=MAX(1,self.stride);
+    CGRect nearby=CGRectMake(self.pages.contentOffset.x-preload,-1,
+                             self.pages.bounds.size.width+preload*2,
+                             self.pages.bounds.size.height+2);
     for(LCOrbitTaskCard *card in self.cards) {
+        if(scrolling&&!CGRectIntersectsRect(card.frame,nearby))continue;
         card.restingTransform=CGAffineTransformIdentity;
         if(!self.gridPresentation) {
             CGFloat distance=(CGFloat)card.index-pagePosition;
@@ -609,8 +617,14 @@ static UIWindow *OverviewWindow;
         NSUInteger lastPage=(self.cards.count-1)/self.cardsPerPage;
         [self selectPage:MIN(lastPage,(NSUInteger)MAX(0,llround(scrollView.contentOffset.x/self.stride)))];
     }
+    // UIKit scroll delegates run every frame. Disable Core Animation's
+    // implicit actions for the geometry updates, without disabling the
+    // explicit spring animations used by entry, exit, and task selection.
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     [self updateDeck];
     [self updateLiveGeometry];
+    [CATransaction commit];
 }
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
     if(scrollView!=self.pages)return;
