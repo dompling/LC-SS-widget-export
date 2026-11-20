@@ -1055,11 +1055,11 @@ static CGFloat FMRubberProgress(CGFloat progress) {
 }
 // Pop-in of the drawer contents, after the wloc dock: the index-th of count
 // elements (0 is the lowest one) starts this many seconds after the shell is
-// wide enough. Neighbours are .07 s apart, squeezed so a long list still
-// finishes its stagger within half a second.
+// wide enough. Neighbours are .04 s apart, squeezed so a long list still
+// finishes its stagger well within a third of a second.
 static CGFloat FMPopDelay(NSUInteger index,NSUInteger count) {
-    CGFloat step=MIN(.07,.5/MAX(1.,(CGFloat)count-1));
-    return .04+(CGFloat)index*step;
+    CGFloat step=MIN(.04,.3/MAX(1.,(CGFloat)count-1));
+    return .02+(CGFloat)index*step;
 }
 // The pop-in setting: 0 one element after another (the dock's), 1 all together, 2 off.
 static int FMPopMode(void) {
@@ -1953,11 +1953,11 @@ static id FMScreenAwakeResignObserver=nil;
 
 // One element of the drawer popping in like the wloc dock icons: it starts
 // small, transparent and pushed toward the wall, then springs into place
-// (response .42 s, damping .62, about 8% overshoot). The model layer already
+// (response .3 s, damping .62, about 8% overshoot). The model layer already
 // holds the final state; the backwards fill keeps the first frame in place
 // while the delay runs.
 static void FMPopInLayer(CALayer *layer,CGFloat hidden,CFTimeInterval delay) {
-    CGFloat stiffness=FMSpringStiffness(.42),damping=FMSpringDamping(.42,.62);
+    CGFloat stiffness=FMSpringStiffness(.3),damping=FMSpringDamping(.3,.62);
     NSArray<NSArray *> *specs=@[@[@"opacity",@0,@1],@[@"transform.scale",@.6,@1],
                                 @[@"transform.translation.x",@(hidden),@0]];
     NSMutableArray<CAAnimation *> *parts=[NSMutableArray array];
