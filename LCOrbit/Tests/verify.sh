@@ -29,13 +29,13 @@ grep -Fq 'signFilesWithZSignWithURLs:completionHandler:' "$ROOT/LCOrbit/Core/LCO
 grep -Fq 'UVerifyKernelSignature(destination)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 grep -Fq 'F_CHECK_LV' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 grep -Fq 'rename(backup.fileSystemRepresentation' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
-# A visible one-by-one pop starts only after the glass exposes each row.
-# Both water-style production and preview paths stage rows until slide completion.
-grep -Fq 'BOOL reveal=_popRevealed?t>=.74:t>=.88' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'BOOL reveal=_revealed?t>=.74:t>=.88' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'if(_slidePopPending) [self stagePopContentForSlide]' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'if(playSlidePop && self.panel) [self popContent:YES]' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'water-preview-stagger-is-visibly-progressive' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
+# Match 1.0.38 capsule entrance: rows start at the halfway-open glass.
+# Water-style glass slides while its shorter stagger is already playing.
+grep -Fq 'BOOL reveal=_popRevealed?t>=.42:t>=.5' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'BOOL reveal=_revealed?t>=.42:t>=.5' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq '[self popContentDuringWaterSlide];' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'FMPopItemsTimed(_popItems,_popDividers,_left,YES,.45)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'water-preview-stagger-overlaps-glass-slide' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
 # Guard existing preferences and the old Guest switch pathway from accidental deletion.
 grep -Fq 'forModule:@"LCFloatingMenu"' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'launchToGuestAppWithURL:' "$ROOT/LCOrbit/Core/LCOrbitGuestService.m"

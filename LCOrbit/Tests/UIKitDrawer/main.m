@@ -731,6 +731,24 @@ static CGFloat PopStartSpread(UIView *root) {
     return [[starts valueForKeyPath:@"@max.self"] doubleValue]-
            [[starts valueForKeyPath:@"@min.self"] doubleValue];
 }
+// Observe the actual start instant. On slow simulator pull-to-open, the
+// together-mode animation can already have completed before the polling test
+// inspects layer.animationKeys; this probe does not alter production timing.
+static __weak FMManager *WaterPopProbeMenu;
+static NSUInteger WaterPopProbeCalls,WaterPopProbeCount;
+static CGFloat WaterPopProbeSpread=-1;
+@interface FMManager (WaterPopProbe)
+- (void)fixtureCapturePopContentDuringWaterSlide;
+@end
+@implementation FMManager (WaterPopProbe)
+- (void)fixtureCapturePopContentDuringWaterSlide {
+    [self fixtureCapturePopContentDuringWaterSlide];
+    WaterPopProbeCalls++;
+    WaterPopProbeMenu=self;
+    WaterPopProbeCount=PopAnimationStarts(self.panel).count;
+    WaterPopProbeSpread=PopStartSpread(self.panel);
+}
+@end
 // Wait for a committed pull to cross the display boundary, not a fixed animation delay.
 static BOOL WaitForDrawerOpen(FMManager *menu) {
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:.3];
@@ -766,6 +784,10 @@ static void CheckScrubCache(void) {
 static void RunDropletReleaseTests(void) {
     CheckScrubCache();
     WaterLifecycleChecksDone=NO;
+    Method originalPop=class_getInstanceMethod(FMManager.class,NSSelectorFromString(@"popContentDuringWaterSlide"));
+    Method fixturePop=class_getInstanceMethod(FMManager.class,@selector(fixtureCapturePopContentDuringWaterSlide));
+    Check(@"water-popup-start-probe-available",originalPop!=NULL && fixturePop!=NULL,nil);
+    if(originalPop && fixturePop) method_exchangeImplementations(originalPop,fixturePop);
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
     NSArray *keys=@[@"orbHandleStyle",@"orbDropletPull",@"popAnimation"];
     NSMutableDictionary *saved=[NSMutableDictionary dictionary];
@@ -799,15 +821,24 @@ static void RunDropletReleaseTests(void) {
         Check([@"water-opens-with-complete-outline-" stringByAppendingString:suffix],menu.isOpen && !menu.panel.hidden && mask.path && CGPathGetPathBoundingBox(mask.path).size.width>=glass.bounds.size.width*.99,nil);
         if(mask.path) contour=CGPathCreateCopy(mask.path);
         Check([@"water-opens-with-content-visible-" stringByAppendingString:suffix],DrawerContent(glass).alpha>.99 && menu.orb.alpha<.01,nil);
-        Check([@"water-defers-item-animation-until-glass-arrives-" stringByAppendingString:suffix],!HasItemAnimation(menu.panel),nil);
+        CGFloat duringSlideSpread=WaterPopProbeMenu==menu?WaterPopProbeSpread:PopStartSpread(menu.panel);
+        NSUInteger duringSlideCount=WaterPopProbeMenu==menu?WaterPopProbeCount:PopAnimationStarts(menu.panel).count;
+        NSUInteger popCallsAtSlide=WaterPopProbeCalls;
+        Check([@"water-pop-starts-with-glass-slide-" stringByAppendingString:suffix],pop.intValue==2?!HasItemAnimation(menu.panel):
+              DrawerSlideActive(menu) && duringSlideCount>=2 &&
+              (pop.intValue==0?duringSlideSpread>.045 && duringSlideSpread<.3:
+               duringSlideSpread>=0 && duringSlideSpread<.035),
+              @{@"spread":@(duringSlideSpread),@"items":@(duringSlideCount)});
         Check([@"water-animation-mode-keeps-slide-only-" stringByAppendingString:suffix],pop.intValue==2?!DrawerSlideActive(menu):DrawerSlideActive(menu),nil);
         Check([@"water-slide-blocks-panel-interaction-" stringByAppendingString:suffix],pop.intValue==2?menu.panel.userInteractionEnabled:!menu.panel.userInteractionEnabled,nil);
         if(!pullMode.boolValue && pop.intValue==0 && !left.boolValue && !compact.boolValue && tap.boolValue) Snapshot(menu,@"water-slide-start");
         [menu completeDrawerMorphNow];
         CGFloat popSpread=PopStartSpread(menu.panel);
-        Check([@"water-pop-plays-only-on-visible-drawer-" stringByAppendingString:suffix],pop.intValue==2?!HasItemAnimation(menu.panel):
-              HasItemAnimation(menu.panel) && (pop.intValue==0?popSpread>.045:popSpread>=0 && popSpread<.035),
-              @{@"spread":@(popSpread)});
+        Check([@"water-pop-is-not-restarted-after-slide-" stringByAppendingString:suffix],WaterPopProbeCalls==popCallsAtSlide &&
+              (pop.intValue==2?!HasItemAnimation(menu.panel):
+               WaterPopProbeMenu==menu && duringSlideCount>=2 &&
+               (popSpread<0 || fabs(popSpread-duringSlideSpread)<.01)),
+              @{@"during":@(duringSlideSpread),@"after":@(popSpread)});
         Check([@"water-opening-finishes-usable-" stringByAppendingString:suffix],!DrawerSlideActive(menu) && ![[menu valueForKey:@"morphActive"] boolValue] && menu.panel.userInteractionEnabled && !menu.orb.userInteractionEnabled && menu.orb.accessibilityElementsHidden,nil);
         Check([@"water-release-restores-hidden-bead-" stringByAppendingString:suffix],CGRectEqualToRect(rest,menu.orb.frame),nil);
         if(contour) {
@@ -869,19 +900,13 @@ static void RunDropletReleaseTests(void) {
         Check([NSString stringWithFormat:@"preview-only-water-uses-slide-%@",style],style.intValue==1?slide:!slide,nil);
         if(style.intValue==1) {
             UIView *content=[preview valueForKey:@"content"];
-            NSArray *entries=[preview valueForKey:@"popItems"];
-            NSUInteger staged=0;
-            for(NSDictionary *entry in entries) if(((UIView *)entry[@"view"]).alpha<.01) staged++;
-            Check(@"water-preview-stages-rows-instead-of-playing-offscreen",content.alpha>.99 && !HasItemAnimation(preview) && staged>0,
-                  @{@"staged":@(staged)});
-            // Allow the whole water shell to finish its on-screen slide.
-            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.50]];
             BOOL previewSlide=[[preview valueForKey:@"slideActive"] boolValue];
-            BOOL previewPending=[[preview valueForKey:@"slidePopPending"] boolValue];
             CGFloat previewSpread=PopStartSpread(preview);
-            Check(@"water-preview-starts-staggered-pop-after-glass-slide",!previewSlide && !previewPending &&
-                  HasItemAnimation(preview) && previewSpread>.045,
-                  @{@"slide":@(previewSlide),@"pending":@(previewPending),@"spread":@(previewSpread)});
+            Check(@"water-preview-pop-overlaps-glass-slide",content.alpha>.99 && previewSlide &&
+                  HasItemAnimation(preview) && previewSpread>.045 && previewSpread<.3,
+                  @{@"slide":@(previewSlide),@"spread":@(previewSpread)});
+            // Measure actual presentation opacity before the 0.36s shell slide ends.
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.14]];
             UIView *early=nil,*late=nil;
             CFTimeInterval earliest=DBL_MAX,latest=-DBL_MAX;
             for(UIView *row in Views(preview)) {
@@ -892,8 +917,13 @@ static void RunDropletReleaseTests(void) {
             }
             CGFloat earlyOpacity=early.layer.presentationLayer?early.layer.presentationLayer.opacity:-1;
             CGFloat lateOpacity=late.layer.presentationLayer?late.layer.presentationLayer.opacity:-1;
-            Check(@"water-preview-stagger-is-visibly-progressive",earlyOpacity>lateOpacity+.05,
+            Check(@"water-preview-stagger-overlaps-glass-slide",[[preview valueForKey:@"slideActive"] boolValue] &&
+                  earlyOpacity>lateOpacity+.05,
                   @{@"early":@(earlyOpacity),@"late":@(lateOpacity)});
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.38]];
+            Check(@"water-preview-completes-glass-without-replaying-popup",
+                  ![[preview valueForKey:@"slideActive"] boolValue] &&
+                  fabs(PopStartSpread(preview)-previewSpread)<.01,nil);
             Check(@"water-preview-does-not-run-morph-link",[preview valueForKey:@"link"]==nil,nil);
             [preview setOpen:NO animated:NO];[preview setOpen:YES animated:YES];
             [preview setOpen:NO animated:NO];
@@ -935,6 +965,7 @@ static void RunDropletReleaseTests(void) {
     for(NSString *key in keys) {
         id value=saved[key];[prefs setObject:value==NSNull.null?nil:value forKey:[@"LCFloatingMenu." stringByAppendingString:key]];
     }
+    if(originalPop && fixturePop) method_exchangeImplementations(originalPop,fixturePop);
 }
 static void RunDropletDragTests(void) {
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
@@ -976,7 +1007,8 @@ static void RunDropletDragTests(void) {
         pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
         Check([@"fast-release-preserves-drop-until-display-" stringByAppendingString:suffix],!menu.isOpen && !menu.panel && menu.orb.alpha>.99 && menu.orb.frame.size.width>rest.size.width+7,nil);
         Check([@"fast-release-opens-after-drop-frame-" stringByAppendingString:suffix],WaitForDrawerOpen(menu),nil);
-        Check([@"fast-release-uses-water-slide-" stringByAppendingString:suffix],DrawerSlideActive(menu) && !HasItemAnimation(menu.panel),nil);
+        Check([@"fast-release-overlaps-water-slide-and-content-" stringByAppendingString:suffix],DrawerSlideActive(menu) &&
+              (PopAnimationStarts(menu.panel).count>=2 || (WaterPopProbeMenu==menu && WaterPopProbeCount>=2)),nil);
         [menu completeDrawerMorphNow];[menu toggle];[menu completeDrawerMorphNow];menu.window.hidden=YES;
     }
     // Flood the gesture on one run-loop turn: only an actual display frame may rebuild.
@@ -1139,9 +1171,10 @@ static void RunDrawerPopAndResetRegression(void) {
             if(child.tag!=9217 && child.tag!=9231 && child.alpha<.01) hidden++;
         if(mode.intValue!=2) {
             Check([NSString stringWithFormat:@"pop-mode-%@-hides-first-frame",mode],menu.panel && hidden>0,@{ @"hidden":@(hidden)});
+            [menu applyMorphProgress:.45];
+            Check([NSString stringWithFormat:@"pop-mode-%@-has-not-started-before-v38-halfway",mode],!HasItemAnimation(menu.panel),nil);
             [menu applyMorphProgress:.58];
-            Check([NSString stringWithFormat:@"pop-mode-%@-waits-until-glass-exposes-items",mode],!HasItemAnimation(menu.panel),nil);
-            [menu applyMorphProgress:.90];
+            Check([NSString stringWithFormat:@"pop-mode-%@-overlaps-expanding-glass",mode],HasItemAnimation(menu.panel),nil);
             NSArray<NSNumber *> *starts=PopAnimationStarts(menu.panel);
             CFTimeInterval difference=PopStartSpread(menu.panel);
             BOOL varied=mode.intValue==0?difference>.045:difference<.035;
