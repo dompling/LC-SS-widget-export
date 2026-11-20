@@ -29,7 +29,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.44"
+#define FM_MENU_VERSION @"1.0.45"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -3359,20 +3359,33 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     [self applyMorphProgress:0];
     return YES;
 }
+// Hides or restores the drawer contents without touching the material backing,
+// so the shell can land first and the items pop in afterwards. The panel is
+// passed explicitly: during a slide the manager may already hold a newer one.
+- (void)setDrawerContentsHidden:(BOOL)hidden inPanel:(UIView *)panel {
+    UIView *content=FMGlassContent([panel viewWithTag:9230]);
+    for(UIView *child in content.subviews)
+        if(child.tag!=9217 && child.tag!=9231) child.alpha=hidden?0:1;
+}
 // Water handles use the 1.0.13 entrance: the complete drawer slides in as one
-// piece, with its final outline and content already in place.
+// piece, with its final outline already in place. The items still honour the
+// pop-in setting: they stay hidden while the shell slides, then come in
+// one by one (or all at once) once it has landed.
 - (void)slideDropletDrawerOpen {
     UIView *drawer=self.panel;
     if(!drawer) return;
+    int popMode=FMPopMode();
+    BOOL instant=popMode==2 || UIAccessibilityIsReduceMotionEnabled();
     _morphActive=YES;_morphDragging=NO;_morphOpening=YES;_morphFromBead=NO;
     _morphTarget=1;
     _drawerSlideActive=YES;
     _drawerSlideRestCenter=drawer.center;
-    _popRevealed=YES;_popStarted=YES;
+    _popRevealed=instant;_popStarted=instant;
+    if(!instant) [self setDrawerContentsHidden:YES inPanel:drawer];
     drawer.hidden=NO;self.dismissLayer.hidden=NO;
     drawer.userInteractionEnabled=NO;self.dismissLayer.userInteractionEnabled=NO;
     self.orb.alpha=0;self.orb.userInteractionEnabled=NO;
-    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) {
+    if(instant) {
         self.dismissLayer.alpha=1;
         [self finishDrawerMorph];
         return;
@@ -3389,8 +3402,12 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
             drawer.center=destination;
             self.dismissLayer.alpha=1;
         } completion:^(BOOL finished) {
-            if(self.panel==drawer && generation==self.morphGeneration && self->_drawerSlideActive)
+            [self setDrawerContentsHidden:NO inPanel:drawer];
+            if(self.panel==drawer && generation==self.morphGeneration && self->_drawerSlideActive) {
+                self->_popRevealed=YES;self->_popStarted=YES;
+                [self popContent:YES];
                 [self finishDrawerMorph];
+            }
         }];
 }
 // Plays the open or close transition of a drawer that is already built.
@@ -3399,8 +3416,19 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
         [self slideDropletDrawerOpen];
         return;
     }
-    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || ![self prepareDrawerMorph]) {
+    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) {
         if(!open) [self draw];
+        return;
+    }
+    // A shell that is already on screen but cannot morph would otherwise open
+    // with no animation at all, making all three pop-in settings look alike.
+    if(![self prepareDrawerMorph]) {
+        if(!open) { [self draw]; return; }
+        // Land the drawer in its final state, then let the items pop in from it.
+        _morphOpening=YES;_morphTarget=1;_morphFromBead=NO;_morphActive=NO;
+        _popRevealed=YES;_popStarted=YES;
+        [self popContent:YES];
+        [self finishDrawerMorph];
         return;
     }
     _morphFromBead=NO;
@@ -3490,6 +3518,8 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     _drawDeferred=NO;
     if(_drawerSlideActive) {
         self.morphGeneration++;
+        [self setDrawerContentsHidden:NO inPanel:self.panel];
+        _popRevealed=YES;_popStarted=YES;
         [self.panel.layer removeAllAnimations];
         self.panel.center=_drawerSlideRestCenter;
         [self.dismissLayer.layer removeAllAnimations];
