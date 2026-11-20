@@ -600,17 +600,26 @@ static void Run(UIWindowScene *scene) {
     [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
     [switcher presentInScene:scene apps:@[iconOnly,liveOnly] launchHandler:nil error:NULL];
     UIWindow *iconOverview=Overview(scene);
-    UIView *placeholder=Find(iconOverview,@"orbit.task.center-icon.STATIC");
+    UIView *placeholder=Find(Host.rootViewController.view,@"orbit.task.center-icon.STATIC");
+    UIView *poster=Find(Host.rootViewController.view,@"orbit.task.static-poster.STATIC");
     UIView *realCard=Find(iconOverview,@"orbit.task.preview.LIVE");
     Check(@"icon-only-preview-centers-background-app-artwork",
-          placeholder&&placeholder.superview==Find(iconOverview,@"orbit.task.preview.STATIC")&&
-          fabs(CGRectGetMidX(placeholder.frame)-CGRectGetMidX(placeholder.superview.bounds))<1&&
-          fabs(CGRectGetMidY(placeholder.frame)-CGRectGetMidY(placeholder.superview.bounds))<1);
+          placeholder&&poster&&placeholder.superview==poster&&
+          fabs(CGRectGetMidX(placeholder.frame)-CGRectGetMidX(poster.bounds))<1&&
+          fabs(CGRectGetMidY(placeholder.frame)-CGRectGetMidY(poster.bounds))<1);
+    Check(@"icon-only-preview-keeps-original-live-card-depth",
+          poster&&realCard&&poster.superview==liveWindow.view.superview&&
+          poster.layer.zPosition<liveWindow.view.layer.zPosition&&
+          !Find(iconOverview,@"orbit.task.center-icon.STATIC")&&
+          !Find(iconOverview,@"orbit.task.static-poster.STATIC"));
     Check(@"icon-only-preview-does-not-borrow-background-window",
           staticWindow.view.hidden&&staticWindow.view.superview==staticParent&&
           CGRectEqualToRect(staticWindow.view.frame,staticFrame)&&realCard!=nil&&
           !liveWindow.view.hidden&&[switcher isPresentingWindow:staticWindow]);
     [switcher dismiss];
+    Check(@"icon-only-poster-cleans-up-on-dismiss",
+          !Find(Host.rootViewController.view,@"orbit.task.static-poster.STATIC")&&
+          !Find(Host.rootViewController.view,@"orbit.task.center-icon.STATIC"));
     Check(@"icon-only-preview-restores-live-app-window",liveWindow.view.superview!=nil&&
           ![switcher isPresentingWindow:liveWindow]);
     [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
