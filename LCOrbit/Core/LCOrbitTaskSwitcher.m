@@ -15,6 +15,26 @@ static CGFloat TaskDockBottomGap(void) {
     CGFloat gap=stored?[stored doubleValue]:4;
     return isfinite(gap)?fmax(0,fmin(80,gap)):4;
 }
+// The drawer's 弹出动画 setting, read the same way the drawer itself reads it:
+// 0 = one after another, 1 = all at once, 2 = no animation at all.
+static NSInteger TaskPopMode(void) {
+    id stored=[[LCOrbitStorage preferences] objectForKey:@"LCFloatingMenu.popAnimation"];
+    CGFloat value=stored?[stored doubleValue]:0;
+    if(!isfinite(value))return 0;
+    return value<.5?0:(value<1.5?1:2);
+}
+// One overview element fading in after the others, so the switcher mirrors the
+// drawer's staggered pop-in. The model alpha stays at its final value and the
+// backwards fill holds the first frame hidden while the delay runs.
+static void TaskFadeInLayer(CALayer *layer,CFTimeInterval delay) {
+    if(!layer)return;
+    CABasicAnimation *fade=[CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue=@0;fade.toValue=@1;fade.duration=.26;
+    fade.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    fade.beginTime=[layer convertTime:CACurrentMediaTime() fromLayer:nil]+delay;
+    fade.fillMode=kCAFillModeBackwards;
+    [layer addAnimation:fade forKey:@"task.stagger.in"];
+}
 static BOOL TaskUsesPiP(UIViewController *window) {
     id scene=TaskObject(window,NSSelectorFromString(@"appSceneVC"));
     SEL ignoreSelector=NSSelectorFromString(@"shouldIgnoreSceneUpdates");
@@ -928,6 +948,8 @@ static UIWindow *OverviewWindow;
 }
 - (void)animateEntrance {
     if(UIAccessibilityIsReduceMotionEnabled())return;
+    NSInteger popMode=TaskPopMode();
+    BOOL staged=popMode==0;
     LCOrbitTaskCard *card=self.cards.count?self.cards[self.selectedIndex]:nil;
     BOOL fromApp=card.placement&&!card.placement.hidden&&[self.tasks[self.selectedIndex][@"active"] boolValue];
     self.backdrop.effect=nil;
@@ -946,7 +968,9 @@ static UIWindow *OverviewWindow;
     if(fromApp)card.placement.view.layer.cornerRadius=card.placement.cornerRadius;
     __weak typeof(self) weakSelf=self;
     UISpringTimingParameters *timing=[[UISpringTimingParameters alloc] initWithDampingRatio:.91];
-    self.entranceAnimator=[[UIViewPropertyAnimator alloc] initWithDuration:.38 timingParameters:timing];
+    // The "off" setting still has to put the switcher on screen, it just does it
+    // without a visible transition.
+    self.entranceAnimator=[[UIViewPropertyAnimator alloc] initWithDuration:popMode==2?.01:.38 timingParameters:timing];
     [self.entranceAnimator addAnimations:^{
         LCOrbitTaskOverviewController *owner=weakSelf;
         owner.backdrop.effect=[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterialDark];
@@ -954,6 +978,17 @@ static UIWindow *OverviewWindow;
         [owner updateDeck];
         for(LCOrbitTaskPlacement *placement in owner.placements)placement.view.alpha=1;
         [owner updateLiveGeometry];
+        if(staged) {
+            NSUInteger step=0;
+            for(LCOrbitTaskCard *other in owner.cards) {
+                TaskFadeInLayer(other.layer,.045*step);
+                TaskFadeInLayer(other.placement.view.layer,.045*step);
+                TaskFadeInLayer(other.placement.shadow.layer,.045*step);
+                step++;
+            }
+            NSUInteger buttonStep=0;
+            for(UIView *button in owner.dockScroll.subviews)TaskFadeInLayer(button.layer,.03*buttonStep++);
+        }
     }];
     [self.entranceAnimator addCompletion:^(UIViewAnimatingPosition position){weakSelf.entranceAnimator=nil;}];
     [self.entranceAnimator startAnimation];
@@ -994,6 +1029,7 @@ static UIWindow *OverviewWindow;
         [self setDockVisible:NO];
         self.pages.alpha=0;
         for(LCOrbitTaskCard *card in self.cards) {
+            [card.layer removeAnimationForKey:@"task.stagger.in"];
             card.transform=CGAffineTransformConcat(CGAffineTransformScale(card.restingTransform,.86,.86),CGAffineTransformMakeTranslation(0,46));
             card.placement.view.alpha=0;
         }

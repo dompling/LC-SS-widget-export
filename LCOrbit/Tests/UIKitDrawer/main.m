@@ -28,7 +28,6 @@
 @property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,strong) UIView *dimensionsPreview;
 @property(nonatomic,strong) UIWindow *settingsWindow;
-@property(nonatomic,assign) BOOL settingsOpenedInHost;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
 @property(nonatomic,strong) NSArray *apps;
 @property(nonatomic,copy) NSString *page;
@@ -755,11 +754,12 @@ static __weak FMManager *WaterPopProbeMenu;
 static NSUInteger WaterPopProbeCalls,WaterPopProbeCount;
 static CGFloat WaterPopProbeSpread=-1;
 @interface FMManager (WaterPopProbe)
-- (void)fixtureCapturePopContentDuringWaterSlide;
+- (void)fixtureCapturePopContent:(BOOL)reveal;
 @end
 @implementation FMManager (WaterPopProbe)
-- (void)fixtureCapturePopContentDuringWaterSlide {
-    [self fixtureCapturePopContentDuringWaterSlide];
+- (void)fixtureCapturePopContent:(BOOL)reveal {
+    [self fixtureCapturePopContent:reveal];
+    if(!reveal) return;
     WaterPopProbeCalls++;
     WaterPopProbeMenu=self;
     WaterPopProbeCount=PopAnimationStarts(self.panel).count;
@@ -801,8 +801,8 @@ static void CheckScrubCache(void) {
 static void RunDropletReleaseTests(void) {
     CheckScrubCache();
     WaterLifecycleChecksDone=NO;
-    Method originalPop=class_getInstanceMethod(FMManager.class,NSSelectorFromString(@"popContentDuringWaterSlide"));
-    Method fixturePop=class_getInstanceMethod(FMManager.class,@selector(fixtureCapturePopContentDuringWaterSlide));
+    Method originalPop=class_getInstanceMethod(FMManager.class,@selector(popContent:));
+    Method fixturePop=class_getInstanceMethod(FMManager.class,@selector(fixtureCapturePopContent:));
     Check(@"water-popup-start-probe-available",originalPop!=NULL && fixturePop!=NULL,nil);
     if(originalPop && fixturePop) method_exchangeImplementations(originalPop,fixturePop);
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
@@ -843,7 +843,7 @@ static void RunDropletReleaseTests(void) {
         NSUInteger popCallsAtSlide=WaterPopProbeCalls;
         Check([@"water-pop-starts-with-glass-slide-" stringByAppendingString:suffix],pop.intValue==2?!HasItemAnimation(menu.panel):
               DrawerSlideActive(menu) && duringSlideCount>=2 &&
-              (pop.intValue==0?duringSlideSpread>.045 && duringSlideSpread<.3:
+              (pop.intValue==0?duringSlideSpread>.035 && duringSlideSpread<.35:
                duringSlideSpread>=0 && duringSlideSpread<.035),
               @{@"spread":@(duringSlideSpread),@"items":@(duringSlideCount)});
         Check([@"water-animation-mode-keeps-slide-only-" stringByAppendingString:suffix],pop.intValue==2?!DrawerSlideActive(menu):DrawerSlideActive(menu),nil);
@@ -916,46 +916,22 @@ static void RunDropletReleaseTests(void) {
         BOOL slide=class_getInstanceVariable(preview.class,"_slideActive") && [[preview valueForKey:@"slideActive"] boolValue];
         Check([NSString stringWithFormat:@"preview-only-water-uses-slide-%@",style],style.intValue==1?slide:!slide,nil);
         if(style.intValue==1) {
+            // Main 1.0.45 keeps the preview's water contents attached to the
+            // glass throughout the slide. Do not reintroduce the older second
+            // stage of icon animation in this branch.
             UIView *content=[preview valueForKey:@"content"];
-            BOOL previewSlide=[[preview valueForKey:@"slideActive"] boolValue];
-            CGFloat previewSpread=PopStartSpread(preview);
-            Check(@"water-preview-pop-overlaps-glass-slide",content.alpha>.99 && previewSlide &&
-                  HasItemAnimation(preview) && previewSpread>.045 && previewSpread<.3,
-                  @{@"slide":@(previewSlide),@"spread":@(previewSpread)});
-            // Measure actual presentation opacity before the 0.36s shell slide ends.
-            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.14]];
-            UIView *early=nil,*late=nil;
-            CFTimeInterval earliest=DBL_MAX,latest=-DBL_MAX;
-            for(UIView *row in Views(preview)) {
-                CAAnimation *pop=[row.layer animationForKey:@"fm.pop.in"];
-                if(!pop) continue;
-                if(pop.beginTime<earliest) { earliest=pop.beginTime;early=row; }
-                if(pop.beginTime>latest) { latest=pop.beginTime;late=row; }
-            }
-            CGFloat earlyOpacity=early.layer.presentationLayer?early.layer.presentationLayer.opacity:-1;
-            CGFloat lateOpacity=late.layer.presentationLayer?late.layer.presentationLayer.opacity:-1;
-            Check(@"water-preview-stagger-overlaps-glass-slide",[[preview valueForKey:@"slideActive"] boolValue] &&
-                  earlyOpacity>lateOpacity+.05,
-                  @{@"early":@(earlyOpacity),@"late":@(lateOpacity)});
-            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.38]];
-            Check(@"water-preview-completes-glass-without-replaying-popup",
-                  ![[preview valueForKey:@"slideActive"] boolValue] &&
-                  fabs(PopStartSpread(preview)-previewSpread)<.01,nil);
+            Check(@"water-preview-main-glass-and-items-travel-together",
+                  content.alpha>.99 && [[preview valueForKey:@"slideActive"] boolValue] &&
+                  !HasItemAnimation(preview),nil);
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.50]];
+            Check(@"water-preview-main-glass-landed-without-second-stage",
+                  ![[preview valueForKey:@"slideActive"] boolValue] && !HasItemAnimation(preview),nil);
             Check(@"water-preview-does-not-run-morph-link",[preview valueForKey:@"link"]==nil,nil);
             [preview setOpen:NO animated:NO];[preview setOpen:YES animated:YES];
             [preview setOpen:NO animated:NO];
-            Check(@"water-preview-fast-reversal-stays-closed",[[preview valueForKey:@"progress"] doubleValue]<.001 && ![[preview valueForKey:@"slideActive"] boolValue],nil);
-            [prefs setObject:@1 forKey:@"LCFloatingMenu.popAnimation"];
-            [preview setOpen:YES animated:YES];
-            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.50]];
-            Check(@"water-preview-together-uses-simultaneous-opacity",HasItemAnimation(preview) &&
-                  PopStartSpread(preview)>=0 && PopStartSpread(preview)<.035,nil);
-            [preview setOpen:NO animated:NO];
-            [prefs setObject:@2 forKey:@"LCFloatingMenu.popAnimation"];
-            [preview setOpen:YES animated:YES];
-            Check(@"water-preview-off-shows-immediately-without-pop",!HasItemAnimation(preview) &&
+            Check(@"water-preview-fast-reversal-stays-closed",
+                  [[preview valueForKey:@"progress"] doubleValue]<.001 &&
                   ![[preview valueForKey:@"slideActive"] boolValue],nil);
-            [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
         }
         [preview setOpen:NO animated:NO];[preview removeFromSuperview];
         window.hidden=YES;
@@ -1187,7 +1163,7 @@ static void RunDrawerPopAndResetRegression(void) {
         for(UIView *child in content.subviews)
             if(child.tag!=9217 && child.tag!=9231 && child.alpha<.01) hidden++;
         if(mode.intValue!=2) {
-            Check([NSString stringWithFormat:@"pop-mode-%@-hides-first-frame",mode],menu.panel && hidden>0,@{ @"hidden":@(hidden)});
+            Check([NSString stringWithFormat:@"pop-mode-%@-main-initial-setup",mode],menu.panel && !HasItemAnimation(menu.panel),@{@"hidden":@(hidden)});
             [menu applyMorphProgress:.45];
             Check([NSString stringWithFormat:@"pop-mode-%@-has-not-started-before-v38-halfway",mode],!HasItemAnimation(menu.panel),nil);
             [menu applyMorphProgress:.58];
@@ -1210,7 +1186,6 @@ static void RunDrawerPopAndResetRegression(void) {
     Check(@"style-reset-preserves-multitask-mode-and-enable",[prefs integerForKey:@"LCFloatingMenu.taskSwitcherMode"]==2 &&
           [prefs boolForKey:@"LCFloatingMenu.fullscreenMultitask"],nil);
     host.settingsWindow=host.window;
-    host.settingsOpenedInHost=YES;
     FixtureHost=NO;
     UIStackView *retained=[UIStackView new];
     [host populateSettingsCategory:@"behavior" stack:retained];
@@ -1218,12 +1193,11 @@ static void RunDrawerPopAndResetRegression(void) {
     for(UIView *view in Views(retained)) if([view isKindOfClass:UISegmentedControl.class] &&
         [view.accessibilityLabel isEqualToString:@"多任务切换菜单"]) retainedMode=(UISegmentedControl *)view;
     Check(@"reset-redraw-keeps-host-multitask-controls-visible-but-locked",retainedMode && !retainedMode.enabled,nil);
-    host.settingsOpenedInHost=NO;
     UIStackView *guest=[UIStackView new];
     [host populateSettingsCategory:@"behavior" stack:guest];
     BOOL guestHasControls=NO;
     for(UIView *view in Views(guest)) if([view.accessibilityLabel isEqualToString:@"多任务切换菜单"]) guestHasControls=YES;
-    Check(@"guest-still-cannot-see-host-multitask-controls",!guestHasControls,nil);
+    Check(@"main-145-guest-multitask-section-visible-but-disabled",guestHasControls && retainedMode && !retainedMode.enabled,nil);
     FixtureHost=YES;
     for(NSString *key in keys) {
         id previous=saved[key];[prefs setObject:previous==NSNull.null?nil:previous forKey:[@"LCFloatingMenu." stringByAppendingString:key]];

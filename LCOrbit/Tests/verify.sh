@@ -18,11 +18,11 @@ for symbol in 'OBJC_CLASS_$_LCOrbitCore' 'OBJC_CLASS_$_LCOrbitHost' \
 do
     printf '%s\n' "$SYMBOLS" | grep -Fq "$symbol"
 done
-# The optimized drawer must hide its content on the initial morph frame,
-# then trigger the selected pop animation only on the visibility transition.
-grep -Fq 'BOOL initialContentVisibility=_morphShownT<0;' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'if(initialContentVisibility || flipped)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'if(flipped) [self popContent:reveal];' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+# Keep the main branch 1.0.45 popup sequence and performance limited
+# glass geometry updates. Staggered animation remains a transition-only action.
+grep -Fq 'if(flipped) {' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'FMPopItems(items,dividers,self.left,reveal)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'FMSpringStep(&x,&v,_morphTarget,_morphOmega,_morphZeta,dt)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 # Auto-update signs only its replaced dylib and retains rollback until verified.
 grep -Fq 'installDownloadedPluginAndSign:binary' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'signFilesWithZSignWithURLs:completionHandler:' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
@@ -34,13 +34,13 @@ grep -Fq 'rename(backup.fileSystemRepresentation' "$ROOT/LCOrbit/Core/LCOrbitPlu
 grep -Fq 'if([self presentAdaptiveDrawer])' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'adaptive-normal-no-haptic-on-redraw' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
 grep -Fq 'adaptive-normal-one-tick-on-pull-release' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
-# Match 1.0.38 capsule entrance: rows start at the halfway-open glass.
-# Water-style glass slides while its shorter stagger is already playing.
+# The main branch owns the water-glass entrance: contents travel with the
+# shell, and the adaptive switcher reads the common popAnimation preference.
 grep -Fq 'BOOL reveal=_popRevealed?t>=.42:t>=.5' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'BOOL reveal=_revealed?t>=.42:t>=.5' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq '[self popContentDuringWaterSlide];' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'FMPopItemsTimed(_popItems,_popDividers,_left,YES,.45)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
-grep -Fq 'water-preview-stagger-overlaps-glass-slide' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
+grep -Fq '[self setDrawerContentsHidden:NO inPanel:drawer]' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq '[self popContent:YES];' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'static NSInteger TaskPopMode(void)' "$ROOT/LCOrbit/Core/LCOrbitTaskSwitcher.m"
 # Guard existing preferences and the old Guest switch pathway from accidental deletion.
 grep -Fq 'forModule:@"LCFloatingMenu"' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'launchToGuestAppWithURL:' "$ROOT/LCOrbit/Core/LCOrbitGuestService.m"

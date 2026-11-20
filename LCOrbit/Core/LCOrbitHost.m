@@ -26,18 +26,21 @@
     return nil;
 }
 + (BOOL)isHostUI {
-    // Only opt-in LC's own UI is allowed. A Guest has guestAppInfo even
-    // when its bundle lives in the shared App Group.
-    if([self guestInfo] || ![[self hostDefaults] boolForKey:@"LCLoadTweaksToSelf"]) return NO;
+    // A Guest has guestAppInfo even when its bundle lives in the shared App
+    // Group, so its absence is the only reliable "we are the LC host" signal.
+    if([self guestInfo]) return NO;
     NSBundle *hostBundle=[self callHostSelector:@"lcMainBundle"];
     if(![hostBundle isKindOfClass:NSBundle.class] ||
        ![hostBundle.bundlePath isEqualToString:NSBundle.mainBundle.bundlePath]) return NO;
-    SEL side=NSSelectorFromString(@"isSideStore");
+    // isLiveProcess is the SideStore/LiveProcess guest container; still a guest.
     SEL process=NSSelectorFromString(@"isLiveProcess");
-    if(![NSUserDefaults respondsToSelector:side] ||
-       ![NSUserDefaults respondsToSelector:process]) return NO;
-    return !((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,side) &&
-           !((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,process);
+    if(![NSUserDefaults respondsToSelector:process]) return NO;
+    if(((BOOL(*)(id,SEL))objc_msgSend)(NSUserDefaults.class,process)) return NO;
+    // Legacy opt-in flag. Kept for diagnostics only: a host that already has
+    // the dylib injected (SideStore global tweaks, manual install) must still
+    // get the host-only settings, otherwise new users never see 开启多任务.
+    (void)[[self hostDefaults] boolForKey:@"LCLoadTweaksToSelf"];
+    return YES;
 }
 + (BOOL)isSupportedGuest {
     if(![self activeScene] || ![self guestInfo]) return NO;

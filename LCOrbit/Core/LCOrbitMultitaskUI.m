@@ -424,13 +424,21 @@ static void ApplyGeometry(UIViewController *window,id settings,CGRect frame,UIIn
     }
     // Decorated LC windows disable the Guest status bar. Fullscreen Guests
     // need normal status-bar layout as well as safe-area insets and host metrics.
-    if([settings respondsToSelector:@selector(setStatusBarDisabled:)]) [settings setStatusBarDisabled:NO];
+    // Landscape is the exception: iOS draws no status bar there, so a portrait-
+    // shaped bar copied from the host would land on the right edge as stray
+    // battery/signal/time glyphs inside the Guest window.
+    BOOL landscape=UIInterfaceOrientationIsLandscape(orientation);
+    if([settings respondsToSelector:@selector(setStatusBarDisabled:)]) [settings setStatusBarDisabled:landscape];
+    if(landscape) {
+        if([settings respondsToSelector:@selector(setStatusBarHeight:)]) [settings setStatusBarHeight:0];
+        if([settings respondsToSelector:@selector(setStatusBarAvoidanceFrame:)]) [settings setStatusBarAvoidanceFrame:CGRectZero];
+    }
     UIWindow *host=window.view.window ?: window.parentViewController.view.window;
     UIStatusBarManager *manager=host.windowScene.statusBarManager;
     if(manager) {
         CGRect avoidance=CGRectZero;
         CGRect bar=manager.statusBarFrame;
-        if(!manager.statusBarHidden && OrbitValidFrame(bar)) {
+        if(!manager.statusBarHidden && !landscape && OrbitValidFrame(bar)) {
             avoidance=[host convertRect:bar fromCoordinateSpace:host.windowScene.coordinateSpace];
             UIView *hosting=[(id)SceneController(window) contentView];
             if(hosting.window==host && OrbitValidFrame(hosting.bounds) && CGAffineTransformIsIdentity(hosting.transform))

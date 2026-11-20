@@ -29,7 +29,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.44"
+#define FM_MENU_VERSION @"1.0.45"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -1055,11 +1055,11 @@ static CGFloat FMRubberProgress(CGFloat progress) {
 }
 // Pop-in of the drawer contents, after the wloc dock: the index-th of count
 // elements (0 is the lowest one) starts this many seconds after the shell is
-// wide enough. Neighbours are .07 s apart, squeezed so a long list still
-// finishes its stagger within half a second.
+// wide enough. Neighbours are .05 s apart, squeezed so a long list still
+// finishes its stagger within a third of a second.
 static CGFloat FMPopDelay(NSUInteger index,NSUInteger count) {
-    CGFloat step=MIN(.07,.5/MAX(1.,(CGFloat)count-1));
-    return .04+(CGFloat)index*step;
+    CGFloat step=MIN(.05,.3/MAX(1.,(CGFloat)count-1));
+    return .02+(CGFloat)index*step;
 }
 // The pop-in setting: 0 one element after another (the dock's), 1 all together, 2 off.
 static int FMPopMode(void) {
@@ -1953,9 +1953,10 @@ static id FMScreenAwakeResignObserver=nil;
 
 // One element of the drawer popping in like the wloc dock icons: it starts
 // small, transparent and pushed toward the wall, then springs into place
-// (response .42 s, damping .62, about 8% overshoot). The model layer already
-// holds the final state; the backwards fill keeps the first frame in place
-// while the delay runs.
+// (response .42 s, damping .62, about 8% overshoot). The spring and its slight
+// overshoot are what make the stagger feel smooth and alive; flattening it into
+// a plain ease reads stiff. The model layer already holds the final state; the
+// backwards fill keeps the first frame in place while the delay runs.
 static void FMPopInLayer(CALayer *layer,CGFloat hidden,CFTimeInterval delay) {
     CGFloat stiffness=FMSpringStiffness(.42),damping=FMSpringDamping(.42,.62);
     NSArray<NSArray *> *specs=@[@[@"opacity",@0,@1],@[@"transform.scale",@.6,@1],
@@ -2013,28 +2014,7 @@ static void FMPopOutLayer(CALayer *layer,CGFloat hidden,BOOL fadeOnly) {
 // within a row, the one nearest the wall first, one after another or all at once as the
 // pop-in setting says. Dividers only fade, after the rest. With the setting off nothing
 // animates. The real drawer and the settings preview both go through here.
-// Reset rows when a water-style slide is interrupted, so a subsequent
-// open cannot inherit a partially animated presentation layer.
-static void FMStagePopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *dividers,BOOL hidden) {
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    NSMutableArray<UIView *> *targets=[NSMutableArray array];
-    for(NSDictionary *entry in items) {
-        UIView *view=entry[@"view"];
-        if(view) [targets addObject:view];
-    }
-    [targets addObjectsFromArray:dividers];
-    for(UIView *view in targets) {
-        [view.layer removeAnimationForKey:@"fm.pop.in"];
-        [view.layer removeAnimationForKey:@"fm.pop.out"];
-        view.alpha=hidden?0:1;
-    }
-    [CATransaction commit];
-}
-// The water-style entrance starts its rows with the glass, with a shorter
-// stagger than the capsule morph. This preserves the 1.0.38 single-phase
-// entrance instead of finishing the glass before popping its contents.
-static void FMPopItemsTimed(NSArray<NSDictionary *> *items,NSArray<UIView *> *dividers,BOOL left,BOOL reveal,CGFloat delayScale) {
+static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *dividers,BOOL left,BOOL reveal) {
     NSArray<NSDictionary *> *ordered=[items sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b) {
         NSComparisonResult lowerFirst=[b[@"row"] compare:a[@"row"]];
         return lowerFirst!=NSOrderedSame?lowerFirst:[a[@"gap"] compare:b[@"gap"]];
@@ -2053,7 +2033,7 @@ static void FMPopItemsTimed(NSArray<NSDictionary *> *items,NSArray<UIView *> *di
         if(reveal) {
             [view.layer removeAnimationForKey:@"fm.pop.out"];
             CGFloat start=FMPopStart(mode,index,count);
-            if(start>=0) FMPopInLayer(view.layer,hidden,start*delayScale);
+            if(start>=0) FMPopInLayer(view.layer,hidden,start);
         } else if(mode!=2) FMPopOutLayer(view.layer,hidden,NO);
     }
     for(UIView *divider in dividers) {
@@ -2065,12 +2045,9 @@ static void FMPopItemsTimed(NSArray<NSDictionary *> *items,NSArray<UIView *> *di
         if(reveal) {
             [divider.layer removeAnimationForKey:@"fm.pop.out"];
             CGFloat start=FMPopStart(mode,count,count+1);
-            if(start>=0) FMPopInDivider(divider.layer,start*delayScale);
+            if(start>=0) FMPopInDivider(divider.layer,start);
         } else if(mode!=2) FMPopOutLayer(divider.layer,0,YES);
     }
-}
-static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *dividers,BOOL left,BOOL reveal) {
-    FMPopItemsTimed(items,dividers,left,reveal,1);
 }
 
 @interface FMManager : NSObject <UIScrollViewDelegate,UIGestureRecognizerDelegate>
@@ -2101,8 +2078,6 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,assign) BOOL settingsDockRedrawScheduled;
 @property(nonatomic,strong) UIWindow *settingsWindow;
-// Captured only when LC host opens this settings window. Never grants Guest privileges.
-@property(nonatomic,assign) BOOL settingsOpenedInHost;
 @property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,weak) UIView *dimensionsPreview;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
@@ -3164,11 +3139,9 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     BOOL opening=!self.isOpen;
     if(opening && [self usesAdaptiveDrawer]) {
         [self cancelOrbFade];
-        // A successful user-initiated adaptive opening bypasses the regular
-        // announceDrawerState path. Give it the same single confirmation tick,
-        // without ticking on drag progress, failed presentation or redraws.
-        if([self presentAdaptiveDrawer])
-            FMHaptic(UIImpactFeedbackStyleRigid,.45);
+        // The adaptive switcher bypasses announceDrawerState. Confirm only a
+        // successful user opening, never a redraw or a failed presentation.
+        if([self presentAdaptiveDrawer]) FMHaptic(UIImpactFeedbackStyleRigid,.45);
         return;
     }
     if(opening) {
@@ -3250,10 +3223,6 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     // or a finger pulling past the end) shows as a stretch toward the screen.
     CGFloat raw=MAX(progress,0),t=MIN(raw,1),stretch=Clamp(raw-1,0,.08);
     _morphProgress=raw;
-    // The first morph frame must hide drawer contents before the shell expands.
-    // Optimizing this to transition-only updates omitted the initial frame,
-    // leaving every item visible before its staggered CA animation began.
-    BOOL initialContentVisibility=_morphShownT<0;
     // The two expensive parts of a frame are the outline geometry and the pop-in bookkeeping,
     // and a drag delivers both far faster than the screen can show them. Both are therefore
     // rated at the display rate: an interior frame keeps the outline it already has and only
@@ -3291,18 +3260,16 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     [CATransaction commit];
     // The bead fades out above the glass that replaces it; the panel itself
     // stays opaque, since alpha below one on an ancestor of a visual effect
-    // view can flatten the material. Match 1.0.38: while the shell is still
-    // growing the rows begin their stagger, not after the glass has appeared.
+    // view can flatten the material. The contents stay hidden until the shell
+    // is half open, then pop in one after another; they go out together once
+    // it falls back below the lower line.
     BOOL reveal=_popRevealed?t>=.42:t>=.5,flipped=reveal!=_popRevealed;
     _popRevealed=reveal;
     if(reveal) _popStarted=YES;
-    if(initialContentVisibility || flipped) {
+    if(flipped) {
         for(UIView *child in FMGlassContent(glass).subviews)
             if(child.tag!=9217 && child.tag!=9231) child.alpha=_popStarted?1:0;
-        // Only emit layer animations on the actual visibility transition.
-        // Keeping the first-frame setup outside the per-frame drag hot path
-        // preserves rate-limited outlines and cached row geometry.
-        if(flipped) [self popContent:reveal];
+        [self popContent:reveal];
     }
     [panel viewWithTag:9204].alpha=FMSmooth((t-.1)/.5);
     self.dismissLayer.alpha=FMSmooth(t);
@@ -3312,7 +3279,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
 // the lowest first (within a row, the one nearest the wall first), then upward,
 // the dividers last. Only rows in view take part. Going out is all at once. The pop-in
 // setting can make them come all at once instead, or not animate at all.
-- (void)updatePopContent:(BOOL)reveal waterSlide:(BOOL)waterSlide {
+- (void)popContent:(BOOL)reveal {
     UIView *glass=[self.panel viewWithTag:9230],*content=FMGlassContent(glass);
     if(!glass || content==glass) return;
     [glass layoutIfNeeded];
@@ -3338,22 +3305,10 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
             if(CGRectIntersectsRect([row convertRect:row.bounds toView:glass],window)) add(row);
         break;
     }
-    if(reveal) {
-        // The water glass and its rows now animate together. Keep the entire
-        // popup in one transaction so model opacity never flashes ahead.
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        if(waterSlide) FMPopItemsTimed(items,dividers,self.left,YES,.45);
-        else FMPopItems(items,dividers,self.left,YES);
-        [CATransaction commit];
-    } else {
-        // With pop-in disabled the content leaves with the shell.
-        if(FMPopMode()==2) _popStarted=NO;
-        FMPopItems(items,dividers,self.left,NO);
-    }
+    // With the pop-in off the contents leave with the shell instead of waiting for it to shrink around them.
+    if(!reveal && FMPopMode()==2) _popStarted=NO;
+    FMPopItems(items,dividers,self.left,reveal);
 }
-- (void)popContent:(BOOL)reveal { [self updatePopContent:reveal waterSlide:NO]; }
-- (void)popContentDuringWaterSlide { [self updatePopContent:YES waterSlide:YES]; }
 // Prepare the release-only drawer during the pull, without showing or enabling it.
 - (void)prepareDropletDrawer {
     if(self.panel || self.settingsWindow || !self.orb) return;
@@ -3407,20 +3362,34 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     [self applyMorphProgress:0];
     return YES;
 }
-// Keep the 1.0.13 water-glass entrance: the drawer slides in as one piece
-// with its final outline. Its rows now pop in during the same slide.
+// Hides or restores the drawer contents without touching the material backing,
+// so the shell can land first and the items pop in afterwards. The panel is
+// passed explicitly: during a slide the manager may already hold a newer one.
+- (void)setDrawerContentsHidden:(BOOL)hidden inPanel:(UIView *)panel {
+    UIView *content=FMGlassContent([panel viewWithTag:9230]);
+    for(UIView *child in content.subviews)
+        if(child.tag!=9217 && child.tag!=9231) child.alpha=hidden?0:1;
+}
+// Water handles use the 1.0.13 entrance: the complete drawer slides in as one
+// piece, with its final outline already in place, and the items come in on the
+// same beat rather than after it. Hiding them until the shell landed left the
+// user looking at an empty drawer that filled up afterwards, which reads as two
+// separate events instead of one motion.
 - (void)slideDropletDrawerOpen {
     UIView *drawer=self.panel;
     if(!drawer) return;
+    int popMode=FMPopMode();
+    BOOL instant=popMode==2 || UIAccessibilityIsReduceMotionEnabled();
     _morphActive=YES;_morphDragging=NO;_morphOpening=YES;_morphFromBead=NO;
     _morphTarget=1;
     _drawerSlideActive=YES;
     _drawerSlideRestCenter=drawer.center;
     _popRevealed=YES;_popStarted=YES;
+    [self setDrawerContentsHidden:NO inPanel:drawer];
     drawer.hidden=NO;self.dismissLayer.hidden=NO;
     drawer.userInteractionEnabled=NO;self.dismissLayer.userInteractionEnabled=NO;
     self.orb.alpha=0;self.orb.userInteractionEnabled=NO;
-    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) {
+    if(instant) {
         self.dismissLayer.alpha=1;
         [self finishDrawerMorph];
         return;
@@ -3430,9 +3399,10 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
         (self.left?self.window.safeAreaInsets.left:self.window.safeAreaInsets.right)+1;
     drawer.center=CGPointMake(destination.x+(self.left?-travel:travel),destination.y);
     self.dismissLayer.alpha=0;
-    // Overlay the stagger with the spring slide, not after its completion.
-    [self popContentDuringWaterSlide];
     NSUInteger generation=++self.morphGeneration;
+    // The items ride along with the shell: the stagger starts on this frame while
+    // the drawer is still travelling, so the content arrives with it.
+    [self popContent:YES];
     [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.86
         initialSpringVelocity:.3 options:UIViewAnimationOptionBeginFromCurrentState
         animations:^{
@@ -3449,8 +3419,19 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
         [self slideDropletDrawerOpen];
         return;
     }
-    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || ![self prepareDrawerMorph]) {
+    if(FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled()) {
         if(!open) [self draw];
+        return;
+    }
+    // A shell that is already on screen but cannot morph would otherwise open
+    // with no animation at all, making all three pop-in settings look alike.
+    if(![self prepareDrawerMorph]) {
+        if(!open) { [self draw]; return; }
+        // Land the drawer in its final state, then let the items pop in from it.
+        _morphOpening=YES;_morphTarget=1;_morphFromBead=NO;_morphActive=NO;
+        _popRevealed=YES;_popStarted=YES;
+        [self popContent:YES];
+        [self finishDrawerMorph];
         return;
     }
     _morphFromBead=NO;
@@ -3540,6 +3521,8 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     _drawDeferred=NO;
     if(_drawerSlideActive) {
         self.morphGeneration++;
+        [self setDrawerContentsHidden:NO inPanel:self.panel];
+        _popRevealed=YES;_popStarted=YES;
         [self.panel.layer removeAllAnimations];
         self.panel.center=_drawerSlideRestCenter;
         [self.dismissLayer.layer removeAllAnimations];
@@ -5030,7 +5013,6 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     home.navigationItem.leftBarButtonItem.accessibilityLabel=@"返回";
     settings.rootViewController=nav;
     self.settingsNavigation=nav;
-    self.settingsOpenedInHost=FMHostUI();
     self.settingsWindow=settings;
     [settings makeKeyAndVisible];
     self.orbPreviewHost=[[UIView alloc] initWithFrame:settings.bounds];
@@ -5050,7 +5032,6 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     UIWindowScene *scene=old.windowScene;
     [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;self.dimensionsPreview=nil;
     self.settingsWindow=nil;
-    self.settingsOpenedInHost=NO;
     self.settingsNavigation=nil;
     self.previousKeyWindow=nil;
     old.hidden=YES;
@@ -5148,17 +5129,13 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
         [self spacer:s size:16];
         [self diyPage:s];
     } else if([category isEqualToString:@"behavior"]) {
-        // Preserve the host-only section during settings redraws after reset.
-        // If host identity becomes unavailable, show disabled controls instead
-        // of silently removing the whole section from the existing page.
-        BOOL currentHost=FMHostUI();
-        if(currentHost || (self.settingsOpenedInHost && self.settingsWindow)) {
+        {
             [self section:@"多任务" sub:@"开启后切换 App 会保留其他任务；子任务不需要单独启用微珠。" in:s];
             [self settingSwitch:s title:@"开启多任务" key:@"fullscreenMultitask" defaultValue:NO tag:19];
             [self section:@"多任务切换模式" sub:@"iPhone 和 iPad 都可选用阶梯卡片或 iPad 布局。iPad 布局在支持多窗口时交给系统，单窗口宿主中以 LC 网格呈现。" in:s];
             UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"系统（LC）",@"微珠",@"自适应"]];
             mode.selectedSegmentIndex=[LCOrbitMultitask usesAdaptiveSwitcher]?2:([LCOrbitMultitask usesSystemMenu]?0:1);
-            mode.enabled=currentHost && [LCOrbitMultitask isEnabled];
+            mode.enabled=FMHostUI() && [LCOrbitMultitask isEnabled];
             mode.accessibilityLabel=@"多任务切换菜单";
             [mode addTarget:self action:@selector(multitaskModeChanged:) forControlEvents:UIControlEventValueChanged];
             [self addRow:mode height:38 to:s];
@@ -5174,8 +5151,8 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
                     [self settingSlider:s title:@"距底部距离" key:@"adaptiveDockBottomGap" min:0 max:80 def:4 tag:112];
                 }
             }
-            if(!currentHost) [self note:@"宿主状态暂不可用，请返回 LC 主界面重新打开设置后调整多任务。" in:s];
             [self spacer:s size:14];
+            if(!FMHostUI()) [self note:@"多任务需要运行在 LiveContainer 本体：在 LiveContainer 设置里连点版本号 5 次进入开发者模式，开启「Load Tweaks to LiveContainer Itself」。" in:s];
         }
         [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，播放视频时可保持屏幕常亮防息屏。" in:s];
         UIView *sw1=[self switchRowWithTitle:@"左横屏自适应" key:@"unlockOrientation" defaultValue:YES tag:22];
@@ -5344,7 +5321,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     l.minimumScaleFactor=.79;
     [row addSubview:l];
     UISwitch *sw=[UISwitch new]; sw.on=BoolPref(key,def); sw.tag=tag;
-    if(tag==19) sw.enabled=[[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"];
+    if(tag==19) sw.enabled=FMHostUI() && [[LCOrbitCore sharedCore] isModuleEnabled:@"FloatingMenu"];
     sw.translatesAutoresizingMaskIntoConstraints=NO;
     sw.onTintColor=FMSwitchGreen();
     [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
@@ -6427,9 +6404,6 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
 }
 - (void)performResetAllSettings {
-    // A style reset does not own multitask enablement or presentation modes.
-    BOOL hostAtReset=FMHostUI();
-    FMLog(@"settings-reset-begin",[NSString stringWithFormat:@"host=%d openedInHost=%d multitask=%d adaptive=%d",hostAtReset,self.settingsOpenedInHost,[LCOrbitMultitask isEnabled],[LCOrbitMultitask usesAdaptiveSwitcher]]);
     [self resetDockSettings];
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"recentAppsFirst",@NO);
@@ -6444,7 +6418,6 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         self.overlayView.overrideUserInterfaceStyle=skin;
         if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=skin;
         [self refreshUI];
-        FMLog(@"settings-reset-end",[NSString stringWithFormat:@"host=%d openedInHost=%d multitask=%d adaptive=%d",FMHostUI(),self.settingsOpenedInHost,[LCOrbitMultitask isEnabled],[LCOrbitMultitask usesAdaptiveSwitcher]]);
     });
 }
 - (void)invalidatePendingLaunch {
@@ -8154,7 +8127,6 @@ static UIView *FMDockCard(UIStackView *rows) {
     }
     _drawer.layer.shadowOpacity=_shadow*FMSmooth(t/.5);
     [CATransaction commit];
-    // Restore the 1.0.38 feel: start the rows halfway through the morph.
     BOOL reveal=_revealed?t>=.42:t>=.5,flipped=reveal!=_revealed,still=UIAccessibilityIsReduceMotionEnabled();
     _revealed=reveal;
     if(reveal) _started=YES;
@@ -8183,7 +8155,6 @@ static UIView *FMDockCard(UIStackView *rows) {
     if(_slideActive) {
         _slideActive=NO;
         [_drawer.layer removeAllAnimations];
-        FMStagePopItems(_popItems,_popDividers,NO);
     }
     [self wake];
     _open=open;
@@ -8208,17 +8179,11 @@ static UIView *FMDockCard(UIStackView *rows) {
         [self applyProgress:1];
         [self layoutIfNeeded];
         if(!animated || FMPopMode()==2 || UIAccessibilityIsReduceMotionEnabled() || !self.window) return;
-        // The shell and contents move together. Pop rows overlap the slide,
-        // rather than waiting until after the glass has completely arrived.
         UIView *drawer=_drawer;
         CGPoint destination=drawer.center;
         CGFloat travel=CGRectGetWidth(drawer.frame)+1;
         drawer.center=CGPointMake(destination.x+(_left?-travel:travel),destination.y);
         _slideActive=YES;
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        FMPopItemsTimed(_popItems,_popDividers,_left,YES,.45);
-        [CATransaction commit];
         NSUInteger generation=_slideGeneration;
         [UIView animateWithDuration:.36 delay:0 usingSpringWithDamping:.86
             initialSpringVelocity:.3 options:UIViewAnimationOptionBeginFromCurrentState
