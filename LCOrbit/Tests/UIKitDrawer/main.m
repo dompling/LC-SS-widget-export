@@ -68,6 +68,7 @@
 @interface FMSettingsRootController : UIViewController
 - (void)tryAutomaticUpdatePrompt;
 - (void)checkForUpdates;
+- (void)offerRestartAfterVerifiedUpdate;
 - (void)rebuild;
 @end
 @interface FMSettingsSectionController : UIViewController
@@ -150,7 +151,7 @@ static NSDictionary *LastAutoPiPTarget;
 static BOOL RejectAutoPiP;
 static BOOL RejectPresentation;
 static UIAlertController *CapturedAlert;
-static NSUInteger UpdatePromptPresentations,DownloadResumes,UpdateInstalls;
+static NSUInteger UpdatePromptPresentations,DownloadResumes,UpdateInstalls,UpdateRestartAttempts;
 static BOOL RejectUpdateSkipSave;
 static NSURLRequest *DownloadRequest;
 static void (^DownloadCompletion)(NSData *,NSURLResponse *,NSError *);
@@ -214,6 +215,10 @@ static NSMutableArray *GitHubCompletions;
                                    completion:(void (^)(BOOL,NSError *))completion {
     UpdateInstalls++;InstalledUpdateDigest=digest;
     if(completion) completion(YES,nil);
+}
++ (BOOL)fixtureRestartHostAfterSignedUpdate:(NSError **)error {
+    UpdateRestartAttempts++;
+    return YES;
 }
 @end
 @interface LCOrbitStorage (DrawerUpdateFixture) @end
@@ -540,7 +545,17 @@ static void RunUpdatePromptTests(void) {
                   [InstalledUpdateDigest isEqual:UpdateRelease(@"9.0.11")[@"sha256"]],nil);
             Check(@"update-download-clears-progress-before-result",[reopened valueForKey:@"updateDownloadAlert"]==nil &&
                   ![[reopened valueForKey:@"checkingUpdate"] boolValue] &&
-                  [CapturedAlert.title isEqual:@"插件已自动签名并替换"] && [CapturedAlert.message containsString:@"自动签名"],CapturedAlert.title);
+                  [CapturedAlert.title isEqual:@"更新成功"] && [CapturedAlert.message containsString:@"自动重启"],CapturedAlert.title);
+            Check(@"update-install-offers-cancellable-auto-restart",
+                  [[CapturedAlert.actions valueForKey:@"title"] isEqual:@[@"稍后重启",@"立即重启"]] &&
+                  UpdateRestartAttempts==0,nil);
+            InvokeAlertAction(CapturedAlert,@"稍后重启");
+            Check(@"update-user-can-defer-restart",UpdateRestartAttempts==0,nil);
+            CapturedAlert=nil;
+            [reopened offerRestartAfterVerifiedUpdate];
+            InvokeAlertAction(CapturedAlert,@"立即重启");
+            Check(@"update-restart-now-uses-verified-host-launcher-once",UpdateRestartAttempts==1,nil);
+            CapturedAlert=nil;
             // No metadata: fetch once, leave the root before completion. The
             // late result is cacheable but cannot take over a child page.
             [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
@@ -2019,6 +2034,7 @@ static void RunTests(void) {
         SwapClass(LCOrbitGitHub.class,NSSelectorFromString(@"downloadReleaseAsset:progress:completion:"),@selector(fixtureDownloadReleaseAsset:progress:completion:));
     SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPlugin:expectedSHA256:error:),@selector(fixtureInstallDownloadedPlugin:expectedSHA256:error:));
     SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPluginAndSign:expectedSHA256:completion:),@selector(fixtureInstallDownloadedPluginAndSign:expectedSHA256:completion:));
+    SwapClass(LCOrbitPluginUpdater.class,@selector(restartHostAfterSignedUpdate:),@selector(fixtureRestartHostAfterSignedUpdate:));
     SwapClass(LCOrbitStorage.class,@selector(lastError),@selector(fixtureLastError));
     SwapClass(LCOrbitGitHub.class,@selector(accountWithError:),@selector(fixtureAccountWithError:));
     SwapClass(LCOrbitGitHub.class,@selector(hasTokenWithError:),@selector(fixtureHasTokenWithError:));

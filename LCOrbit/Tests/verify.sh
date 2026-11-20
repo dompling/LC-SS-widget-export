@@ -29,6 +29,17 @@ grep -Fq 'signFilesWithZSignWithURLs:completionHandler:' "$ROOT/LCOrbit/Core/LCO
 grep -Fq 'UVerifyKernelSignature(destination)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 grep -Fq 'F_CHECK_LV' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 grep -Fq 'rename(backup.fileSystemRepresentation' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+# A successful, verified signed install offers a cancellable restart in LC UI.
+# Never restart on the failed signer path or use a raw process exit.
+grep -Fq 'if(success) [weakSelf offerRestartAfterVerifiedUpdate];' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'restartHostAfterSignedUpdate:&restartError' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'launchToGuestAppWithClassicMode:' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq '[defaults setObject:@"ui" forKey:@"selected"]' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'update-user-can-defer-restart' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
+if grep -Eq 'exit\(0\)|raise\(SIGKILL\)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"; then
+    echo 'Updater must delegate relaunch instead of terminating the host directly' >&2
+    exit 1
+fi
 # A user-initiated adaptive opening bypasses the normal drawer announcement.
 # Do not remove its single confirmation tick, or emit one from background redraws.
 grep -Fq 'if([self presentAdaptiveDrawer])' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"

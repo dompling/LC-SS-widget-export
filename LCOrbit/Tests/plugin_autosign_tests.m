@@ -8,12 +8,14 @@
 #import "../Core/LCOrbitPluginUpdater.h"
 #import "../Core/LCOrbitHost.h"
 
-static BOOL Host=YES,HasCert=YES,SignerSuccess=YES,VerifySuccess=YES;
-static NSUInteger Calls=0,Assertions=0,Failures=0;
+static BOOL Host=YES,HasCert=YES,SignerSuccess=YES,VerifySuccess=YES,RestartAccepted=YES;
+static BOOL RestartTargetSafe=NO;
+static NSUInteger Calls=0,RestartCalls=0,Assertions=0,Failures=0;
 static NSString *Destination;
 
 @implementation LCOrbitHost
 + (BOOL)isHostUI { return Host; }
++ (NSUserDefaults *)hostDefaults { return NSUserDefaults.standardUserDefaults; }
 @end
 
 @interface LCUtils : NSObject
@@ -40,9 +42,20 @@ static NSString *Destination;
 
 @interface LCSharedUtils : NSObject
 + (NSString *)certificatePassword;
++ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode;
 @end
 @implementation LCSharedUtils
 + (NSString *)certificatePassword { return HasCert?@"fixture-password":nil; }
++ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode {
+    RestartCalls++;
+    NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+    RestartTargetSafe=classicMode==0 &&
+        [[defaults stringForKey:@"selected"] isEqualToString:@"ui"] &&
+        [defaults objectForKey:@"selectedContainer"]==nil &&
+        [defaults objectForKey:@"launchAppUrlScheme"]==nil &&
+        ![defaults boolForKey:@"LCOpenSideStore"];
+    return RestartAccepted;
+}
 @end
 
 // Exported by the dedicated fixture executable: equivalent contract to LC's
@@ -151,6 +164,45 @@ int main(void) {
                 return [name hasSuffix:@".rollback"];
             }]];
         Check(leftovers.count==0,@"no rollback artifacts after completed transactions");
+        NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+        NSArray<NSString *> *keys=@[@"selected",@"selectedContainer",@"launchAppUrlScheme",@"LCOpenSideStore"];
+        NSMutableDictionary<NSString *,id> *saved=[NSMutableDictionary dictionary];
+        for(NSString *key in keys) saved[key]=[defaults objectForKey:key]?:NSNull.null;
+        [defaults setObject:@"builtinSideStore" forKey:@"selected"];
+        [defaults setObject:@"original-container" forKey:@"selectedContainer"];
+        [defaults setObject:@"custom-url" forKey:@"launchAppUrlScheme"];
+        [defaults setBool:YES forKey:@"LCOpenSideStore"];
+        Host=NO;
+        NSError *restartError=nil;
+        BOOL restarted=[LCOrbitPluginUpdater restartHostAfterSignedUpdate:&restartError];
+        Check(!restarted && restartError!=nil && RestartCalls==0,@"guest never starts a host restart");
+        Host=YES;
+        RestartAccepted=NO;
+        restartError=nil;
+        restarted=[LCOrbitPluginUpdater restartHostAfterSignedUpdate:&restartError];
+        Check(!restarted && restartError!=nil && RestartCalls==1 && RestartTargetSafe,
+              @"failed launcher never claims success and receives only host target");
+        Check([[defaults stringForKey:@"selected"] isEqualToString:@"builtinSideStore"] &&
+              [[defaults stringForKey:@"selectedContainer"] isEqualToString:@"original-container"] &&
+              [[defaults stringForKey:@"launchAppUrlScheme"] isEqualToString:@"custom-url"] &&
+              [defaults boolForKey:@"LCOpenSideStore"],
+              @"launcher rejection restores all previous LC boot flags");
+        RestartAccepted=YES;
+        restartError=nil;
+        restarted=[LCOrbitPluginUpdater restartHostAfterSignedUpdate:&restartError];
+        Check(restarted && restartError==nil && RestartCalls==2 && RestartTargetSafe,
+              @"verified install may relaunch host through native LC launcher");
+        Check([[defaults stringForKey:@"selected"] isEqualToString:@"ui"] &&
+              [defaults objectForKey:@"selectedContainer"]==nil &&
+              [defaults objectForKey:@"launchAppUrlScheme"]==nil &&
+              ![defaults boolForKey:@"LCOpenSideStore"],
+              @"accepted restart prepares safe host UI bootstrap");
+        for(NSString *key in keys) {
+            id prior=saved[key];
+            if(prior==NSNull.null) [defaults removeObjectForKey:key];
+            else [defaults setObject:prior forKey:key];
+        }
+        [defaults synchronize];
         [NSFileManager.defaultManager removeItemAtPath:root error:nil];
         NSString *result=[NSString stringWithFormat:@"%lu/%lu assertions passed",(unsigned long)(Assertions-Failures),(unsigned long)Assertions];
         NSString *resultPath=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/PluginAutoSignResult.txt"];
