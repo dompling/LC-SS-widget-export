@@ -416,7 +416,7 @@ static UIWindow *OverviewWindow;
             if(self.activePreviewOnly && !TaskUsesPiP(controller)) {
                 // Keep the app's real window in its existing LC state.
                 // The solid preview shields it; just this icon is rendered.
-                UIImage *artwork=TaskIcon(task)?:[UIImage systemImageNamed:@"app.fill"];
+                UIImage *artwork=card.icon.image;
                 card.centerIcon=[[UIImageView alloc] initWithImage:artwork];
                 card.centerIcon.accessibilityIdentifier=[@"orbit.task.center-icon." stringByAppendingString:token];
                 card.centerIcon.contentMode=UIViewContentModeScaleAspectFit;
