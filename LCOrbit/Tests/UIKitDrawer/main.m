@@ -27,6 +27,7 @@
 @property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,strong) UIView *dimensionsPreview;
 @property(nonatomic,strong) UIWindow *settingsWindow;
+@property(nonatomic,assign) BOOL settingsOpenedInHost;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
 @property(nonatomic,strong) NSArray *apps;
 @property(nonatomic,copy) NSString *page;
@@ -191,6 +192,11 @@ static NSMutableArray *GitHubCompletions;
 @implementation LCOrbitPluginUpdater (DrawerUpdateFixture)
 + (BOOL)fixtureInstallDownloadedPlugin:(NSData *)binary expectedSHA256:(NSString *)digest error:(NSError **)error {
     UpdateInstalls++;InstalledUpdateDigest=digest;return YES;
+}
++ (void)fixtureInstallDownloadedPluginAndSign:(NSData *)binary expectedSHA256:(NSString *)digest
+                                   completion:(void (^)(BOOL,NSError *))completion {
+    UpdateInstalls++;InstalledUpdateDigest=digest;
+    if(completion) completion(YES,nil);
 }
 @end
 @interface LCOrbitStorage (DrawerUpdateFixture) @end
@@ -513,11 +519,11 @@ static void RunUpdatePromptTests(void) {
                 [[NSHTTPURLResponse alloc] initWithURL:DownloadRequest.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}],nil);
         }
         dispatch_async(dispatch_get_main_queue(),^{
-            Check(@"update-download-uses-existing-digest-install-boundary",UpdateInstalls==1 &&
+            Check(@"update-download-uses-signed-digest-install-boundary",UpdateInstalls==1 &&
                   [InstalledUpdateDigest isEqual:UpdateRelease(@"9.0.11")[@"sha256"]],nil);
             Check(@"update-download-clears-progress-before-result",[reopened valueForKey:@"updateDownloadAlert"]==nil &&
                   ![[reopened valueForKey:@"checkingUpdate"] boolValue] &&
-                  [CapturedAlert.title isEqual:@"插件已下载并替换"],CapturedAlert.title);
+                  [CapturedAlert.title isEqual:@"插件已自动签名并替换"] && [CapturedAlert.message containsString:@"自动签名"],CapturedAlert.title);
             // No metadata: fetch once, leave the root before completion. The
             // late result is cacheable but cannot take over a child page.
             [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
@@ -1053,7 +1059,71 @@ static void RunDrawerPerformanceTests(void) {
     [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[EvidencePath stringByAppendingPathComponent:@"result.json"] atomically:YES];
     });
 }
+// Regression for the optimized drawer: the initial frame must hide its items,
+// otherwise all pop modes look identical despite their CA animations.
+static void RunDrawerPopAndResetRegression(void) {
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    NSArray<NSString *> *keys=@[@"popAnimation",@"orbHandleStyle",@"taskSwitcherMode",@"fullscreenMultitask"];
+    NSMutableDictionary *saved=[NSMutableDictionary dictionary];
+    for(NSString *key in keys) saved[key]=[prefs objectForKey:[@"LCFloatingMenu." stringByAppendingString:key]]?:NSNull.null;
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    for(NSNumber *mode in @[@0,@1,@2]) {
+        [prefs setObject:mode forKey:@"LCFloatingMenu.popAnimation"];
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+        [menu toggle];
+        UIView *glass=[menu.panel viewWithTag:9230];
+        UIView *content=glass?DrawerContent(glass):nil;
+        NSUInteger hidden=0;
+        for(UIView *child in content.subviews)
+            if(child.tag!=9217 && child.tag!=9231 && child.alpha<.01) hidden++;
+        if(mode.intValue!=2) {
+            Check([NSString stringWithFormat:@"pop-mode-%@-hides-first-frame",mode],menu.panel && hidden>0,@{ @"hidden":@(hidden)});
+            [menu applyMorphProgress:.58];
+            NSMutableArray<NSNumber *> *starts=[NSMutableArray array];
+            for(UIView *view in Views(menu.panel)) {
+                CAAnimation *animation=[view.layer animationForKey:@"fm.pop.in"];
+                if(animation && ![view isKindOfClass:UIImageView.class]) [starts addObject:@(animation.beginTime)];
+            }
+            NSNumber *first=[starts valueForKeyPath:@"@min.self"],*last=[starts valueForKeyPath:@"@max.self"];
+            CFTimeInterval difference=last.doubleValue-first.doubleValue;
+            BOOL varied=mode.intValue==0?difference>.045:difference<.035;
+            Check([NSString stringWithFormat:@"pop-mode-%@-uses-distinct-timing",mode],starts.count>=2 && varied,
+                  @{@"items":@(starts.count),@"spread":@(difference)});
+        } else {
+            Check(@"pop-off-immediately-shows-complete-content",menu.panel && hidden==0 && !HasItemAnimation(menu.panel) &&
+                  ![[menu valueForKey:@"morphActive"] boolValue],@{@"hidden":@(hidden)});
+        }
+        [menu completeDrawerMorphNow];[menu toggle];[menu completeDrawerMorphNow];
+    }
+    [prefs setObject:@2 forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.fullscreenMultitask"];
+    FMManager *host=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+    [host resetDockSettings];
+    Check(@"style-reset-preserves-multitask-mode-and-enable",[prefs integerForKey:@"LCFloatingMenu.taskSwitcherMode"]==2 &&
+          [prefs boolForKey:@"LCFloatingMenu.fullscreenMultitask"],nil);
+    host.settingsWindow=host.window;
+    host.settingsOpenedInHost=YES;
+    FixtureHost=NO;
+    UIStackView *retained=[UIStackView new];
+    [host populateSettingsCategory:@"behavior" stack:retained];
+    UISegmentedControl *retainedMode=nil;
+    for(UIView *view in Views(retained)) if([view isKindOfClass:UISegmentedControl.class] &&
+        [view.accessibilityLabel isEqualToString:@"多任务切换菜单"]) retainedMode=(UISegmentedControl *)view;
+    Check(@"reset-redraw-keeps-host-multitask-controls-visible-but-locked",retainedMode && !retainedMode.enabled,nil);
+    host.settingsOpenedInHost=NO;
+    UIStackView *guest=[UIStackView new];
+    [host populateSettingsCategory:@"behavior" stack:guest];
+    BOOL guestHasControls=NO;
+    for(UIView *view in Views(guest)) if([view.accessibilityLabel isEqualToString:@"多任务切换菜单"]) guestHasControls=YES;
+    Check(@"guest-still-cannot-see-host-multitask-controls",!guestHasControls,nil);
+    FixtureHost=YES;
+    for(NSString *key in keys) {
+        id previous=saved[key];[prefs setObject:previous==NSNull.null?nil:previous forKey:[@"LCFloatingMenu." stringByAppendingString:key]];
+    }
+}
 static void RunTests(void) {
+    RunDrawerPopAndResetRegression();
     RunDropletDragTests();
     RunDropletReleaseTests();
     // Broad tests mutate global task/preferences fixtures and window visibility. Finish
@@ -1837,6 +1907,7 @@ static void RunTests(void) {
     if([LCOrbitGitHub respondsToSelector:NSSelectorFromString(@"downloadReleaseAsset:progress:completion:")])
         SwapClass(LCOrbitGitHub.class,NSSelectorFromString(@"downloadReleaseAsset:progress:completion:"),@selector(fixtureDownloadReleaseAsset:progress:completion:));
     SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPlugin:expectedSHA256:error:),@selector(fixtureInstallDownloadedPlugin:expectedSHA256:error:));
+    SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPluginAndSign:expectedSHA256:completion:),@selector(fixtureInstallDownloadedPluginAndSign:expectedSHA256:completion:));
     SwapClass(LCOrbitStorage.class,@selector(lastError),@selector(fixtureLastError));
     SwapClass(LCOrbitGitHub.class,@selector(accountWithError:),@selector(fixtureAccountWithError:));
     SwapClass(LCOrbitGitHub.class,@selector(hasTokenWithError:),@selector(fixtureHasTokenWithError:));

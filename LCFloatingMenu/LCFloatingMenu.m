@@ -2077,6 +2077,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 @property(nonatomic,strong) UIView *settingsScreen;
 @property(nonatomic,assign) BOOL settingsDockRedrawScheduled;
 @property(nonatomic,strong) UIWindow *settingsWindow;
+// Captured only when LC host opens this settings window. Never grants Guest privileges.
+@property(nonatomic,assign) BOOL settingsOpenedInHost;
 @property(nonatomic,strong) UIView *orbPreviewHost;
 @property(nonatomic,weak) UIView *dimensionsPreview;
 @property(nonatomic,strong) UINavigationController *settingsNavigation;
@@ -3220,6 +3222,10 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     // or a finger pulling past the end) shows as a stretch toward the screen.
     CGFloat raw=MAX(progress,0),t=MIN(raw,1),stretch=Clamp(raw-1,0,.08);
     _morphProgress=raw;
+    // The first morph frame must hide drawer contents before the shell expands.
+    // Optimizing this to transition-only updates omitted the initial frame,
+    // leaving every item visible before its staggered CA animation began.
+    BOOL initialContentVisibility=_morphShownT<0;
     // The two expensive parts of a frame are the outline geometry and the pop-in bookkeeping,
     // and a drag delivers both far faster than the screen can show them. Both are therefore
     // rated at the display rate: an interior frame keeps the outline it already has and only
@@ -3263,10 +3269,13 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     BOOL reveal=_popRevealed?t>=.42:t>=.5,flipped=reveal!=_popRevealed;
     _popRevealed=reveal;
     if(reveal) _popStarted=YES;
-    if(flipped) {
+    if(initialContentVisibility || flipped) {
         for(UIView *child in FMGlassContent(glass).subviews)
             if(child.tag!=9217 && child.tag!=9231) child.alpha=_popStarted?1:0;
-        [self popContent:reveal];
+        // Only emit layer animations on the actual visibility transition.
+        // Keeping the first-frame setup outside the per-frame drag hot path
+        // preserves rate-limited outlines and cached row geometry.
+        if(flipped) [self popContent:reveal];
     }
     [panel viewWithTag:9204].alpha=FMSmooth((t-.1)/.5);
     self.dismissLayer.alpha=FMSmooth(t);
@@ -4980,6 +4989,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     home.navigationItem.leftBarButtonItem.accessibilityLabel=@"返回";
     settings.rootViewController=nav;
     self.settingsNavigation=nav;
+    self.settingsOpenedInHost=FMHostUI();
     self.settingsWindow=settings;
     [settings makeKeyAndVisible];
     self.orbPreviewHost=[[UIView alloc] initWithFrame:settings.bounds];
@@ -4999,6 +5009,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
     UIWindowScene *scene=old.windowScene;
     [self.orbPreviewHost removeFromSuperview];self.orbPreviewHost=nil;self.dimensionsPreview=nil;
     self.settingsWindow=nil;
+    self.settingsOpenedInHost=NO;
     self.settingsNavigation=nil;
     self.previousKeyWindow=nil;
     old.hidden=YES;
@@ -5096,13 +5107,17 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
         [self spacer:s size:16];
         [self diyPage:s];
     } else if([category isEqualToString:@"behavior"]) {
-        if(FMHostUI()) {
+        // Preserve the host-only section during settings redraws after reset.
+        // If host identity becomes unavailable, show disabled controls instead
+        // of silently removing the whole section from the existing page.
+        BOOL currentHost=FMHostUI();
+        if(currentHost || (self.settingsOpenedInHost && self.settingsWindow)) {
             [self section:@"多任务" sub:@"开启后切换 App 会保留其他任务；子任务不需要单独启用微珠。" in:s];
             [self settingSwitch:s title:@"开启多任务" key:@"fullscreenMultitask" defaultValue:NO tag:19];
             [self section:@"多任务切换模式" sub:@"iPhone 和 iPad 都可选用阶梯卡片或 iPad 布局。iPad 布局在支持多窗口时交给系统，单窗口宿主中以 LC 网格呈现。" in:s];
             UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"系统（LC）",@"微珠",@"自适应"]];
             mode.selectedSegmentIndex=[LCOrbitMultitask usesAdaptiveSwitcher]?2:([LCOrbitMultitask usesSystemMenu]?0:1);
-            mode.enabled=[LCOrbitMultitask isEnabled];
+            mode.enabled=currentHost && [LCOrbitMultitask isEnabled];
             mode.accessibilityLabel=@"多任务切换菜单";
             [mode addTarget:self action:@selector(multitaskModeChanged:) forControlEvents:UIControlEventValueChanged];
             [self addRow:mode height:38 to:s];
@@ -5118,6 +5133,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
                     [self settingSlider:s title:@"距底部距离" key:@"adaptiveDockBottomGap" min:0 max:80 def:4 tag:112];
                 }
             }
+            if(!currentHost) [self note:@"宿主状态暂不可用，请返回 LC 主界面重新打开设置后调整多任务。" in:s];
             [self spacer:s size:14];
         }
         [self section:@"屏幕与旋转" sub:@"开启后跟随设备自由进入横屏自适应，播放视频时可保持屏幕常亮防息屏。" in:s];
@@ -6370,6 +6386,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
     }
 }
 - (void)performResetAllSettings {
+    // A style reset does not own multitask enablement or presentation modes.
+    BOOL hostAtReset=FMHostUI();
+    FMLog(@"settings-reset-begin",[NSString stringWithFormat:@"host=%d openedInHost=%d multitask=%d adaptive=%d",hostAtReset,self.settingsOpenedInHost,[LCOrbitMultitask isEnabled],[LCOrbitMultitask usesAdaptiveSwitcher]]);
     [self resetDockSettings];
     SetPref(@"showRestart",@YES);SetPref(@"haptic",@YES);
     SetPref(@"recentAppsFirst",@NO);
@@ -6384,6 +6403,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         self.overlayView.overrideUserInterfaceStyle=skin;
         if(self.settingsWindow) self.settingsWindow.overrideUserInterfaceStyle=skin;
         [self refreshUI];
+        FMLog(@"settings-reset-end",[NSString stringWithFormat:@"host=%d openedInHost=%d multitask=%d adaptive=%d",FMHostUI(),self.settingsOpenedInHost,[LCOrbitMultitask isEnabled],[LCOrbitMultitask usesAdaptiveSwitcher]]);
     });
 }
 - (void)invalidatePendingLaunch {
@@ -7065,27 +7085,29 @@ static BOOL sHasAttemptedAutoLaunch=NO;
             } completion:^(NSData *binary,NSHTTPURLResponse *response,NSError *error) {
                 dispatch_async(dispatch_get_main_queue(),^{
                     if(!error && weakSelf.updateDownloadAlert==progressAlert) {
-                        progressAlert.message=@"下载完成，正在校验并安装…";
+                        progressAlert.message=@"下载完成，正在校验并自动签名…";
                         weakSelf.updateStatusLabel.text=progressAlert.message;
                     }
                 });
-                NSError *installError=nil;
-                BOOL success=NO;
+                void (^finished)(BOOL,NSError *)=^(BOOL success,NSError *installError) {
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        typeof(self) current=weakSelf;
+                        if(!current) return;
+                        current.checkingUpdate=NO;
+                        current.updateStatusLabel.text=@"检查微珠最新发布版";
+                        [current afterUpdatePrompt:progressAlert perform:^{
+                            weakSelf.updateDownloadAlert=nil;
+                            [weakSelf presentUpdateResult:success?@"插件已自动签名并替换":@"更新未完成"
+                                message:success?@"已校验、替换并自动签名该插件。请重启 LC 和相关 Guest 以加载新版本；共享及专属插件仍需单独更新。":
+                                (installError.localizedDescription?:error.localizedDescription?:@"下载或签名失败，请检查证书和插件目录。")
+                                showRepository:!success];
+                        }];
+                    });
+                };
                 if(!error && response.statusCode==200 && binary.length>0 && FMHostUI())
-                    success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:release[@"sha256"] error:&installError];
-                dispatch_async(dispatch_get_main_queue(),^{
-                    typeof(self) current=weakSelf;
-                    if(!current) return;
-                    current.checkingUpdate=NO;
-                    current.updateStatusLabel.text=@"检查微珠最新发布版";
-                    [current afterUpdatePrompt:progressAlert perform:^{
-                        weakSelf.updateDownloadAlert=nil;
-                        [weakSelf presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
-                            message:success?@"已校验并替换旧插件。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
-                            (installError.localizedDescription?:error.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
-                            showRepository:!success];
-                    }];
-                });
+                    [LCOrbitPluginUpdater installDownloadedPluginAndSign:binary expectedSHA256:release[@"sha256"] completion:finished];
+                else finished(NO,error?:[NSError errorWithDomain:@"LCOrbit.PluginUpdate" code:19
+                    userInfo:@{NSLocalizedDescriptionKey:@"下载无效或当前不在 LC 主界面，未替换插件。"}]);
             }];
     }];
 }
@@ -7098,7 +7120,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         if([self.automaticallyOfferedVersions containsObject:version]) return;
         [self.automaticallyOfferedVersions addObject:version];
     }
-    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验新插件并原子替换旧版本。校验或替换失败时保留旧插件。安装完成后，请在 LC 原生 Tweaks 页面重新签名并重启相关应用。",release[@"notes"]];
+    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验、替换并自动签名微珠插件；若签名失败则恢复旧插件。更新完成后需重启 LC 和相关应用。",release[@"notes"]];
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"发现微珠新版本 v%@",version]
         message:message preferredStyle:UIAlertControllerStyleAlert];
     __weak typeof(self) weakSelf=self;

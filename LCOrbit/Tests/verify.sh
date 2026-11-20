@@ -18,6 +18,16 @@ for symbol in 'OBJC_CLASS_$_LCOrbitCore' 'OBJC_CLASS_$_LCOrbitHost' \
 do
     printf '%s\n' "$SYMBOLS" | grep -Fq "$symbol"
 done
+# The optimized drawer must hide its content on the initial morph frame,
+# then trigger the selected pop animation only on the visibility transition.
+grep -Fq 'BOOL initialContentVisibility=_morphShownT<0;' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'if(initialContentVisibility || flipped)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'if(flipped) [self popContent:reveal];' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+# Auto-update signs only its replaced dylib and retains rollback until verified.
+grep -Fq 'installDownloadedPluginAndSign:binary' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'signFilesWithZSignWithURLs:completionHandler:' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'verifySignature(destination.fileSystemRepresentation)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'rename(backup.fileSystemRepresentation' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 # Guard existing preferences and the old Guest switch pathway from accidental deletion.
 grep -Fq 'forModule:@"LCFloatingMenu"' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'launchToGuestAppWithURL:' "$ROOT/LCOrbit/Core/LCOrbitGuestService.m"
