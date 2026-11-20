@@ -10,6 +10,12 @@ static id TaskObject(id object,SEL selector) {
 }
 // 0 means closest to the home-indicator safe area; larger values lift the Dock.
 // Read once when the overview opens instead of loading preferences during layout.
+// A low-power switcher option. One real scene stays live; other cards render
+// static app icons without ever un-hiding or resizing their remote windows.
+static BOOL TaskActivePreviewOnly(void) {
+    id stored=[[LCOrbitStorage preferences] objectForKey:@"LCFloatingMenu.adaptiveActivePreviewOnly"];
+    return stored?[stored boolValue]:NO;
+}
 static CGFloat TaskDockBottomGap(void) {
     id stored=[[LCOrbitStorage preferences] objectForKey:@"LCFloatingMenu.adaptiveDockBottomGap"];
     CGFloat gap=stored?[stored doubleValue]:4;
@@ -269,6 +275,7 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic,strong) UIView *preview;
 @property(nonatomic,strong) UIView *touchShield;
 @property(nonatomic,strong) UIImageView *icon;
+@property(nonatomic,strong) UIImageView *centerIcon;
 @property(nonatomic,strong) UILabel *name;
 @property(nonatomic,strong) LCOrbitTaskPlacement *placement;
 @property(nonatomic) CGAffineTransform restingTransform;
@@ -282,6 +289,7 @@ static UIImage *TaskIcon(NSDictionary *task) {
 @property(nonatomic) CGFloat dockIconSize;
 @property(nonatomic) CGFloat dockBottomGap;
 @property(nonatomic) BOOL gridPresentation;
+@property(nonatomic) BOOL activePreviewOnly;
 @property(nonatomic) BOOL initialDockVisible;
 @property(nonatomic) NSUInteger cardsPerPage;
 @property(nonatomic,strong) UIView *dock;
@@ -402,10 +410,30 @@ static UIWindow *OverviewWindow;
             // transparent overview is the sole touch surface for gestures.
             placement.view.userInteractionEnabled=NO;placement.view.accessibilityElementsHidden=YES;
         } else {
-            card.preview.backgroundColor=[UIColor colorWithWhite:.18 alpha:1];
+            card.preview.backgroundColor=[UIColor colorWithWhite:.16 alpha:1];
             card.preview.layer.borderWidth=.5;
-            card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.25].CGColor;
-            UIImageView *pip=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pip.fill"]];pip.contentMode=UIViewContentModeScaleAspectFit;pip.tintColor=UIColor.whiteColor;pip.tag=12;pip.accessibilityIdentifier=[@"orbit.task.pip." stringByAppendingString:token];[card.preview addSubview:pip];card.accessibilityHint=@"此 App 的画面保留在画中画中";
+            card.preview.layer.borderColor=[UIColor.whiteColor colorWithAlphaComponent:.20].CGColor;
+            if(self.activePreviewOnly && !TaskUsesPiP(controller)) {
+                // Keep the app's real window in its existing LC state.
+                // The solid preview shields it; just this icon is rendered.
+                UIImage *artwork=TaskIcon(task)?:[UIImage systemImageNamed:@"app.fill"];
+                card.centerIcon=[[UIImageView alloc] initWithImage:artwork];
+                card.centerIcon.accessibilityIdentifier=[@"orbit.task.center-icon." stringByAppendingString:token];
+                card.centerIcon.contentMode=UIViewContentModeScaleAspectFit;
+                card.centerIcon.tintColor=UIColor.whiteColor;
+                card.centerIcon.layer.cornerRadius=18;
+                card.centerIcon.layer.cornerCurve=kCACornerCurveContinuous;
+                card.centerIcon.clipsToBounds=YES;
+                [card.preview addSubview:card.centerIcon];
+                card.accessibilityHint=@"静态图标预览，轻点切换到此 App";
+            } else {
+                UIImageView *pip=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"pip.fill"]];
+                pip.contentMode=UIViewContentModeScaleAspectFit;
+                pip.tintColor=UIColor.whiteColor;
+                pip.tag=12;
+                pip.accessibilityIdentifier=[@"orbit.task.pip." stringByAppendingString:token];
+                [card.preview addSubview:pip];card.accessibilityHint=@"此 App 的画面保留在画中画中";
+            }
         }
         // The entire App-content rectangle belongs to task gestures, including
         // areas that depict buttons, lists, web views or a playing video.
@@ -521,6 +549,11 @@ static UIWindow *OverviewWindow;
         card.center=CGPointMake(centerX+(index/self.cardsPerPage)*self.stride,centerY);
         card.preview.frame=CGRectMake(0,34,cardWidth,cardHeight);card.touchShield.frame=card.preview.frame;
         [card.preview viewWithTag:12].frame=CGRectMake((cardWidth-54)/2,(cardHeight-54)/2,54,54);
+        if(card.centerIcon) {
+            CGFloat iconSize=MIN(94,MAX(44,MIN(cardWidth,cardHeight)*.30));
+            card.centerIcon.frame=CGRectMake((cardWidth-iconSize)*.5,(cardHeight-iconSize)*.5,iconSize,iconSize);
+            card.centerIcon.layer.cornerRadius=iconSize*.225;
+        }
     }
     self.selectedIndex=selectedIndex;
     self.pages.contentOffset=CGPointMake((selectedIndex/self.cardsPerPage)*self.stride,0);
@@ -1137,13 +1170,23 @@ static UIWindow *OverviewWindow;
         if(controller.isViewLoaded&&controller.view.superview&&controller.view.window.windowScene==scene)[tasks addObject:task];
     }
     if(!tasks.count&&!apps.count){[LCOrbitMultitask showHome];return YES;}
+    BOOL activePreviewOnly=TaskActivePreviewOnly();
+    UIViewController *liveWindow=[LCOrbitMultitask activeWindow];
+    BOOL isTracked=NO;
+    for(NSDictionary *task in tasks)if(task[@"window"]==liveWindow){isTracked=YES;break;}
+    if(!isTracked) {
+        liveWindow=nil;
+        for(NSDictionary *task in tasks)if([task[@"active"] boolValue]){liveWindow=task[@"window"];break;}
+    }
     NSMutableArray *placements=[NSMutableArray array];
-    for(NSDictionary *task in tasks)if(!TaskUsesPiP(task[@"window"])) {
+    for(NSDictionary *task in tasks)if(!TaskUsesPiP(task[@"window"]) &&
+            (!activePreviewOnly || task[@"window"]==liveWindow)) {
         LCOrbitTaskPlacement *placement=[[LCOrbitTaskPlacement alloc] initWithController:task[@"window"]];
         [placements addObject:placement];
     }
     LCOrbitTaskOverviewController *controller=[LCOrbitTaskOverviewController new];controller.hostScene=scene;controller.tasks=tasks;controller.apps=[apps copy];controller.launchHandler=handler;controller.placements=placements;controller.sceneBounds=scene.coordinateSpace.bounds;
     controller.gridPresentation=[LCOrbitMultitask taskSwitcherPresentation]==1;
+    controller.activePreviewOnly=activePreviewOnly;
     controller.initialDockVisible=restoredDock;
     controller.dockIconSize=MIN(50,MAX(24,size));
     controller.dockBottomGap=TaskDockBottomGap();
@@ -1181,5 +1224,11 @@ static UIWindow *OverviewWindow;
 + (void)cancelDockLaunch:(NSUUID *)token {
     if(token&&[ActiveLaunchCover.token isEqual:token])[ActiveLaunchCover stop];
 }
-+ (BOOL)isPresentingWindow:(UIViewController *)window { if(!window)return NO;for(LCOrbitTaskPlacement *placement in CurrentOverview.placements)if(placement.controller==window)return YES;return NO; }
++ (BOOL)isPresentingWindow:(UIViewController *)window {
+    if(!window)return NO;
+    // Icon-only cards are still part of the overview even though they don't
+    // borrow the live scene. Preserve task-exit ownership and notifications.
+    for(NSDictionary *task in CurrentOverview.tasks)if(task[@"window"]==window)return YES;
+    return NO;
+}
 @end
