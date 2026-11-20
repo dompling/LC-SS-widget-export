@@ -248,8 +248,8 @@ static BOOL UAutomaticSigningInProgress=NO;
 }
 // The original LC already uses this launcher to switch from a running Guest
 // back to its signed host process. It re-opens LC via LaunchServices, then
-// terminates the previous process *in its completion handler*. In contrast,
-// exit(0) here would just drop the user on the Home Screen.
+// terminates the previous process *in its completion handler*. Invoking a
+// bare process-exit primitive here would just drop the user on the Home Screen.
 // Only call this after automatic installation and signature verification.
 + (BOOL)restartHostAfterSignedUpdate:(NSError **)error {
     if(![LCOrbitHost isHostUI]) {
