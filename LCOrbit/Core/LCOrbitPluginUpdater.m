@@ -4,6 +4,8 @@
 #import <mach-o/loader.h>
 #import <mach/machine.h>
 #import <sys/stat.h>
+#import <sys/fcntl.h>
+#import <unistd.h>
 #import <errno.h>
 #import <stdio.h>
 #import <objc/message.h>
@@ -56,6 +58,54 @@ static BOOL UHasMatchingDigest(NSData *binary,NSString *digest) {
     NSMutableString *hex=[NSMutableString stringWithCapacity:64];
     for(NSUInteger i=0;i<sizeof(hash);i++) [hex appendFormat:@"%02x",hash[i]];
     return [digest.lowercaseString isEqualToString:[@"sha256:" stringByAppendingString:hex]];
+}
+// Mirror LC's checkCodeSignature kernel verification when LC's executable
+// does not export that symbol (release IPA binaries are frequently stripped).
+// Only a single arm64 Mach-O dylib with a bounded code-signature load command
+// is accepted. This does not bypass any trust check or grant new entitlements.
+static BOOL UVerifyKernelSignature(NSString *path) {
+    int fd=open(path.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd<0) return NO;
+    BOOL valid=NO;
+    NSMutableData *commands=nil;
+    struct stat info;
+    struct mach_header_64 header;
+    if(fstat(fd,&info)!=0 || !S_ISREG(info.st_mode) || info.st_size<sizeof(header) ||
+       pread(fd,&header,sizeof(header),0)!=sizeof(header) ||
+       header.magic!=MH_MAGIC_64 || header.cputype!=CPU_TYPE_ARM64 ||
+       header.filetype!=MH_DYLIB || header.ncmds>10000 ||
+       header.sizeofcmds>(NSUInteger)info.st_size-sizeof(header)) goto finish;
+    commands=[NSMutableData dataWithLength:header.sizeofcmds];
+    if(pread(fd,commands.mutableBytes,header.sizeofcmds,sizeof(header))!=header.sizeofcmds) goto finish;
+    const uint8_t *bytes=commands.bytes;
+    NSUInteger offset=0;
+    struct linkedit_data_command signature={0};
+    for(uint32_t i=0;i<header.ncmds;i++) {
+        if(offset+sizeof(struct load_command)>header.sizeofcmds) goto finish;
+        const struct load_command *cmd=(const void *)(bytes+offset);
+        if(cmd->cmdsize<sizeof(*cmd) || cmd->cmdsize>header.sizeofcmds-offset) goto finish;
+        if(cmd->cmd==LC_CODE_SIGNATURE) {
+            if(cmd->cmdsize<sizeof(signature)) goto finish;
+            memcpy(&signature,cmd,sizeof(signature));
+        }
+        offset+=cmd->cmdsize;
+    }
+    if(!signature.datasize || signature.dataoff>(uint64_t)info.st_size ||
+       signature.datasize>(uint64_t)info.st_size-signature.dataoff) goto finish;
+    fsignatures_t siginfo={0};
+    siginfo.fs_file_start=0;
+    siginfo.fs_blob_start=(void *)(uintptr_t)signature.dataoff;
+    siginfo.fs_blob_size=signature.datasize;
+    if(fcntl(fd,F_ADDFILESIGS_RETURN,&siginfo)==-1) goto finish;
+    char message[512]={0};
+    fchecklv_t check={0};
+    check.lv_error_message_size=sizeof(message);
+    check.lv_error_message=message;
+    check.lv_file_start=0;
+    valid=fcntl(fd,F_CHECK_LV,&check)==0;
+finish:
+    close(fd);
+    return valid;
 }
 // Accessed only on the main queue; signing has one completion owner.
 static BOOL UAutomaticSigningInProgress=NO;
@@ -120,10 +170,9 @@ static BOOL UAutomaticSigningInProgress=NO;
         SEL sign=NSSelectorFromString(@"signFilesWithZSignWithURLs:completionHandler:");
         SEL certificate=NSSelectorFromString(@"certificateData");
         SEL password=NSSelectorFromString(@"certificatePassword");
-        BOOL (*verifySignature)(const char *)=(BOOL (*)(const char *))dlsym(RTLD_DEFAULT,"checkCodeSignature");
+        BOOL (*hostVerifier)(const char *)=(BOOL (*)(const char *))dlsym(RTLD_DEFAULT,"checkCodeSignature");
         if(!utils || !shared || ![utils respondsToSelector:sign] ||
-           ![utils respondsToSelector:certificate] || ![shared respondsToSelector:password] ||
-           !verifySignature) {
+           ![utils respondsToSelector:certificate] || ![shared respondsToSelector:password]) {
             if(completion) completion(NO,UErr(11,@"当前 LC 未提供可验证的原生 ZSign 签名接口，请使用 LC Tweaks 页面签名。"));
             return;
         }
@@ -172,7 +221,8 @@ static BOOL UAutomaticSigningInProgress=NO;
                 completed=YES;
                 BOOL valid=success && URegular(destination) &&
                     UBinaryIsPlugin([NSData dataWithContentsOfFile:destination]) &&
-                    verifySignature(destination.fileSystemRepresentation);
+                    (hostVerifier?hostVerifier(destination.fileSystemRepresentation):
+                        UVerifyKernelSignature(destination));
                 if(valid) {
                     [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
                     UAutomaticSigningInProgress=NO;

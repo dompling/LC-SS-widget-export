@@ -26,7 +26,8 @@ grep -Fq 'if(flipped) [self popContent:reveal];' "$ROOT/LCFloatingMenu/LCFloatin
 # Auto-update signs only its replaced dylib and retains rollback until verified.
 grep -Fq 'installDownloadedPluginAndSign:binary' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'signFilesWithZSignWithURLs:completionHandler:' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
-grep -Fq 'verifySignature(destination.fileSystemRepresentation)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'UVerifyKernelSignature(destination)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'F_CHECK_LV' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 grep -Fq 'rename(backup.fileSystemRepresentation' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 # Guard existing preferences and the old Guest switch pathway from accidental deletion.
 grep -Fq 'forModule:@"LCFloatingMenu"' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
