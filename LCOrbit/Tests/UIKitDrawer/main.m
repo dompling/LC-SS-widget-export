@@ -112,6 +112,18 @@ static NSUInteger CloseCount, PositionWrites;
 static NSUInteger PreferenceReads;
 static NSUInteger InstalledAppScans,MainThreadAppScans,DrawerBuilds,DropletOutlineUpdates;
 static NSUInteger AdaptivePresentations;
+static NSUInteger AdaptiveOpenHaptics;
+static CGFloat AdaptiveHapticIntensity;
+static BOOL RejectAdaptiveEntry;
+@interface UIImpactFeedbackGenerator (AdaptiveOpenHapticFixture)
+- (void)fixtureAdaptiveImpactOccurredWithIntensity:(CGFloat)intensity;
+@end
+@implementation UIImpactFeedbackGenerator (AdaptiveOpenHapticFixture)
+- (void)fixtureAdaptiveImpactOccurredWithIntensity:(CGFloat)intensity {
+    AdaptiveOpenHaptics++;
+    AdaptiveHapticIntensity=intensity;
+}
+@end
 static NSArray *AdaptiveApps;
 static void (^AdaptiveLaunch)(NSDictionary *);
 static LCOrbitTaskDockIconProvider AdaptiveIconProvider;
@@ -122,6 +134,11 @@ static CGFloat AdaptiveIconSize;
 @implementation LCOrbitTaskSwitcher (DrawerEntryFixture)
 + (BOOL)fixturePresentInScene:(UIWindowScene *)scene apps:(NSArray *)apps dockIconSize:(CGFloat)size iconProvider:(LCOrbitTaskDockIconProvider)provider launchHandler:(void (^)(NSDictionary *))handler error:(NSError **)error {
     AdaptivePresentations++;
+    if(RejectAdaptiveEntry) {
+        if(error) *error=[NSError errorWithDomain:@"DrawerAdaptiveFixture" code:20
+            userInfo:@{NSLocalizedDescriptionKey:@"Synthetic adaptive switcher failure"}];
+        return NO;
+    }
     AdaptiveApps=[apps copy];
     AdaptiveIconSize=size;
     AdaptiveIconProvider=[provider copy];
@@ -1904,7 +1921,14 @@ static void RunTests(void) {
     id savedSwitcherMode=[prefs objectForKey:@"LCFloatingMenu.taskSwitcherMode"];
     [prefs setInteger:2 forKey:@"LCFloatingMenu.taskSwitcherMode"];
     id previousDockIconSize=[prefs objectForKey:@"LCFloatingMenu.adaptiveDockIconSize"];
+    id previousHaptic=[prefs objectForKey:@"LCFloatingMenu.haptic"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.haptic"];
     [prefs setObject:@49 forKey:@"LCFloatingMenu.adaptiveDockIconSize"];
+    Method actualHaptic=class_getInstanceMethod(UIImpactFeedbackGenerator.class,@selector(impactOccurredWithIntensity:));
+    Method fixtureHaptic=class_getInstanceMethod(UIImpactFeedbackGenerator.class,
+        @selector(fixtureAdaptiveImpactOccurredWithIntensity:));
+    Check(@"adaptive-haptic-observer-available",actualHaptic && fixtureHaptic,nil);
+    if(actualHaptic && fixtureHaptic) method_exchangeImplementations(actualHaptic,fixtureHaptic);
     SEL adaptiveEntry=@selector(presentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
     SEL fixtureEntry=@selector(fixturePresentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
     SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
@@ -1912,7 +1936,10 @@ static void RunTests(void) {
         FMManager *adaptive=Manager(compact.boolValue,1,874,UIEdgeInsetsMake(62,0,34,0),NO,NO,@"apps");
         NSUInteger before=AdaptivePresentations,scans=MainThreadAppScans,builds=DrawerBuilds;
         NSArray *expected=[adaptive orderedAppsForMenu];
+        NSUInteger hapticsBefore=AdaptiveOpenHaptics;
         [adaptive toggle];
+        Check(compact.boolValue?@"adaptive-compact-one-tick-on-success":@"adaptive-normal-one-tick-on-success",
+              AdaptiveOpenHaptics==hapticsBefore+1 && fabs(AdaptiveHapticIntensity-.45)<.01,nil);
         Check(compact.boolValue?@"adaptive-compact-original-entry":@"adaptive-normal-original-entry",
               AdaptivePresentations==before+1 && !adaptive.panel && !adaptive.isOpen && [AdaptiveApps isEqual:expected] && AdaptiveLaunch!=nil && MainThreadAppScans==scans && DrawerBuilds==builds,nil);
         NSDictionary *blocked=@{@"title":@"Blocked",@"status":@"需要 JIT",@"blockReason":@"needs-jit",@"launchable":@NO};
@@ -1929,13 +1956,31 @@ static void RunTests(void) {
         Check(compact.boolValue?@"adaptive-compact-shared-and-jit-use-badges":@"adaptive-normal-shared-and-jit-use-badges",
               [sharedIcon.accessibilityValue isEqualToString:@"共享"]&&Views(sharedIcon).count==Views(plainIcon).count+1&&
               Views(blockedIcon).count==Views(plainIcon).count+1,nil);
+        hapticsBefore=AdaptiveOpenHaptics;
         adaptive.isOpen=YES;[adaptive draw];
+        Check(compact.boolValue?@"adaptive-compact-no-haptic-on-redraw":@"adaptive-normal-no-haptic-on-redraw",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
         Check(compact.boolValue?@"adaptive-compact-no-intermediate-drawer":@"adaptive-normal-no-intermediate-drawer",!adaptive.panel && AdaptivePresentations==before+2 && !Actions(adaptive,@"openTaskSwitcher").count,nil);
         FixturePan *pull=[FixturePan new];CGPoint start=adaptive.orb.center;
         pull.fixturePoint=start;pull.fixtureState=UIGestureRecognizerStateBegan;[adaptive pan:pull];
         pull.fixturePoint=CGPointMake(start.x-80,start.y);pull.fixtureState=UIGestureRecognizerStateChanged;[adaptive pan:pull];
+        Check(compact.boolValue?@"adaptive-compact-no-haptic-while-dragging":@"adaptive-normal-no-haptic-while-dragging",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
         pull.fixtureState=UIGestureRecognizerStateEnded;[adaptive pan:pull];
+        Check(compact.boolValue?@"adaptive-compact-one-tick-on-pull-release":@"adaptive-normal-one-tick-on-pull-release",
+              AdaptiveOpenHaptics==hapticsBefore+1,nil);
         Check(compact.boolValue?@"adaptive-compact-original-pull":@"adaptive-normal-original-pull",AdaptivePresentations==before+3 && !adaptive.panel && MainThreadAppScans==scans,nil);
+        hapticsBefore=AdaptiveOpenHaptics;
+        [prefs setObject:@NO forKey:@"LCFloatingMenu.haptic"];
+        [adaptive toggle];
+        Check(compact.boolValue?@"adaptive-compact-respects-disabled-haptic":@"adaptive-normal-respects-disabled-haptic",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
+        [prefs setObject:@YES forKey:@"LCFloatingMenu.haptic"];
+        RejectAdaptiveEntry=YES;
+        [adaptive toggle];
+        RejectAdaptiveEntry=NO;
+        Check(compact.boolValue?@"adaptive-compact-no-haptic-on-presentation-failure":@"adaptive-normal-no-haptic-on-presentation-failure",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
     }
     FMManager *adaptiveSettings=Manager(NO,1,874,UIEdgeInsetsMake(62,0,34,0),NO,NO,@"apps");
     UIStackView *adaptiveStack=[[UIStackView alloc] initWithFrame:CGRectMake(20,20,360,800)];adaptiveStack.axis=UILayoutConstraintAxisVertical;
@@ -1963,6 +2008,8 @@ static void RunTests(void) {
     }
     [prefs setObject:savedSwitcherMode forKey:@"LCFloatingMenu.taskSwitcherMode"];
     [prefs setObject:previousDockIconSize forKey:@"LCFloatingMenu.adaptiveDockIconSize"];
+    [prefs setObject:previousHaptic forKey:@"LCFloatingMenu.haptic"];
+    if(actualHaptic && fixtureHaptic) method_exchangeImplementations(actualHaptic,fixtureHaptic);
     SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
     FixtureWidth=667;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3.8*NSEC_PER_SEC),dispatch_get_main_queue(),^{

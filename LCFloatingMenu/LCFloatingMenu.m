@@ -2150,7 +2150,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)requestAppsRefresh;
 - (void)refreshInventoryInBackground;
 - (BOOL)usesAdaptiveDrawer;
-- (void)presentAdaptiveDrawer;
+- (BOOL)presentAdaptiveDrawer;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
 - (void)rememberCurrentApp;
@@ -3164,7 +3164,11 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     BOOL opening=!self.isOpen;
     if(opening && [self usesAdaptiveDrawer]) {
         [self cancelOrbFade];
-        [self presentAdaptiveDrawer];
+        // A successful user-initiated adaptive opening bypasses the regular
+        // announceDrawerState path. Give it the same single confirmation tick,
+        // without ticking on drag progress, failed presentation or redraws.
+        if([self presentAdaptiveDrawer])
+            FMHaptic(UIImpactFeedbackStyleRigid,.45);
         return;
     }
     if(opening) {
@@ -6671,8 +6675,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
 - (BOOL)usesAdaptiveDrawer {
     return [LCOrbitMultitask isEnabled] && [LCOrbitMultitask usesAdaptiveSwitcher] && ![LCOrbitMultitask usesNativeTaskWindows];
 }
-- (void)presentAdaptiveDrawer {
-    if(![self usesAdaptiveDrawer] || self.settingsWindow || !self.window) return;
+- (BOOL)presentAdaptiveDrawer {
+    if(![self usesAdaptiveDrawer] || self.settingsWindow || !self.window) return NO;
     UIWindowScene *scene=self.window.windowScene ?: [LCOrbitHost activeScene];
     [self persistAppsScroll];
     self.page=@"apps";self.isOpen=NO;
@@ -6687,7 +6691,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         [FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74]:nil;
     __weak typeof(self) weakSelf=self;
     NSError *error=nil;
-    if(![LCOrbitTaskSwitcher presentInScene:scene apps:apps dockIconSize:iconSize iconProvider:^UIView *(NSDictionary *app,CGFloat size,BOOL current) {
+    BOOL presented=[LCOrbitTaskSwitcher presentInScene:scene apps:apps dockIconSize:iconSize iconProvider:^UIView *(NSDictionary *app,CGFloat size,BOOL current) {
         UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
         UIView *icon=tile;
         if(iconFrameColor) {
@@ -6713,9 +6717,13 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         return tile;
     } launchHandler:^(NSDictionary *app){
         [weakSelf switchToApp:app];
-    } error:&error])
+    } error:&error];
+    if(!presented) {
         [self showMessage:@"无法打开任务切换" details:error.localizedDescription?:@"请稍后重试。"];
+        return NO;
+    }
     [self refreshInventoryInBackground];
+    return YES;
 }
 - (void)goHome {
     SetPref(@"lastActiveAppKey",@"ui");

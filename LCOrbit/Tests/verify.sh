@@ -29,6 +29,11 @@ grep -Fq 'signFilesWithZSignWithURLs:completionHandler:' "$ROOT/LCOrbit/Core/LCO
 grep -Fq 'UVerifyKernelSignature(destination)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 grep -Fq 'F_CHECK_LV' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
 grep -Fq 'rename(backup.fileSystemRepresentation' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+# A user-initiated adaptive opening bypasses the normal drawer announcement.
+# Do not remove its single confirmation tick, or emit one from background redraws.
+grep -Fq 'if([self presentAdaptiveDrawer])' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'adaptive-normal-no-haptic-on-redraw' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
+grep -Fq 'adaptive-normal-one-tick-on-pull-release' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
 # Match 1.0.38 capsule entrance: rows start at the halfway-open glass.
 # Water-style glass slides while its shorter stagger is already playing.
 grep -Fq 'BOOL reveal=_popRevealed?t>=.42:t>=.5' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
