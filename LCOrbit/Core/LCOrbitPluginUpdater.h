@@ -6,6 +6,12 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)installDownloadedPlugin:(NSData *)binary
                 expectedSHA256:(NSString *)digest
                           error:(NSError * _Nullable * _Nullable)error;
+// Host-only automatic signing after replacement. Uses the LC app's existing
+// ZSign entry, verifies the resulting signature and rolls back on failure.
+// Completion is delivered on the main queue only after signing finishes.
++ (void)installDownloadedPluginAndSign:(NSData *)binary
+                      expectedSHA256:(NSString *)digest
+                           completion:(void (^)(BOOL success,NSError * _Nullable error))completion;
 // Separate, testable atomic replacement. The old dylib remains intact if
 // validation or staging fails; no persistent backup files are created.
 + (BOOL)replacePluginData:(NSData *)binary

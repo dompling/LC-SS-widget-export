@@ -1,6 +1,10 @@
 #import <Foundation/Foundation.h>
-static BOOL Adaptive;
-static NSUInteger Scans, Presents, Draws, Refreshes, Depth;
+static BOOL Adaptive,AdaptivePresentationSucceeds=YES;
+static NSUInteger Scans, Presents, Draws, Refreshes, Depth, HapticTicks;
+typedef NS_ENUM(NSInteger, UIImpactFeedbackStyle) { UIImpactFeedbackStyleRigid=5 };
+static void FMHaptic(UIImpactFeedbackStyle style,double intensity) {
+    if(style==UIImpactFeedbackStyleRigid && intensity>.4) HapticTicks++;
+}
 static dispatch_semaphore_t ScanStarted,ScanReleased;
 static NSArray *InventoryResult;
 static void FMBeginPreferenceSnapshot(void) { Depth++; }
@@ -39,12 +43,12 @@ typedef NSObject UIWindow;
 @property(nonatomic) BOOL inventoryRefreshPending;
 - (void)toggle;
 - (BOOL)usesAdaptiveDrawer;
-- (void)presentAdaptiveDrawer;
+- (BOOL)presentAdaptiveDrawer;
 - (void)refreshInventoryInBackground;
 @end
 @implementation FMManager
 - (BOOL)usesAdaptiveDrawer { return Adaptive; }
-- (void)presentAdaptiveDrawer { Presents++;self.isOpen=NO; }
+- (BOOL)presentAdaptiveDrawer { Presents++;self.isOpen=NO;return AdaptivePresentationSucceeds; }
 - (void)requestAppsRefresh { Refreshes++; }
 - (void)stopDropletPull {}
 - (void)endScrubAnimated:(BOOL)animated {}
@@ -62,7 +66,10 @@ int main(void) {
     @autoreleasepool {
         FMManager *menu=[FMManager new];menu.orb=[EntryOrb new];menu.apps=@[@{@"identity":@"cached"}];
         Adaptive=YES;[menu toggle];
-        if(Presents!=1||Draws!=0||Scans!=0||menu.isOpen) {fprintf(stderr,"FAIL: original bead must directly present adaptive deck using cached inventory, without legacy drawer or synchronous scan\n");return 1;}
+        if(Presents!=1||Draws!=0||Scans!=0||menu.isOpen||HapticTicks!=1) {fprintf(stderr,"FAIL: adaptive bead must present once with exactly one haptic, no legacy drawer or synchronous scan\n");return 1;}
+        AdaptivePresentationSucceeds=NO;[menu toggle];
+        if(Presents!=2||HapticTicks!=1) {fprintf(stderr,"FAIL: failed adaptive presentation must not tick\n");return 10;}
+        AdaptivePresentationSucceeds=YES;
         Adaptive=NO;Presents=Draws=Scans=Refreshes=0;[menu toggle];
         if(Presents||!menu.isOpen||!menu.panel||Draws!=1||Scans||![menu.apps.firstObject[@"identity"] isEqual:@"cached"]) {fprintf(stderr,"FAIL: legacy drawer must still open immediately using cached inventory\n");return 2;}
         [menu toggle];

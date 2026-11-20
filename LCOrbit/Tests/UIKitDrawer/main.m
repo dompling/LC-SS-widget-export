@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <float.h>
 #import "LCOrbit/Core/LCOrbitCore.h"
 #import "LCOrbit/Core/LCOrbitStorage.h"
 #import "LCOrbit/Core/LCOrbitGuestService.h"
@@ -110,6 +111,18 @@ static NSUInteger CloseCount, PositionWrites;
 static NSUInteger PreferenceReads;
 static NSUInteger InstalledAppScans,MainThreadAppScans,DrawerBuilds,DropletOutlineUpdates;
 static NSUInteger AdaptivePresentations;
+static NSUInteger AdaptiveOpenHaptics;
+static CGFloat AdaptiveHapticIntensity;
+static BOOL RejectAdaptiveEntry;
+@interface UIImpactFeedbackGenerator (AdaptiveOpenHapticFixture)
+- (void)fixtureAdaptiveImpactOccurredWithIntensity:(CGFloat)intensity;
+@end
+@implementation UIImpactFeedbackGenerator (AdaptiveOpenHapticFixture)
+- (void)fixtureAdaptiveImpactOccurredWithIntensity:(CGFloat)intensity {
+    AdaptiveOpenHaptics++;
+    AdaptiveHapticIntensity=intensity;
+}
+@end
 static NSArray *AdaptiveApps;
 static void (^AdaptiveLaunch)(NSDictionary *);
 static LCOrbitTaskDockIconProvider AdaptiveIconProvider;
@@ -120,6 +133,11 @@ static CGFloat AdaptiveIconSize;
 @implementation LCOrbitTaskSwitcher (DrawerEntryFixture)
 + (BOOL)fixturePresentInScene:(UIWindowScene *)scene apps:(NSArray *)apps dockIconSize:(CGFloat)size iconProvider:(LCOrbitTaskDockIconProvider)provider launchHandler:(void (^)(NSDictionary *))handler error:(NSError **)error {
     AdaptivePresentations++;
+    if(RejectAdaptiveEntry) {
+        if(error) *error=[NSError errorWithDomain:@"DrawerAdaptiveFixture" code:20
+            userInfo:@{NSLocalizedDescriptionKey:@"Synthetic adaptive switcher failure"}];
+        return NO;
+    }
     AdaptiveApps=[apps copy];
     AdaptiveIconSize=size;
     AdaptiveIconProvider=[provider copy];
@@ -191,6 +209,11 @@ static NSMutableArray *GitHubCompletions;
 @implementation LCOrbitPluginUpdater (DrawerUpdateFixture)
 + (BOOL)fixtureInstallDownloadedPlugin:(NSData *)binary expectedSHA256:(NSString *)digest error:(NSError **)error {
     UpdateInstalls++;InstalledUpdateDigest=digest;return YES;
+}
++ (void)fixtureInstallDownloadedPluginAndSign:(NSData *)binary expectedSHA256:(NSString *)digest
+                                   completion:(void (^)(BOOL,NSError *))completion {
+    UpdateInstalls++;InstalledUpdateDigest=digest;
+    if(completion) completion(YES,nil);
 }
 @end
 @interface LCOrbitStorage (DrawerUpdateFixture) @end
@@ -513,11 +536,11 @@ static void RunUpdatePromptTests(void) {
                 [[NSHTTPURLResponse alloc] initWithURL:DownloadRequest.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}],nil);
         }
         dispatch_async(dispatch_get_main_queue(),^{
-            Check(@"update-download-uses-existing-digest-install-boundary",UpdateInstalls==1 &&
+            Check(@"update-download-uses-signed-digest-install-boundary",UpdateInstalls==1 &&
                   [InstalledUpdateDigest isEqual:UpdateRelease(@"9.0.11")[@"sha256"]],nil);
             Check(@"update-download-clears-progress-before-result",[reopened valueForKey:@"updateDownloadAlert"]==nil &&
                   ![[reopened valueForKey:@"checkingUpdate"] boolValue] &&
-                  [CapturedAlert.title isEqual:@"插件已下载并替换"],CapturedAlert.title);
+                  [CapturedAlert.title isEqual:@"插件已自动签名并替换"] && [CapturedAlert.message containsString:@"自动签名"],CapturedAlert.title);
             // No metadata: fetch once, leave the root before completion. The
             // late result is cacheable but cannot take over a child page.
             [NSUserDefaults.standardUserDefaults removeObjectForKey:@"LCFloatingMenu.updateIndicator.release"];
@@ -710,6 +733,39 @@ static BOOL HasItemAnimation(UIView *root) {
             if([key hasPrefix:@"fm.pop."]) return YES;
     return NO;
 }
+static NSArray<NSNumber *> *PopAnimationStarts(UIView *root) {
+    NSMutableArray<NSNumber *> *starts=[NSMutableArray array];
+    for(UIView *view in Views(root)) {
+        CAAnimation *animation=[view.layer animationForKey:@"fm.pop.in"];
+        if(animation) [starts addObject:@(animation.beginTime)];
+    }
+    return starts;
+}
+static CGFloat PopStartSpread(UIView *root) {
+    NSArray<NSNumber *> *starts=PopAnimationStarts(root);
+    if(starts.count<2) return -1;
+    return [[starts valueForKeyPath:@"@max.self"] doubleValue]-
+           [[starts valueForKeyPath:@"@min.self"] doubleValue];
+}
+// Observe the actual start instant. On slow simulator pull-to-open, the
+// together-mode animation can already have completed before the polling test
+// inspects layer.animationKeys; this probe does not alter production timing.
+static __weak FMManager *WaterPopProbeMenu;
+static NSUInteger WaterPopProbeCalls,WaterPopProbeCount;
+static CGFloat WaterPopProbeSpread=-1;
+@interface FMManager (WaterPopProbe)
+- (void)fixtureCapturePopContent:(BOOL)reveal;
+@end
+@implementation FMManager (WaterPopProbe)
+- (void)fixtureCapturePopContent:(BOOL)reveal {
+    [self fixtureCapturePopContent:reveal];
+    if(!reveal) return;
+    WaterPopProbeCalls++;
+    WaterPopProbeMenu=self;
+    WaterPopProbeCount=PopAnimationStarts(self.panel).count;
+    WaterPopProbeSpread=PopStartSpread(self.panel);
+}
+@end
 // Wait for a committed pull to cross the display boundary, not a fixed animation delay.
 static BOOL WaitForDrawerOpen(FMManager *menu) {
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:.3];
@@ -745,6 +801,10 @@ static void CheckScrubCache(void) {
 static void RunDropletReleaseTests(void) {
     CheckScrubCache();
     WaterLifecycleChecksDone=NO;
+    Method originalPop=class_getInstanceMethod(FMManager.class,@selector(popContent:));
+    Method fixturePop=class_getInstanceMethod(FMManager.class,@selector(fixtureCapturePopContent:));
+    Check(@"water-popup-start-probe-available",originalPop!=NULL && fixturePop!=NULL,nil);
+    if(originalPop && fixturePop) method_exchangeImplementations(originalPop,fixturePop);
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
     NSArray *keys=@[@"orbHandleStyle",@"orbDropletPull",@"popAnimation"];
     NSMutableDictionary *saved=[NSMutableDictionary dictionary];
@@ -778,11 +838,24 @@ static void RunDropletReleaseTests(void) {
         Check([@"water-opens-with-complete-outline-" stringByAppendingString:suffix],menu.isOpen && !menu.panel.hidden && mask.path && CGPathGetPathBoundingBox(mask.path).size.width>=glass.bounds.size.width*.99,nil);
         if(mask.path) contour=CGPathCreateCopy(mask.path);
         Check([@"water-opens-with-content-visible-" stringByAppendingString:suffix],DrawerContent(glass).alpha>.99 && menu.orb.alpha<.01,nil);
-        Check([@"water-opens-without-item-animations-" stringByAppendingString:suffix],!HasItemAnimation(menu.panel),nil);
+        CGFloat duringSlideSpread=WaterPopProbeMenu==menu?WaterPopProbeSpread:PopStartSpread(menu.panel);
+        NSUInteger duringSlideCount=WaterPopProbeMenu==menu?WaterPopProbeCount:PopAnimationStarts(menu.panel).count;
+        NSUInteger popCallsAtSlide=WaterPopProbeCalls;
+        Check([@"water-pop-starts-with-glass-slide-" stringByAppendingString:suffix],pop.intValue==2?!HasItemAnimation(menu.panel):
+              DrawerSlideActive(menu) && duringSlideCount>=2 &&
+              (pop.intValue==0?duringSlideSpread>.035 && duringSlideSpread<.35:
+               duringSlideSpread>=0 && duringSlideSpread<.035),
+              @{@"spread":@(duringSlideSpread),@"items":@(duringSlideCount)});
         Check([@"water-animation-mode-keeps-slide-only-" stringByAppendingString:suffix],pop.intValue==2?!DrawerSlideActive(menu):DrawerSlideActive(menu),nil);
         Check([@"water-slide-blocks-panel-interaction-" stringByAppendingString:suffix],pop.intValue==2?menu.panel.userInteractionEnabled:!menu.panel.userInteractionEnabled,nil);
         if(!pullMode.boolValue && pop.intValue==0 && !left.boolValue && !compact.boolValue && tap.boolValue) Snapshot(menu,@"water-slide-start");
         [menu completeDrawerMorphNow];
+        CGFloat popSpread=PopStartSpread(menu.panel);
+        Check([@"water-pop-is-not-restarted-after-slide-" stringByAppendingString:suffix],WaterPopProbeCalls==popCallsAtSlide &&
+              (pop.intValue==2?!HasItemAnimation(menu.panel):
+               WaterPopProbeMenu==menu && duringSlideCount>=2 &&
+               (popSpread<0 || fabs(popSpread-duringSlideSpread)<.01)),
+              @{@"during":@(duringSlideSpread),@"after":@(popSpread)});
         Check([@"water-opening-finishes-usable-" stringByAppendingString:suffix],!DrawerSlideActive(menu) && ![[menu valueForKey:@"morphActive"] boolValue] && menu.panel.userInteractionEnabled && !menu.orb.userInteractionEnabled && menu.orb.accessibilityElementsHidden,nil);
         Check([@"water-release-restores-hidden-bead-" stringByAppendingString:suffix],CGRectEqualToRect(rest,menu.orb.frame),nil);
         if(contour) {
@@ -833,20 +906,36 @@ static void RunDropletReleaseTests(void) {
         [prefs setObject:style forKey:@"LCFloatingMenu.orbHandleStyle"];
         [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
         UIWindow *window=[[UIWindow alloc] initWithFrame:CGRectMake(0,0,375,400)];
+        UIWindow *previousKey=UIApplication.sharedApplication.keyWindow;
+        // UIKit animations on detached/hidden windows can skip completion.
+        // Use the same visible-window lifecycle as the actual settings page.
+        [window makeKeyAndVisible];
         FMDockPreviewView *preview=[[NSClassFromString(@"FMDockPreviewView") alloc] initWithFrame:window.bounds];
         [window addSubview:preview];[preview reload];[preview layoutIfNeeded];
         [preview setOpen:NO animated:NO];[preview setOpen:YES animated:YES];
         BOOL slide=class_getInstanceVariable(preview.class,"_slideActive") && [[preview valueForKey:@"slideActive"] boolValue];
         Check([NSString stringWithFormat:@"preview-only-water-uses-slide-%@",style],style.intValue==1?slide:!slide,nil);
         if(style.intValue==1) {
+            // Main 1.0.45 keeps the preview's water contents attached to the
+            // glass throughout the slide. Do not reintroduce the older second
+            // stage of icon animation in this branch.
             UIView *content=[preview valueForKey:@"content"];
-            Check(@"water-preview-shows-content-without-pop",content.alpha>.99 && !HasItemAnimation(preview),nil);
+            Check(@"water-preview-main-glass-and-items-travel-together",
+                  content.alpha>.99 && [[preview valueForKey:@"slideActive"] boolValue] &&
+                  !HasItemAnimation(preview),nil);
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.50]];
+            Check(@"water-preview-main-glass-landed-without-second-stage",
+                  ![[preview valueForKey:@"slideActive"] boolValue] && !HasItemAnimation(preview),nil);
             Check(@"water-preview-does-not-run-morph-link",[preview valueForKey:@"link"]==nil,nil);
             [preview setOpen:NO animated:NO];[preview setOpen:YES animated:YES];
             [preview setOpen:NO animated:NO];
-            Check(@"water-preview-fast-reversal-stays-closed",[[preview valueForKey:@"progress"] doubleValue]<.001 && ![[preview valueForKey:@"slideActive"] boolValue],nil);
+            Check(@"water-preview-fast-reversal-stays-closed",
+                  [[preview valueForKey:@"progress"] doubleValue]<.001 &&
+                  ![[preview valueForKey:@"slideActive"] boolValue],nil);
         }
         [preview setOpen:NO animated:NO];[preview removeFromSuperview];
+        window.hidden=YES;
+        [previousKey makeKeyWindow];
     }
     [prefs setObject:@1 forKey:@"LCFloatingMenu.orbHandleStyle"];
     [prefs setObject:@0 forKey:@"LCFloatingMenu.popAnimation"];
@@ -869,6 +958,7 @@ static void RunDropletReleaseTests(void) {
     for(NSString *key in keys) {
         id value=saved[key];[prefs setObject:value==NSNull.null?nil:value forKey:[@"LCFloatingMenu." stringByAppendingString:key]];
     }
+    if(originalPop && fixturePop) method_exchangeImplementations(originalPop,fixturePop);
 }
 static void RunDropletDragTests(void) {
     LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
@@ -910,7 +1000,8 @@ static void RunDropletDragTests(void) {
         pan.fixtureState=UIGestureRecognizerStateEnded;[menu pan:pan];
         Check([@"fast-release-preserves-drop-until-display-" stringByAppendingString:suffix],!menu.isOpen && !menu.panel && menu.orb.alpha>.99 && menu.orb.frame.size.width>rest.size.width+7,nil);
         Check([@"fast-release-opens-after-drop-frame-" stringByAppendingString:suffix],WaitForDrawerOpen(menu),nil);
-        Check([@"fast-release-uses-water-slide-" stringByAppendingString:suffix],DrawerSlideActive(menu) && !HasItemAnimation(menu.panel),nil);
+        Check([@"fast-release-overlaps-water-slide-and-content-" stringByAppendingString:suffix],DrawerSlideActive(menu) &&
+              (PopAnimationStarts(menu.panel).count>=2 || (WaterPopProbeMenu==menu && WaterPopProbeCount>=2)),nil);
         [menu completeDrawerMorphNow];[menu toggle];[menu completeDrawerMorphNow];menu.window.hidden=YES;
     }
     // Flood the gesture on one run-loop turn: only an actual display frame may rebuild.
@@ -1053,7 +1144,67 @@ static void RunDrawerPerformanceTests(void) {
     [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[EvidencePath stringByAppendingPathComponent:@"result.json"] atomically:YES];
     });
 }
+// Regression for the optimized drawer: the initial frame must hide its items,
+// otherwise all pop modes look identical despite their CA animations.
+static void RunDrawerPopAndResetRegression(void) {
+    LCOrbitPreferences *prefs=[LCOrbitStorage preferences];
+    NSArray<NSString *> *keys=@[@"popAnimation",@"orbHandleStyle",@"taskSwitcherMode",@"fullscreenMultitask"];
+    NSMutableDictionary *saved=[NSMutableDictionary dictionary];
+    for(NSString *key in keys) saved[key]=[prefs objectForKey:[@"LCFloatingMenu." stringByAppendingString:key]]?:NSNull.null;
+    [prefs setObject:@0 forKey:@"LCFloatingMenu.orbHandleStyle"];
+    [prefs setObject:@1 forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    for(NSNumber *mode in @[@0,@1,@2]) {
+        [prefs setObject:mode forKey:@"LCFloatingMenu.popAnimation"];
+        FMManager *menu=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+        [menu toggle];
+        UIView *glass=[menu.panel viewWithTag:9230];
+        UIView *content=glass?DrawerContent(glass):nil;
+        NSUInteger hidden=0;
+        for(UIView *child in content.subviews)
+            if(child.tag!=9217 && child.tag!=9231 && child.alpha<.01) hidden++;
+        if(mode.intValue!=2) {
+            Check([NSString stringWithFormat:@"pop-mode-%@-main-initial-setup",mode],menu.panel && !HasItemAnimation(menu.panel),@{@"hidden":@(hidden)});
+            [menu applyMorphProgress:.45];
+            Check([NSString stringWithFormat:@"pop-mode-%@-has-not-started-before-v38-halfway",mode],!HasItemAnimation(menu.panel),nil);
+            [menu applyMorphProgress:.58];
+            Check([NSString stringWithFormat:@"pop-mode-%@-overlaps-expanding-glass",mode],HasItemAnimation(menu.panel),nil);
+            NSArray<NSNumber *> *starts=PopAnimationStarts(menu.panel);
+            CFTimeInterval difference=PopStartSpread(menu.panel);
+            BOOL varied=mode.intValue==0?difference>.045:difference<.035;
+            Check([NSString stringWithFormat:@"pop-mode-%@-uses-distinct-timing",mode],starts.count>=2 && varied,
+                  @{@"items":@(starts.count),@"spread":@(difference)});
+        } else {
+            Check(@"pop-off-immediately-shows-complete-content",menu.panel && hidden==0 && !HasItemAnimation(menu.panel) &&
+                  ![[menu valueForKey:@"morphActive"] boolValue],@{@"hidden":@(hidden)});
+        }
+        [menu completeDrawerMorphNow];[menu toggle];[menu completeDrawerMorphNow];
+    }
+    [prefs setObject:@2 forKey:@"LCFloatingMenu.taskSwitcherMode"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.fullscreenMultitask"];
+    FMManager *host=Manager(NO,1,667,UIEdgeInsetsMake(0,0,21,0),NO,NO,@"apps");
+    [host resetDockSettings];
+    Check(@"style-reset-preserves-multitask-mode-and-enable",[prefs integerForKey:@"LCFloatingMenu.taskSwitcherMode"]==2 &&
+          [prefs boolForKey:@"LCFloatingMenu.fullscreenMultitask"],nil);
+    host.settingsWindow=host.window;
+    FixtureHost=NO;
+    UIStackView *retained=[UIStackView new];
+    [host populateSettingsCategory:@"behavior" stack:retained];
+    UISegmentedControl *retainedMode=nil;
+    for(UIView *view in Views(retained)) if([view isKindOfClass:UISegmentedControl.class] &&
+        [view.accessibilityLabel isEqualToString:@"多任务切换菜单"]) retainedMode=(UISegmentedControl *)view;
+    Check(@"reset-redraw-keeps-host-multitask-controls-visible-but-locked",retainedMode && !retainedMode.enabled,nil);
+    UIStackView *guest=[UIStackView new];
+    [host populateSettingsCategory:@"behavior" stack:guest];
+    BOOL guestHasControls=NO;
+    for(UIView *view in Views(guest)) if([view.accessibilityLabel isEqualToString:@"多任务切换菜单"]) guestHasControls=YES;
+    Check(@"main-145-guest-multitask-section-visible-but-disabled",guestHasControls && retainedMode && !retainedMode.enabled,nil);
+    FixtureHost=YES;
+    for(NSString *key in keys) {
+        id previous=saved[key];[prefs setObject:previous==NSNull.null?nil:previous forKey:[@"LCFloatingMenu." stringByAppendingString:key]];
+    }
+}
 static void RunTests(void) {
+    RunDrawerPopAndResetRegression();
     RunDropletDragTests();
     RunDropletReleaseTests();
     // Broad tests mutate global task/preferences fixtures and window visibility. Finish
@@ -1744,7 +1895,14 @@ static void RunTests(void) {
     id savedSwitcherMode=[prefs objectForKey:@"LCFloatingMenu.taskSwitcherMode"];
     [prefs setInteger:2 forKey:@"LCFloatingMenu.taskSwitcherMode"];
     id previousDockIconSize=[prefs objectForKey:@"LCFloatingMenu.adaptiveDockIconSize"];
+    id previousHaptic=[prefs objectForKey:@"LCFloatingMenu.haptic"];
+    [prefs setObject:@YES forKey:@"LCFloatingMenu.haptic"];
     [prefs setObject:@49 forKey:@"LCFloatingMenu.adaptiveDockIconSize"];
+    Method actualHaptic=class_getInstanceMethod(UIImpactFeedbackGenerator.class,@selector(impactOccurredWithIntensity:));
+    Method fixtureHaptic=class_getInstanceMethod(UIImpactFeedbackGenerator.class,
+        @selector(fixtureAdaptiveImpactOccurredWithIntensity:));
+    Check(@"adaptive-haptic-observer-available",actualHaptic && fixtureHaptic,nil);
+    if(actualHaptic && fixtureHaptic) method_exchangeImplementations(actualHaptic,fixtureHaptic);
     SEL adaptiveEntry=@selector(presentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
     SEL fixtureEntry=@selector(fixturePresentInScene:apps:dockIconSize:iconProvider:launchHandler:error:);
     SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
@@ -1752,7 +1910,10 @@ static void RunTests(void) {
         FMManager *adaptive=Manager(compact.boolValue,1,874,UIEdgeInsetsMake(62,0,34,0),NO,NO,@"apps");
         NSUInteger before=AdaptivePresentations,scans=MainThreadAppScans,builds=DrawerBuilds;
         NSArray *expected=[adaptive orderedAppsForMenu];
+        NSUInteger hapticsBefore=AdaptiveOpenHaptics;
         [adaptive toggle];
+        Check(compact.boolValue?@"adaptive-compact-one-tick-on-success":@"adaptive-normal-one-tick-on-success",
+              AdaptiveOpenHaptics==hapticsBefore+1 && fabs(AdaptiveHapticIntensity-.45)<.01,nil);
         Check(compact.boolValue?@"adaptive-compact-original-entry":@"adaptive-normal-original-entry",
               AdaptivePresentations==before+1 && !adaptive.panel && !adaptive.isOpen && [AdaptiveApps isEqual:expected] && AdaptiveLaunch!=nil && MainThreadAppScans==scans && DrawerBuilds==builds,nil);
         NSDictionary *blocked=@{@"title":@"Blocked",@"status":@"需要 JIT",@"blockReason":@"needs-jit",@"launchable":@NO};
@@ -1769,13 +1930,31 @@ static void RunTests(void) {
         Check(compact.boolValue?@"adaptive-compact-shared-and-jit-use-badges":@"adaptive-normal-shared-and-jit-use-badges",
               [sharedIcon.accessibilityValue isEqualToString:@"共享"]&&Views(sharedIcon).count==Views(plainIcon).count+1&&
               Views(blockedIcon).count==Views(plainIcon).count+1,nil);
+        hapticsBefore=AdaptiveOpenHaptics;
         adaptive.isOpen=YES;[adaptive draw];
+        Check(compact.boolValue?@"adaptive-compact-no-haptic-on-redraw":@"adaptive-normal-no-haptic-on-redraw",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
         Check(compact.boolValue?@"adaptive-compact-no-intermediate-drawer":@"adaptive-normal-no-intermediate-drawer",!adaptive.panel && AdaptivePresentations==before+2 && !Actions(adaptive,@"openTaskSwitcher").count,nil);
         FixturePan *pull=[FixturePan new];CGPoint start=adaptive.orb.center;
         pull.fixturePoint=start;pull.fixtureState=UIGestureRecognizerStateBegan;[adaptive pan:pull];
         pull.fixturePoint=CGPointMake(start.x-80,start.y);pull.fixtureState=UIGestureRecognizerStateChanged;[adaptive pan:pull];
+        Check(compact.boolValue?@"adaptive-compact-no-haptic-while-dragging":@"adaptive-normal-no-haptic-while-dragging",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
         pull.fixtureState=UIGestureRecognizerStateEnded;[adaptive pan:pull];
+        Check(compact.boolValue?@"adaptive-compact-one-tick-on-pull-release":@"adaptive-normal-one-tick-on-pull-release",
+              AdaptiveOpenHaptics==hapticsBefore+1,nil);
         Check(compact.boolValue?@"adaptive-compact-original-pull":@"adaptive-normal-original-pull",AdaptivePresentations==before+3 && !adaptive.panel && MainThreadAppScans==scans,nil);
+        hapticsBefore=AdaptiveOpenHaptics;
+        [prefs setObject:@NO forKey:@"LCFloatingMenu.haptic"];
+        [adaptive toggle];
+        Check(compact.boolValue?@"adaptive-compact-respects-disabled-haptic":@"adaptive-normal-respects-disabled-haptic",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
+        [prefs setObject:@YES forKey:@"LCFloatingMenu.haptic"];
+        RejectAdaptiveEntry=YES;
+        [adaptive toggle];
+        RejectAdaptiveEntry=NO;
+        Check(compact.boolValue?@"adaptive-compact-no-haptic-on-presentation-failure":@"adaptive-normal-no-haptic-on-presentation-failure",
+              AdaptiveOpenHaptics==hapticsBefore,nil);
     }
     FMManager *adaptiveSettings=Manager(NO,1,874,UIEdgeInsetsMake(62,0,34,0),NO,NO,@"apps");
     UIStackView *adaptiveStack=[[UIStackView alloc] initWithFrame:CGRectMake(20,20,360,800)];adaptiveStack.axis=UILayoutConstraintAxisVertical;
@@ -1803,6 +1982,8 @@ static void RunTests(void) {
     }
     [prefs setObject:savedSwitcherMode forKey:@"LCFloatingMenu.taskSwitcherMode"];
     [prefs setObject:previousDockIconSize forKey:@"LCFloatingMenu.adaptiveDockIconSize"];
+    [prefs setObject:previousHaptic forKey:@"LCFloatingMenu.haptic"];
+    if(actualHaptic && fixtureHaptic) method_exchangeImplementations(actualHaptic,fixtureHaptic);
     SwapClass(LCOrbitTaskSwitcher.class,adaptiveEntry,fixtureEntry);
     FixtureWidth=667;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3.8*NSEC_PER_SEC),dispatch_get_main_queue(),^{
@@ -1837,6 +2018,7 @@ static void RunTests(void) {
     if([LCOrbitGitHub respondsToSelector:NSSelectorFromString(@"downloadReleaseAsset:progress:completion:")])
         SwapClass(LCOrbitGitHub.class,NSSelectorFromString(@"downloadReleaseAsset:progress:completion:"),@selector(fixtureDownloadReleaseAsset:progress:completion:));
     SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPlugin:expectedSHA256:error:),@selector(fixtureInstallDownloadedPlugin:expectedSHA256:error:));
+    SwapClass(LCOrbitPluginUpdater.class,@selector(installDownloadedPluginAndSign:expectedSHA256:completion:),@selector(fixtureInstallDownloadedPluginAndSign:expectedSHA256:completion:));
     SwapClass(LCOrbitStorage.class,@selector(lastError),@selector(fixtureLastError));
     SwapClass(LCOrbitGitHub.class,@selector(accountWithError:),@selector(fixtureAccountWithError:));
     SwapClass(LCOrbitGitHub.class,@selector(hasTokenWithError:),@selector(fixtureHasTokenWithError:));

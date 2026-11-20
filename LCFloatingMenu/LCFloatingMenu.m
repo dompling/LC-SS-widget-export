@@ -2125,7 +2125,7 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)requestAppsRefresh;
 - (void)refreshInventoryInBackground;
 - (BOOL)usesAdaptiveDrawer;
-- (void)presentAdaptiveDrawer;
+- (BOOL)presentAdaptiveDrawer;
 - (void)persistAppsScroll;
 - (void)loadAppsScroll;
 - (void)rememberCurrentApp;
@@ -3139,7 +3139,9 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     BOOL opening=!self.isOpen;
     if(opening && [self usesAdaptiveDrawer]) {
         [self cancelOrbFade];
-        [self presentAdaptiveDrawer];
+        // The adaptive switcher bypasses announceDrawerState. Confirm only a
+        // successful user opening, never a redraw or a failed presentation.
+        if([self presentAdaptiveDrawer]) FMHaptic(UIImpactFeedbackStyleRigid,.45);
         return;
     }
     if(opening) {
@@ -6646,8 +6648,8 @@ static BOOL sHasAttemptedAutoLaunch=NO;
 - (BOOL)usesAdaptiveDrawer {
     return [LCOrbitMultitask isEnabled] && [LCOrbitMultitask usesAdaptiveSwitcher] && ![LCOrbitMultitask usesNativeTaskWindows];
 }
-- (void)presentAdaptiveDrawer {
-    if(![self usesAdaptiveDrawer] || self.settingsWindow || !self.window) return;
+- (BOOL)presentAdaptiveDrawer {
+    if(![self usesAdaptiveDrawer] || self.settingsWindow || !self.window) return NO;
     UIWindowScene *scene=self.window.windowScene ?: [LCOrbitHost activeScene];
     [self persistAppsScroll];
     self.page=@"apps";self.isOpen=NO;
@@ -6662,7 +6664,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         [FMThemeColor(FMColorRow) colorWithAlphaComponent:FMClearGlassEnabled()?.64:.74]:nil;
     __weak typeof(self) weakSelf=self;
     NSError *error=nil;
-    if(![LCOrbitTaskSwitcher presentInScene:scene apps:apps dockIconSize:iconSize iconProvider:^UIView *(NSDictionary *app,CGFloat size,BOOL current) {
+    BOOL presented=[LCOrbitTaskSwitcher presentInScene:scene apps:apps dockIconSize:iconSize iconProvider:^UIView *(NSDictionary *app,CGFloat size,BOOL current) {
         UIView *tile=[[UIView alloc] initWithFrame:CGRectMake(0,0,size,size)];
         UIView *icon=tile;
         if(iconFrameColor) {
@@ -6688,9 +6690,13 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         return tile;
     } launchHandler:^(NSDictionary *app){
         [weakSelf switchToApp:app];
-    } error:&error])
+    } error:&error];
+    if(!presented) {
         [self showMessage:@"无法打开任务切换" details:error.localizedDescription?:@"请稍后重试。"];
+        return NO;
+    }
     [self refreshInventoryInBackground];
+    return YES;
 }
 - (void)goHome {
     SetPref(@"lastActiveAppKey",@"ui");
@@ -7097,27 +7103,29 @@ static BOOL sHasAttemptedAutoLaunch=NO;
             } completion:^(NSData *binary,NSHTTPURLResponse *response,NSError *error) {
                 dispatch_async(dispatch_get_main_queue(),^{
                     if(!error && weakSelf.updateDownloadAlert==progressAlert) {
-                        progressAlert.message=@"下载完成，正在校验并安装…";
+                        progressAlert.message=@"下载完成，正在校验并自动签名…";
                         weakSelf.updateStatusLabel.text=progressAlert.message;
                     }
                 });
-                NSError *installError=nil;
-                BOOL success=NO;
+                void (^finished)(BOOL,NSError *)=^(BOOL success,NSError *installError) {
+                    dispatch_async(dispatch_get_main_queue(),^{
+                        typeof(self) current=weakSelf;
+                        if(!current) return;
+                        current.checkingUpdate=NO;
+                        current.updateStatusLabel.text=@"检查微珠最新发布版";
+                        [current afterUpdatePrompt:progressAlert perform:^{
+                            weakSelf.updateDownloadAlert=nil;
+                            [weakSelf presentUpdateResult:success?@"插件已自动签名并替换":@"更新未完成"
+                                message:success?@"已校验、替换并自动签名该插件。请重启 LC 和相关 Guest 以加载新版本；共享及专属插件仍需单独更新。":
+                                (installError.localizedDescription?:error.localizedDescription?:@"下载或签名失败，请检查证书和插件目录。")
+                                showRepository:!success];
+                        }];
+                    });
+                };
                 if(!error && response.statusCode==200 && binary.length>0 && FMHostUI())
-                    success=[LCOrbitPluginUpdater installDownloadedPlugin:binary expectedSHA256:release[@"sha256"] error:&installError];
-                dispatch_async(dispatch_get_main_queue(),^{
-                    typeof(self) current=weakSelf;
-                    if(!current) return;
-                    current.checkingUpdate=NO;
-                    current.updateStatusLabel.text=@"检查微珠最新发布版";
-                    [current afterUpdatePrompt:progressAlert perform:^{
-                        weakSelf.updateDownloadAlert=nil;
-                        [weakSelf presentUpdateResult:success?@"插件已下载并替换":@"更新未完成"
-                            message:success?@"已校验并替换旧插件。请前往 LC 原生 Tweaks 页面重新签名插件，然后重启 LC 和相关 Guest。共享及专属插件需单独更新。":
-                            (installError.localizedDescription?:error.localizedDescription?:@"下载或替换失败，请检查网络与插件目录。")
-                            showRepository:!success];
-                    }];
-                });
+                    [LCOrbitPluginUpdater installDownloadedPluginAndSign:binary expectedSHA256:release[@"sha256"] completion:finished];
+                else finished(NO,error?:[NSError errorWithDomain:@"LCOrbit.PluginUpdate" code:19
+                    userInfo:@{NSLocalizedDescriptionKey:@"下载无效或当前不在 LC 主界面，未替换插件。"}]);
             }];
     }];
 }
@@ -7130,7 +7138,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         if([self.automaticallyOfferedVersions containsObject:version]) return;
         [self.automaticallyOfferedVersions addObject:version];
     }
-    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验新插件并原子替换旧版本。校验或替换失败时保留旧插件。安装完成后，请在 LC 原生 Tweaks 页面重新签名并重启相关应用。",release[@"notes"]];
+    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验、替换并自动签名微珠插件；若签名失败则恢复旧插件。更新完成后需重启 LC 和相关应用。",release[@"notes"]];
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"发现微珠新版本 v%@",version]
         message:message preferredStyle:UIAlertControllerStyleAlert];
     __weak typeof(self) weakSelf=self;

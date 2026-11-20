@@ -18,6 +18,29 @@ for symbol in 'OBJC_CLASS_$_LCOrbitCore' 'OBJC_CLASS_$_LCOrbitHost' \
 do
     printf '%s\n' "$SYMBOLS" | grep -Fq "$symbol"
 done
+# Keep the main branch 1.0.45 popup sequence and performance limited
+# glass geometry updates. Staggered animation remains a transition-only action.
+grep -Fq 'if(flipped) {' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'FMPopItems(items,dividers,self.left,reveal)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'FMSpringStep(&x,&v,_morphTarget,_morphOmega,_morphZeta,dt)' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+# Auto-update signs only its replaced dylib and retains rollback until verified.
+grep -Fq 'installDownloadedPluginAndSign:binary' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'signFilesWithZSignWithURLs:completionHandler:' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'UVerifyKernelSignature(destination)' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'F_CHECK_LV' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+grep -Fq 'rename(backup.fileSystemRepresentation' "$ROOT/LCOrbit/Core/LCOrbitPluginUpdater.m"
+# A user-initiated adaptive opening bypasses the normal drawer announcement.
+# Do not remove its single confirmation tick, or emit one from background redraws.
+grep -Fq 'if([self presentAdaptiveDrawer])' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'adaptive-normal-no-haptic-on-redraw' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
+grep -Fq 'adaptive-normal-one-tick-on-pull-release' "$ROOT/LCOrbit/Tests/UIKitDrawer/main.m"
+# The main branch owns the water-glass entrance: contents travel with the
+# shell, and the adaptive switcher reads the common popAnimation preference.
+grep -Fq 'BOOL reveal=_popRevealed?t>=.42:t>=.5' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'BOOL reveal=_revealed?t>=.42:t>=.5' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq '[self setDrawerContentsHidden:NO inPanel:drawer]' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq '[self popContent:YES];' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
+grep -Fq 'static NSInteger TaskPopMode(void)' "$ROOT/LCOrbit/Core/LCOrbitTaskSwitcher.m"
 # Guard existing preferences and the old Guest switch pathway from accidental deletion.
 grep -Fq 'forModule:@"LCFloatingMenu"' "$ROOT/LCFloatingMenu/LCFloatingMenu.m"
 grep -Fq 'launchToGuestAppWithURL:' "$ROOT/LCOrbit/Core/LCOrbitGuestService.m"

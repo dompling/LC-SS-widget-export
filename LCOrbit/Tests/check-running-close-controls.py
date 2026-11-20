@@ -49,7 +49,7 @@ assert "_morphZeta=open?.68:.82;" in src, "opening must be an underdamped spring
 assert "FMRubberProgress(inwardDist/_morphTravel)" in src and "FMRubberProgress(1-outward/_morphTravel)" in src, "dragging past the end must stretch against a rubber band"
 assert "if(_morphActive) return;" in src, "a drag or settle must not be interrupted by a second toggle"
 assert "FMPopInLayer(view.layer,hidden,start)" in src and "FMPopStart(mode,index,count)" in src and "fm.pop.in" in src, "drawer contents must pop in one after another"
-assert "FMPopItems(items,dividers,self.left,reveal)" in src and "FMPopItems(_popItems,_popDividers,_left,reveal)" in src, "the drawer and the settings preview must share one pop-in"
+assert "FMPopItems(items,dividers,self.left,reveal)" in src and "FMPopItems(_popItems,_popDividers,_left,reveal)" in src and "FMPopItems(items,dividers,self.left,YES)" not in src, "main 1.0.45 animation: drawer and preview use shared pop helper"
 assert "if(!reveal && FMPopMode()==2) _popStarted=NO;" in src, "with the pop-in off the contents must leave with the shell"
 assert "FMPopOutLayer(view.layer,hidden,NO)" in src and "fm.pop.out" in src, "drawer contents must pull back together when it closes"
 assert "footer.tag=9232;" in src, "the footer must be findable so its buttons can pop in"

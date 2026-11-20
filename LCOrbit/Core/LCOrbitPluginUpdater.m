@@ -4,8 +4,12 @@
 #import <mach-o/loader.h>
 #import <mach/machine.h>
 #import <sys/stat.h>
+#import <sys/fcntl.h>
+#import <unistd.h>
 #import <errno.h>
 #import <stdio.h>
+#import <objc/message.h>
+#import <dlfcn.h>
 
 static BOOL URegular(NSString *p) {
     struct stat s;
@@ -55,6 +59,56 @@ static BOOL UHasMatchingDigest(NSData *binary,NSString *digest) {
     for(NSUInteger i=0;i<sizeof(hash);i++) [hex appendFormat:@"%02x",hash[i]];
     return [digest.lowercaseString isEqualToString:[@"sha256:" stringByAppendingString:hex]];
 }
+// Mirror LC's checkCodeSignature kernel verification when LC's executable
+// does not export that symbol (release IPA binaries are frequently stripped).
+// Only a single arm64 Mach-O dylib with a bounded code-signature load command
+// is accepted. This does not bypass any trust check or grant new entitlements.
+static BOOL UVerifyKernelSignature(NSString *path) {
+    int fd=open(path.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd<0) return NO;
+    BOOL valid=NO;
+    NSMutableData *commands=nil;
+    struct stat info;
+    struct mach_header_64 header;
+    if(fstat(fd,&info)!=0 || !S_ISREG(info.st_mode) || info.st_size<sizeof(header) ||
+       pread(fd,&header,sizeof(header),0)!=sizeof(header) ||
+       header.magic!=MH_MAGIC_64 || header.cputype!=CPU_TYPE_ARM64 ||
+       header.filetype!=MH_DYLIB || header.ncmds>10000 ||
+       header.sizeofcmds>(NSUInteger)info.st_size-sizeof(header)) goto finish;
+    commands=[NSMutableData dataWithLength:header.sizeofcmds];
+    if(pread(fd,commands.mutableBytes,header.sizeofcmds,sizeof(header))!=header.sizeofcmds) goto finish;
+    const uint8_t *bytes=commands.bytes;
+    NSUInteger offset=0;
+    struct linkedit_data_command signature={0};
+    for(uint32_t i=0;i<header.ncmds;i++) {
+        if(offset+sizeof(struct load_command)>header.sizeofcmds) goto finish;
+        const struct load_command *cmd=(const void *)(bytes+offset);
+        if(cmd->cmdsize<sizeof(*cmd) || cmd->cmdsize>header.sizeofcmds-offset) goto finish;
+        if(cmd->cmd==LC_CODE_SIGNATURE) {
+            if(cmd->cmdsize<sizeof(signature)) goto finish;
+            memcpy(&signature,cmd,sizeof(signature));
+        }
+        offset+=cmd->cmdsize;
+    }
+    if(!signature.datasize || signature.dataoff>(uint64_t)info.st_size ||
+       signature.datasize>(uint64_t)info.st_size-signature.dataoff) goto finish;
+    fsignatures_t siginfo={0};
+    siginfo.fs_file_start=0;
+    siginfo.fs_blob_start=(void *)(uintptr_t)signature.dataoff;
+    siginfo.fs_blob_size=signature.datasize;
+    if(fcntl(fd,F_ADDFILESIGS_RETURN,&siginfo)==-1) goto finish;
+    char message[512]={0};
+    fchecklv_t check={0};
+    check.lv_error_message_size=sizeof(message);
+    check.lv_error_message=message;
+    check.lv_file_start=0;
+    valid=fcntl(fd,F_CHECK_LV,&check)==0;
+finish:
+    close(fd);
+    return valid;
+}
+// Accessed only on the main queue; signing has one completion owner.
+static BOOL UAutomaticSigningInProgress=NO;
 @implementation LCOrbitPluginUpdater
 + (BOOL)replacePluginData:(NSData *)binary expectedSHA256:(NSString *)digest
              destination:(NSString *)destination
@@ -94,5 +148,102 @@ static BOOL UHasMatchingDigest(NSData *binary,NSString *digest) {
     if(!URegular(destination)) return UFail(error,9,@"未在 LC 私有插件目录找到微珠，请通过原生 Tweaks 页面安装一次。");
     return [self replacePluginData:binary expectedSHA256:digest
                       destination:destination error:error];
+}
++ (void)installDownloadedPluginAndSign:(NSData *)binary
+                      expectedSHA256:(NSString *)digest
+                           completion:(void (^)(BOOL,NSError *))completion {
+    // Installation, signing, and rollback are one transaction. The existing
+    // synchronous installer is retained for its separately tested atomic file
+    // replacement, but the updater UI only uses this signed transaction.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(UAutomaticSigningInProgress) {
+            if(completion) completion(NO,UErr(10,@"已有插件更新正在签名，请勿重复安装。"));
+            return;
+        }
+        if(![LCOrbitHost isHostUI]) {
+            if(completion) completion(NO,UErr(7,@"仅 LC 主界面允许自动签名。"));
+            return;
+        }
+        // Never replace first and discover afterward that the signer is absent.
+        Class utils=NSClassFromString(@"LCUtils");
+        Class shared=NSClassFromString(@"LCSharedUtils");
+        SEL sign=NSSelectorFromString(@"signFilesWithZSignWithURLs:completionHandler:");
+        SEL certificate=NSSelectorFromString(@"certificateData");
+        SEL password=NSSelectorFromString(@"certificatePassword");
+        BOOL (*hostVerifier)(const char *)=(BOOL (*)(const char *))dlsym(RTLD_DEFAULT,"checkCodeSignature");
+        if(!utils || !shared || ![utils respondsToSelector:sign] ||
+           ![utils respondsToSelector:certificate] || ![shared respondsToSelector:password]) {
+            if(completion) completion(NO,UErr(11,@"当前 LC 未提供可验证的原生 ZSign 签名接口，请使用 LC Tweaks 页面签名。"));
+            return;
+        }
+        NSData *cert=((id(*)(id,SEL))objc_msgSend)(utils,certificate);
+        NSString *pass=((id(*)(id,SEL))objc_msgSend)(shared,password);
+        if(![cert isKindOfClass:NSData.class] || !cert.length ||
+           ![pass isKindOfClass:NSString.class] || !pass.length) {
+            if(completion) completion(NO,UErr(12,@"LC 未配置有效的签名证书或密码。旧插件未被替换。"));
+            return;
+        }
+        const char *root=getenv("LC_HOME_PATH");
+        if(!root || !root[0]) {
+            if(completion) completion(NO,UErr(8,@"无法找到 LC 私有插件目录。"));
+            return;
+        }
+        NSString *destination=[[[NSString stringWithUTF8String:root]
+            stringByAppendingPathComponent:@"Documents/Tweaks"]
+            stringByAppendingPathComponent:@"LCFloatingMenu.dylib"];
+        if(!URegular(destination) || !UBinaryIsPlugin(binary) ||
+           !UHasMatchingDigest(binary,digest)) {
+            if(completion) completion(NO,UErr(13,@"插件路径、二进制或 SHA-256 校验无效，旧插件未被修改。"));
+            return;
+        }
+        // Keep a temporary original in the same directory until ZSign and the
+        // kernel signature verifier both succeed. The .rollback extension is
+        // deliberately not .dylib, so LC's loader cannot pick it up.
+        NSString *backup=[destination stringByAppendingFormat:@".%@.rollback",NSUUID.UUID.UUIDString];
+        NSError *copyError=nil;
+        if(![NSFileManager.defaultManager copyItemAtPath:destination toPath:backup error:&copyError] ||
+           !URegular(backup)) {
+            if(completion) completion(NO,copyError?:UErr(14,@"无法保留原插件，已取消更新。"));
+            return;
+        }
+        UAutomaticSigningInProgress=YES;
+        NSError *installError=nil;
+        if(![self installDownloadedPlugin:binary expectedSHA256:digest error:&installError]) {
+            [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+            UAutomaticSigningInProgress=NO;
+            if(completion) completion(NO,installError?:UErr(15,@"替换失败。"));
+            return;
+        }
+        __block BOOL completed=NO;
+        void (^signedResult)(BOOL,NSError *)=^(BOOL success,NSError *signError) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if(completed) return;
+                completed=YES;
+                BOOL valid=success && URegular(destination) &&
+                    UBinaryIsPlugin([NSData dataWithContentsOfFile:destination]) &&
+                    (hostVerifier?hostVerifier(destination.fileSystemRepresentation):
+                        UVerifyKernelSignature(destination));
+                if(valid) {
+                    [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+                    UAutomaticSigningInProgress=NO;
+                    if(completion) completion(YES,nil);
+                    return;
+                }
+                BOOL restored=rename(backup.fileSystemRepresentation,
+                                     destination.fileSystemRepresentation)==0;
+                UAutomaticSigningInProgress=NO;
+                if(completion) completion(NO,restored?
+                    UErr(16,[NSString stringWithFormat:@"自动签名失败，已恢复旧插件。%@",
+                        signError.localizedDescription?:@"请检查证书与 LC 签名权限。"]):
+                    UErr(17,[NSString stringWithFormat:@"自动签名和回滚均失败！原插件保留在：%@",backup]));
+            });
+        };
+        @try {
+            ((id(*)(id,SEL,NSArray *,id))objc_msgSend)(utils,sign,
+                @[[NSURL fileURLWithPath:destination]],signedResult);
+        } @catch(NSException *exception) {
+            signedResult(NO,UErr(18,@"LC 签名接口执行异常。"));
+        }
+    });
 }
 @end
