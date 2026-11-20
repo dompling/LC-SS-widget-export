@@ -29,7 +29,7 @@ static NSInteger TaskPopMode(void) {
 static void TaskFadeInLayer(CALayer *layer,CFTimeInterval delay) {
     if(!layer)return;
     CABasicAnimation *fade=[CABasicAnimation animationWithKeyPath:@"opacity"];
-    fade.fromValue=@0;fade.toValue=@1;fade.duration=.2;
+    fade.fromValue=@0;fade.toValue=@1;fade.duration=.26;
     fade.timingFunction=[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
     fade.beginTime=[layer convertTime:CACurrentMediaTime() fromLayer:nil]+delay;
     fade.fillMode=kCAFillModeBackwards;
@@ -981,13 +981,13 @@ static UIWindow *OverviewWindow;
         if(staged) {
             NSUInteger step=0;
             for(LCOrbitTaskCard *other in owner.cards) {
-                TaskFadeInLayer(other.layer,.03*step);
-                TaskFadeInLayer(other.placement.view.layer,.03*step);
-                TaskFadeInLayer(other.placement.shadow.layer,.03*step);
+                TaskFadeInLayer(other.layer,.045*step);
+                TaskFadeInLayer(other.placement.view.layer,.045*step);
+                TaskFadeInLayer(other.placement.shadow.layer,.045*step);
                 step++;
             }
             NSUInteger buttonStep=0;
-            for(UIView *button in owner.dockScroll.subviews)TaskFadeInLayer(button.layer,.02*buttonStep++);
+            for(UIView *button in owner.dockScroll.subviews)TaskFadeInLayer(button.layer,.03*buttonStep++);
         }
     }];
     [self.entranceAnimator addCompletion:^(UIViewAnimatingPosition position){weakSelf.entranceAnimator=nil;}];
