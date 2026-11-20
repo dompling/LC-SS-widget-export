@@ -246,4 +246,55 @@ static BOOL UAutomaticSigningInProgress=NO;
         }
     });
 }
+// The original LC already uses this launcher to switch from a running Guest
+// back to its signed host process. It re-opens LC via LaunchServices, then
+// terminates the previous process *in its completion handler*. In contrast,
+// exit(0) here would just drop the user on the Home Screen.
+// Only call this after automatic installation and signature verification.
++ (BOOL)restartHostAfterSignedUpdate:(NSError **)error {
+    if(![LCOrbitHost isHostUI]) {
+        if(error) *error=UErr(20,@"仅 LC 主界面可以自动重启。");
+        return NO;
+    }
+    Class shared=NSClassFromString(@"LCSharedUtils");
+    SEL launcher=NSSelectorFromString(@"launchToGuestAppWithClassicMode:");
+    if(!shared || ![shared respondsToSelector:launcher]) {
+        if(error) *error=UErr(21,@"当前 LC 不提供自动重启接口，请手动关闭并重新打开 LC。");
+        return NO;
+    }
+    NSUserDefaults *defaults=[LCOrbitHost hostDefaults];
+    if(![defaults isKindOfClass:NSUserDefaults.class]) {
+        if(error) *error=UErr(22,@"无法保存 LC 启动状态，请手动重启。");
+        return NO;
+    }
+    // The LC bootstrap interprets selected=ui as a request for the host UI.
+    // Without this guard, an old selected Guest or SideStore token could
+    // relaunch the wrong process after updating the host's dylib.
+    NSArray<NSString *> *keys=@[@"selected",@"selectedContainer",@"launchAppUrlScheme",@"LCOpenSideStore"];
+    NSMutableDictionary<NSString *,id> *saved=[NSMutableDictionary dictionaryWithCapacity:keys.count];
+    for(NSString *key in keys) saved[key]=[defaults objectForKey:key]?:NSNull.null;
+    [defaults setObject:@"ui" forKey:@"selected"];
+    [defaults removeObjectForKey:@"selectedContainer"];
+    [defaults removeObjectForKey:@"launchAppUrlScheme"];
+    [defaults setBool:NO forKey:@"LCOpenSideStore"];
+    BOOL accepted=NO;
+    NSError *failure=nil;
+    @try {
+        if([defaults synchronize])
+            accepted=((BOOL(*)(id,SEL,NSUInteger))objc_msgSend)(shared,launcher,0);
+    } @catch(NSException *exception) {
+        failure=UErr(23,@"LC 自动重启接口异常，请手动重启。");
+    }
+    if(accepted) return YES;
+    // The launcher declined without beginning a restart. Avoid leaving any
+    // altered boot-target selection behind in that failure path.
+    for(NSString *key in keys) {
+        id value=saved[key];
+        if(value==NSNull.null) [defaults removeObjectForKey:key];
+        else [defaults setObject:value forKey:key];
+    }
+    [defaults synchronize];
+    if(error) *error=failure?:UErr(24,@"未能发起 LC 自动重启，请手动关闭并重新打开 LC。");
+    return NO;
+}
 @end

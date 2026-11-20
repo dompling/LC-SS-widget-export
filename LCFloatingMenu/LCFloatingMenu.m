@@ -7073,6 +7073,54 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         } else [prompt dismissViewControllerAnimated:YES completion:completion];
     } else completion();
 }
+// This is reached ONLY from the signed-and-verified update success callback.
+// Keep a short, cancellable window for reading the success message before
+// using LC's normal process relaunch path. The new dylib loads on cold start.
+- (void)offerRestartAfterVerifiedUpdate {
+    if(!FMHostUI() || ![self isSettingsRootVisible] || self.presentedViewController) {
+        [self presentUpdateResult:@"更新已完成"
+            message:@"插件已安装并签名。请退出并重新打开 LC 以加载新版本；运行中的 Guest 也需重启。"
+            showRepository:NO];
+        return;
+    }
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"更新成功"
+        message:@"插件已安装并自动签名，约 3 秒后将自动重启 LC。\n运行中的 Guest 需要重新打开才能加载新版插件。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf=self;
+    __weak UIAlertController *weakAlert=alert;
+    __block BOOL completed=NO;
+    void (^restartNow)(void)=^{
+        typeof(self) owner=weakSelf;
+        if(!owner || !FMHostUI()) return;
+        NSError *restartError=nil;
+        if(![LCOrbitPluginUpdater restartHostAfterSignedUpdate:&restartError]) {
+            [owner presentUpdateResult:@"请手动重启 LC"
+                message:restartError.localizedDescription?:@"自动重启未能启动。插件已签名，请手动关闭并重新打开 LC。"
+                showRepository:NO];
+        }
+    };
+    [alert addAction:[UIAlertAction actionWithTitle:@"稍后重启"
+        style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+            completed=YES;
+        }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"立即重启"
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            if(completed) return;
+            completed=YES;
+            [weakSelf afterUpdatePrompt:weakAlert perform:restartNow];
+        }]];
+    [self presentViewController:alert animated:YES completion:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(3.0*NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) owner=weakSelf;
+            if(completed || !owner || !FMHostUI() ||
+               UIApplication.sharedApplication.applicationState!=UIApplicationStateActive ||
+               owner.presentedViewController!=weakAlert) return;
+            completed=YES;
+            [owner afterUpdatePrompt:weakAlert perform:restartNow];
+        });
+    }];
+}
 - (void)downloadUpdateRelease:(NSDictionary *)candidate prompt:(UIAlertController *)prompt {
     if(self.checkingUpdate || !FMHostUI() || ![self isSettingsRootVisible]) return;
     NSDictionary *release=[LCOrbitUpdateRelease validatedRelease:candidate error:nil];
@@ -7115,10 +7163,10 @@ static BOOL sHasAttemptedAutoLaunch=NO;
                         current.updateStatusLabel.text=@"检查微珠最新发布版";
                         [current afterUpdatePrompt:progressAlert perform:^{
                             weakSelf.updateDownloadAlert=nil;
-                            [weakSelf presentUpdateResult:success?@"插件已自动签名并替换":@"更新未完成"
-                                message:success?@"已校验、替换并自动签名该插件。请重启 LC 和相关 Guest 以加载新版本；共享及专属插件仍需单独更新。":
-                                (installError.localizedDescription?:error.localizedDescription?:@"下载或签名失败，请检查证书和插件目录。")
-                                showRepository:!success];
+                            if(success) [weakSelf offerRestartAfterVerifiedUpdate];
+                            else [weakSelf presentUpdateResult:@"更新未完成"
+                                message:installError.localizedDescription?:error.localizedDescription?:@"下载或签名失败，请检查证书和插件目录。"
+                                showRepository:YES];
                         }];
                     });
                 };
@@ -7138,7 +7186,7 @@ static BOOL sHasAttemptedAutoLaunch=NO;
         if([self.automaticallyOfferedVersions containsObject:version]) return;
         [self.automaticallyOfferedVersions addObject:version];
     }
-    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验、替换并自动签名微珠插件；若签名失败则恢复旧插件。更新完成后需重启 LC 和相关应用。",release[@"notes"]];
+    NSString *message=[NSString stringWithFormat:@"%@\n\n下载后将校验、替换并自动签名微珠插件；若签名失败则恢复旧插件。签名成功后会提示并在约 3 秒后自动重启 LC，可选择稍后重启。",release[@"notes"]];
     UIAlertController *alert=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"发现微珠新版本 v%@",version]
         message:message preferredStyle:UIAlertControllerStyleAlert];
     __weak typeof(self) weakSelf=self;
