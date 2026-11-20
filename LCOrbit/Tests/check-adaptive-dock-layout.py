@@ -41,3 +41,25 @@ for size in (24, 36, 44, 50):
     assert 19 < dock_height/2
 
 print("Adaptive switcher Dock transformed-layout and icon-size regression: PASS")
+
+# iOS 27: keep dock artwork out of UIVisualEffectView's replaceable
+# contentView, otherwise the dock glass can remain visible without icons.
+assert "@property(nonatomic,strong) UIView *dock;" in source
+assert "@property(nonatomic,strong) UIVisualEffectView *dockGlass;" in source
+assert '[self.dock addSubview:self.dockGlass];' in source
+assert '[self.dock addSubview:self.dockScroll];' in source
+assert '[self.dock.contentView addSubview:self.dockScroll]' not in source
+assert 'self.dockGlass.effect=visible?' in visibility
+assert "self.dock.effect=visible?" not in visibility
+
+# Long-running task decks should avoid needless remote-layer work during scroll.
+geometry=source.split("- (void)updateLiveGeometry {",1)[1].split("- (void)updateDeck {",1)[0]
+deck=source.split("- (void)updateDeck {",1)[1].split("- (void)selectPage:",1)[0]
+entrance=source.split("- (void)animateEntrance {",1)[1].split("- (void)animateReflowFromFrames:",1)[0]
+assert "if(scrolling&&!CGRectIntersectsRect(card.frame,nearby))continue;" in geometry
+assert "CGAffineTransformEqualToTransform(card.transform,card.restingTransform)" in deck
+assert "if(page>currentPage+1 || (currentPage>0 && page+1<currentPage))continue;" in entrance
+assert "CGRectIntersectsRect(button.frame,visibleDock)" in entrance
+
+print("iOS 27 adaptive Dock icon isolation and task-deck performance: PASS")
+
