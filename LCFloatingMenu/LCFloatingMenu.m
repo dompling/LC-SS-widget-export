@@ -215,11 +215,10 @@ static CGFloat HapticStrength(void) {
     if([v isKindOfClass:NSNumber.class]) return Clamp([v doubleValue],0,1);
     return BoolPref(@"haptic",YES)?.5:0;
 }
-static NSString *FMHapticSliderHint(CGFloat value) {
-    if(value<=.001) return @"已关闭";
-    if(fabs(value-.5)<.02) return @"默认强度（原版手感）";
-    if(value<.5) return [NSString stringWithFormat:@"%@（约原版 %d%%）",@"较弱",(int)lround(value/.5*100)];
-    return [NSString stringWithFormat:@"%@（约原版 %d%%）",@"较强",(int)lround(value/.5*100)];
+// The row shows the raw percentage only; the midpoint is where the old fixed
+// feel sat, so 50% always means "same as before" without extra words.
+static NSString *FMHapticPercent(CGFloat value) {
+    return [NSString stringWithFormat:@"%d%%",(int)lround(Clamp(value,0,1)*100)];
 }
 // Every tap-confirmation goes through here so one setting decides whether it
 // happens and how strong it feels. iOS 13 gained an intensity argument; older
@@ -2159,6 +2158,8 @@ static void FMPopItems(NSArray<NSDictionary *> *items,NSArray<UIView *> *divider
 - (void)syncScreenAwakeState;
 - (void)checkAutoLaunchLastAppIfNeeded;
 - (UIView *)switchRowWithTitle:(NSString *)title key:(NSString *)key defaultValue:(BOOL)def tag:(NSInteger)tag;
+- (void)settingHapticSlider:(UIStackView *)s;
+- (void)hapticSliderReleased:(UISlider *)slider;
 - (void)updateEasterEggSnowEffect;
 - (void)stopEasterEggSnowEffect;
 - (void)triggerEasterEggConfetti;
@@ -5362,36 +5363,42 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
 - (void)settingHapticSlider:(UIStackView*)s {
     UIView *row=[UIView new];
     row.translatesAutoresizingMaskIntoConstraints=NO;
-    [row.heightAnchor constraintEqualToConstant:76].active=YES;
+    [row.heightAnchor constraintEqualToConstant:74].active=YES;
     UILabel *title=[self label:@"触觉反馈" size:15 weight:UIFontWeightMedium];
     title.translatesAutoresizingMaskIntoConstraints=NO;
     [row addSubview:title];
-    UILabel *hint=[self label:@"" size:12 weight:UIFontWeightRegular];
-    hint.tag=1113;
-    hint.textColor=FMThemeColor(FMColorSecondary);
-    hint.translatesAutoresizingMaskIntoConstraints=NO;
-    [row addSubview:hint];
+    // Percent sits opposite the title, sharing its baseline so the two sizes line up.
+    UILabel *pct=[self label:@"" size:12 weight:UIFontWeightMedium];
+    pct.tag=1113;
+    pct.textAlignment=NSTextAlignmentRight;
+    pct.textColor=FMThemeColor(FMColorSecondary);
+    pct.translatesAutoresizingMaskIntoConstraints=NO;
+    [pct setContentHuggingPriority:1000 forAxis:UILayoutConstraintAxisHorizontal];
+    [pct setContentCompressionResistancePriority:1000 forAxis:UILayoutConstraintAxisHorizontal];
+    [row addSubview:pct];
     UISlider *slider=[UISlider new];
     slider.minimumValue=0;slider.maximumValue=1;
     slider.value=HapticStrength();slider.tag=113;
-    slider.continuous=NO; // One persisted write on release, not each frame.
+    slider.continuous=YES; // The percent follows the thumb; only touch-up persists.
     slider.tintColor=FMAccent();
     slider.accessibilityLabel=@"触觉反馈强度";
     slider.translatesAutoresizingMaskIntoConstraints=NO;
     [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    // The release is what writes; dragging only updates the percent shown.
+    [slider addTarget:self action:@selector(hapticSliderReleased:)
+     forControlEvents:UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
     [row addSubview:slider];
     [NSLayoutConstraint activateConstraints:@[
         [title.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
-        [title.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
         [title.topAnchor constraintEqualToAnchor:row.topAnchor constant:12],
+        [pct.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
+        [pct.firstBaselineAnchor constraintEqualToAnchor:title.firstBaselineAnchor],
+        [pct.leadingAnchor constraintGreaterThanOrEqualToAnchor:title.trailingAnchor constant:8],
         [slider.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
         [slider.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
-        [slider.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
-        [hint.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
-        [hint.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
-        [hint.topAnchor constraintEqualToAnchor:slider.bottomAnchor constant:2]
+        [slider.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:8]
     ]];
-    hint.text=FMHapticSliderHint(slider.value);
+    pct.text=FMHapticPercent(slider.value);
     UIView *card=FMCreateGroupedCard(@[row],16);
     if(card) [s addArrangedSubview:card];
 }
@@ -6336,15 +6343,9 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
 // The per-app bead opacity slider.
 - (void)sliderChanged:(UISlider*)slider {
     if(slider.tag==113) {
+        // Follow the thumb so the percent tracks it, but leave the write to release.
         CGFloat strength=round(Clamp(slider.value,0,1)*20)/20; // 5% steps keep the middle a real midpoint
-        slider.value=strength;
-        FMStagePreference(@"hapticStrength",@(strength));
-        // The boolean is what older builds read. Keep it in step with the slider.
-        SetPref(@"haptic",@(strength>0));
-        FMCommitStagedPreferences();
-        UILabel *hint=(UILabel *)[slider.superview viewWithTag:1113];
-        hint.text=FMHapticSliderHint(strength);
-        FMHaptic(UIImpactFeedbackStyleLight,.40);
+        ((UILabel *)[slider.superview viewWithTag:1113]).text=FMHapticPercent(strength);
         return;
     }
     if(slider.tag==112) {
@@ -6361,6 +6362,17 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
         FloatPref([@"appAlpha." stringByAppendingString:GuestID()],FloatPref(@"idleAlpha",.72)):
         FloatPref(@"idleAlpha",.72);
     self.orb.alpha=alpha;
+}
+// Settle the haptic strength slider: snap to the 5% grid, store it, preview it.
+- (void)hapticSliderReleased:(UISlider*)slider {
+    CGFloat strength=round(Clamp(slider.value,0,1)*20)/20;
+    slider.value=strength;
+    ((UILabel *)[slider.superview viewWithTag:1113]).text=FMHapticPercent(strength);
+    FMStagePreference(@"hapticStrength",@(strength));
+    // The boolean is what older builds read. Keep it in step with the slider.
+    SetPref(@"haptic",@(strength>0));
+    FMCommitStagedPreferences();
+    FMHaptic(UIImpactFeedbackStyleLight,.40);
 }
 - (void)openMenuLogs {
     if(!self.settingsNavigation) return;
