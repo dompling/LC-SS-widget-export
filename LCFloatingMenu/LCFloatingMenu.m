@@ -29,7 +29,7 @@
 
 // Semantic version is maintained here; the exact source commit is embedded
 // automatically by LCOrbit/Build/build.sh for reliable update comparison.
-#define FM_MENU_VERSION @"1.0.42"
+#define FM_MENU_VERSION @"1.0.43"
 #ifndef FM_BUILD_COMMIT
 #define FM_BUILD_COMMIT @"unknown"
 #endif
@@ -207,6 +207,17 @@ static NSUInteger FMStagedRev=0;
 static BOOL BoolPref(NSString *key,BOOL def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
     return v?[v boolValue]:def;
+}
+// Every tap-confirmation goes through here so one setting decides whether it
+// happens and how strong it feels. iOS 13 gained an intensity argument; older
+// systems keep their fixed weight, so callers pass a value that matches the
+// style they picked.
+static void FMHaptic(UIImpactFeedbackStyle style,CGFloat intensity) {
+    if(!BoolPref(@"haptic",YES)) return;
+    UIImpactFeedbackGenerator *generator=[[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+    [generator prepare];
+    if(@available(iOS 13.0,*)) [generator impactOccurredWithIntensity:intensity];
+    else [generator impactOccurred];
 }
 static CGFloat FloatPref(NSString *key,CGFloat def) {
     id v=FMStaged[Pref(key)] ?: [HostDefaults() objectForKey:Pref(key)];
@@ -2159,7 +2170,7 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     CGPoint _panStartPoint;
     CGPoint _panOriginalCenter;
     CGRect _panOriginalOrbFrame;
-    BOOL _panUsesDroplet,_panDropletTriggered;
+    BOOL _panUsesDroplet;
     BOOL _dropletPanelPrepared;
     BOOL _drawerSlideActive;
     CGPoint _drawerSlideRestCenter;
@@ -2189,7 +2200,7 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     CFTimeInterval _morphTick;
     CADisplayLink *_morphLink;
     BOOL _morphCompact,_morphActive,_morphDragging,_morphOpening,_morphFromBead;
-    BOOL _morphCommitHaptic,_drawDeferred,_panUsesMorph,_panelDragLive;
+    BOOL _drawDeferred,_panUsesMorph,_panelDragLive;
     BOOL _popRevealed,_popStarted;
     // Long-press scrub: a glass lens over the app list.
     UIView *_scrubLens,*_scrubLabel;
@@ -2205,7 +2216,6 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
     CFTimeInterval _scrubScrollTick;
     NSInteger _scrubIndex;
     BOOL _scrubActive,_scrubCancelling;
-    UISelectionFeedbackGenerator *_scrubTick;
     BOOL _hiddenAppsExpanded;
 }
 + (instancetype)shared {
@@ -2720,15 +2730,13 @@ static UIImage *FMLogoBadgeImage(CGFloat diameter) {
 }
 - (void)hold:(UILongPressGestureRecognizer *)gesture {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
-    if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
-        initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    FMHaptic(UIImpactFeedbackStyleMedium,.55);
     FMLog(@"settings-gesture",@"orb-long-press");
     [self openSettings];
 }
 - (void)holdPanel:(UILongPressGestureRecognizer *)gesture {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
-    if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
-        initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    FMHaptic(UIImpactFeedbackStyleMedium,.55);
     FMLog(@"settings-gesture",@"panel-long-press");
     [self openSettings];
 }
@@ -2915,13 +2923,11 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
         _panStartPoint=CGPointMake(p.x-translation.x,p.y-translation.y);
         _panOriginalCenter=self.orb.center;
         _panOriginalOrbFrame=self.orb.frame;
-        _panDropletTriggered=NO;
         _panOriginalLeft=self.left;
         _panMaxInwardDist=0;
         _panMaxVerticalDist=0;
         _panIsRepositioning=NO;
         _panIsInwardPull=NO;
-        _morphCommitHaptic=NO;
         [self cancelOrbFade];
         self.orbFaded=NO;
         self.orb.alpha=1;
@@ -2992,32 +2998,17 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
             CGFloat pull=FMDropletPullDistance(inwardDist,FMOrbScale());
             if(_panIsInwardPull || _dropletPullLink)
                 [self updateDropletPull:pull offsetY:(p.y-_panStartPoint.y)*.14];
-            if(pull>=36*FMOrbScale() && !_panDropletTriggered) {
-                _panDropletTriggered=YES;
-                if(BoolPref(@"haptic",YES)) [[[UIImpactFeedbackGenerator alloc]
-                    initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-            }
+            // No haptic while the pull crosses the trigger distance: the drawer has not
+            // opened yet, and buzzing here as well as on release reads as two taps.
         } else if(_panUsesMorph && (_morphActive || (_panIsInwardPull && [self beginDrawerDragFromBead]))) {
             // === 抽屉从微珠里长出来，内侧边与手指一比一 ===
             [self applyMorphProgress:FMRubberProgress(inwardDist/_morphTravel)];
-            if(inwardDist>=_morphCommit) {
-                if(!_morphCommitHaptic && BoolPref(@"haptic",YES))
-                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-                _morphCommitHaptic=YES;
-            } else if(inwardDist<_morphCommit*.8) _morphCommitHaptic=NO;
         } else if(_panUsesMorph && !_panIsInwardPull) {
             // Not pulling inward yet: the bead stays exactly where it is.
         } else {
             // No drawer follows the finger (Reduce Motion, or none could be built):
-            // the pull is judged when the finger lifts; passing the distance is
-            // marked once.
+            // the pull is judged when the finger lifts.
             _panUsesMorph=NO;
-            CGFloat commit=FMQuietPullDistance(FMOrbScale());
-            if(inwardDist>=commit) {
-                if(!_morphCommitHaptic && BoolPref(@"haptic",YES))
-                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-                _morphCommitHaptic=YES;
-            } else if(inwardDist<commit*.8) _morphCommitHaptic=NO;
         }
     } else if(g.state==UIGestureRecognizerStateEnded) {
         _isPanning=NO;
@@ -3085,9 +3076,6 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
             // === 没有抽屉跟手（减少动态效果，或抽屉造不出来）：按松手时的拉动距离判断 ===
             CGFloat pulled=_panOriginalLeft?(p.x-_panStartPoint.x):(_panStartPoint.x-p.x);
             if(FMDrawerShouldOpenAfterPull(pulled,FMQuietPullDistance(FMOrbScale()),inwardV,finalVerticalDist,finalTotalDist)) {
-                if(BoolPref(@"haptic", YES)) {
-                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-                }
                 if(!self.isOpen) {
                     if(_dropletPanelPrepared) [self openDrawerFromDroplet];
                     else [self toggle];
@@ -3117,13 +3105,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     FMLog(self.isOpen?@"menu-open":@"menu-close",nil);
     [self.orbitContext.events publish:@"orbit.floatingMenu.visibility"
                           payload:@{@"open":@(self.isOpen),@"guestID":GuestID()}];
-    if(BoolPref(@"haptic",YES)) {
-        if(@available(iOS 13.0,*)) {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleRigid] impactOccurredWithIntensity:.65];
-        } else {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-        }
-    }
+    FMHaptic(UIImpactFeedbackStyleRigid,.45);
 }
 // A pull that was let go far enough: the state flips now, the spring finishes.
 // The fading bead must not be grabbable again while the drawer comes out (the
@@ -3213,7 +3195,6 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     _morphTravel=MAX(1,self.left?CGRectGetMaxX(rest)-CGRectGetMaxX(bead):CGRectGetMinX(bead)-CGRectGetMinX(rest));
     // A large bead on a narrow drawer must still be able to reach the commit line.
     _morphCommit=MIN(FMDrawerCommitDistance(_morphTravel,FMOrbScale()),_morphTravel*.8);
-    _morphCommitHaptic=NO;
     _morphBeadAlpha=self.orbUpdateAvailable?1:(self.orbNormalAlpha?:.72);
     _morphFrameAt=0;
     _morphShownT=-1;
@@ -3718,11 +3699,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
             animations:^{ lens.alpha=1;lens.transform=CGAffineTransformIdentity; } completion:nil];
     }
     [self scrubFocus:_scrubIndex previous:-1];
-    if(BoolPref(@"haptic",YES)) {
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurredWithIntensity:.9];
-        _scrubTick=[UISelectionFeedbackGenerator new];
-        [_scrubTick prepare];
-    }
+    FMHaptic(UIImpactFeedbackStyleSoft,.45);
 }
 // Scroll offsets change the viewport, while row edges stay in stack coordinates.
 - (void)scrubMeasure {
@@ -3788,8 +3765,8 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     _scrubIndex=index;
     _scrubCancelling=outside;
     if(moved) {
-        [_scrubTick selectionChanged];
-        [_scrubTick prepare];
+        // A lighter tick than the open/close confirmation so a scrub reads as texture.
+        FMHaptic(UIImpactFeedbackStyleLight,.22);
         [self scrubFocus:index previous:previous];
     } else if(flipped) [self updateScrubLabel];
     // The lens follows the finger on a short spring; leaving the drawer shrinks and dims it.
@@ -3865,7 +3842,7 @@ static CGFloat FMDropletPullDistance(CGFloat inward,CGFloat scale) {
     UIView *lens=_scrubLens,*label=_scrubLabel;
     NSArray<UIView *> *rows=_scrubRows;
     _scrubActive=NO;_scrubCancelling=NO;
-    _scrubLens=nil;_scrubLabel=nil;_scrubRows=nil;_scrubControls=nil;_scrubEdges=nil;_scrubStack=nil;_scrubTick=nil;
+    _scrubLens=nil;_scrubLabel=nil;_scrubRows=nil;_scrubControls=nil;_scrubEdges=nil;_scrubStack=nil;
     [_scrubLink invalidate];
     _scrubLink=nil;
     void (^settle)(void)=^{
@@ -4662,11 +4639,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
 
 - (void)toggleHiddenAppsExpansion {
     _hiddenAppsExpanded = !_hiddenAppsExpanded;
-    if(BoolPref(@"haptic", YES)) {
-        if(@available(iOS 13.0, *)) {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-        }
-    }
+    FMHaptic(UIImpactFeedbackStyleLight,.40);
     [UIView transitionWithView:self.appsScroll duration:0.32 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
         [self refreshAppsContent];
     } completion:nil];
@@ -4961,9 +4934,7 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
 }
 - (void)holdHomeButton:(UILongPressGestureRecognizer *)gesture {
     if(gesture.state!=UIGestureRecognizerStateBegan) return;
-    if(BoolPref(@"haptic",YES)) {
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-    }
+    FMHaptic(UIImpactFeedbackStyleLight,.40);
     FMLog(@"settings-gesture",@"home-button-long-press");
     [self openSettings];
 }
@@ -5869,8 +5840,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
                  @"startY":@(finger.y),@"centerY":@(CGRectGetMidY(sourceRow.frame)),
                  @"original":@(original),@"index":@(original)} mutableCopy];
         objc_setAssociatedObject(gesture,@selector(sortDrag:),state,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if(BoolPref(@"haptic",YES))
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        FMHaptic(UIImpactFeedbackStyleLight,.40);
         FMLog(@"menu-reorder-start",FMAppKey(app));
     } else if(gesture.state==UIGestureRecognizerStateChanged && state) {
         UIView *lifted=state[@"lifted"];
@@ -5892,8 +5862,7 @@ static UIImage *FMCreateWinterSnowImage(FMSnowflakeStyle style) {
                 animations:^{ [group layoutIfNeeded]; }
                 completion:nil];
             // A subtle tick signals the slot has moved, not every frame.
-            if(BoolPref(@"haptic",YES))
-                [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+            FMHaptic(UIImpactFeedbackStyleLight,.22);
         }
     } else if(gesture.state==UIGestureRecognizerStateEnded ||
               gesture.state==UIGestureRecognizerStateCancelled ||
