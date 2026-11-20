@@ -819,7 +819,10 @@ static UIWindow *OverviewWindow;
         card.preview.alpha=card.placement?0:1;
         [self alignPreviewOfCard:card toFrame:[self expandedFrameForCard:card]];
         [self updateLiveGeometry];
-        card.placement.view.layer.cornerRadius=card.placement.cornerRadius;
+        // Icon-only posters live in the host layer and must expand with the
+        // card instead of remaining a rounded tile during task activation.
+        if(card.staticPoster)card.staticPoster.layer.cornerRadius=0;
+        if(card.placement)card.placement.view.layer.cornerRadius=card.placement.cornerRadius;
     } completion:completion];
 }
 - (void)dockAppTapped:(LCOrbitTaskDockButton *)button {
@@ -864,6 +867,10 @@ static UIWindow *OverviewWindow;
             placement.view.alpha=0;
             placement.shadow.alpha=0;
         }
+        // The icon-only cards live outside the overview's pages/window.
+        // Hide those host-layer posters alongside the live task views.
+        for(LCOrbitTaskCard *card in self.cards)
+            if(card.staticPoster)card.staticPoster.alpha=0;
         [self setDockVisible:NO];
         surface.frame=self.view.bounds;
         surface.layer.cornerRadius=0;
@@ -1104,6 +1111,7 @@ static UIWindow *OverviewWindow;
                 TaskFadeInLayer(other.layer,.045*step);
                 TaskFadeInLayer(other.placement.view.layer,.045*step);
                 TaskFadeInLayer(other.placement.shadow.layer,.045*step);
+                TaskFadeInLayer(other.staticPoster.layer,.045*step);
                 step++;
             }
             NSUInteger buttonStep=0;
@@ -1155,8 +1163,12 @@ static UIWindow *OverviewWindow;
         self.pages.alpha=0;
         for(LCOrbitTaskCard *card in self.cards) {
             [card.layer removeAnimationForKey:@"task.stagger.in"];
+            [card.staticPoster.layer removeAnimationForKey:@"task.stagger.in"];
             card.transform=CGAffineTransformConcat(CGAffineTransformScale(card.restingTransform,.86,.86),CGAffineTransformMakeTranslation(0,46));
             card.placement.view.alpha=0;
+            // pages.alpha alone cannot fade sibling views in the host.
+            // UpdateLiveGeometry derives their opacity from preview.alpha.
+            if(card.staticPoster)card.preview.alpha=0;
         }
         [self updateLiveGeometry];
     } completion:completion];
