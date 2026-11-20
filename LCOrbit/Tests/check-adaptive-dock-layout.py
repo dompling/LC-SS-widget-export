@@ -63,3 +63,14 @@ assert "CGRectIntersectsRect(button.frame,visibleDock)" in entrance
 
 print("iOS 27 adaptive Dock icon isolation and task-deck performance: PASS")
 
+
+# Active-only preview is opt-in, stored under the FloatingMenu namespace.
+assert 'LCFloatingMenu.adaptiveActivePreviewOnly' in source
+assert 'controller.activePreviewOnly=activePreviewOnly;' in source
+assert '(!activePreviewOnly || task[@"window"]==liveWindow)' in source
+assert 'orbit.task.center-icon.' in source
+assert "card.centerIcon.frame=CGRectMake((cardWidth-iconSize)*.5,(cardHeight-iconSize)*.5,iconSize,iconSize);" in source
+assert 'key:@"adaptiveActivePreviewOnly" defaultValue:NO tag:27' in menu
+assert 'case 27:key=@"adaptiveActivePreviewOnly";break;' in menu
+assert "for(NSDictionary *task in CurrentOverview.tasks)if(task[@\"window\"]==window)return YES;" in source
+print("Active-only preview option and static-icon ownership: PASS")
