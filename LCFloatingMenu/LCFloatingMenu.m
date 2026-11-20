@@ -5163,7 +5163,6 @@ static void FMDrawAppIcon(UIView *box,NSDictionary *app,CGFloat size,BOOL curren
                 [self addRow:presentation height:38 to:s];
                 if(![LCOrbitMultitask usesNativeTaskWindows]) {
                     [self spacer:s size:10];
-                    [self section:@"实时预览" sub:@"开启后仅当前 App 保留实时画面，其他任务用居中图标代替；重新打开任务切换界面后生效。" in:s];
                     [self settingSwitch:s title:@"仅当前任务显示实时画面" key:@"adaptiveActivePreviewOnly" defaultValue:NO tag:27];
                     [self spacer:s size:10];
                     [self section:@"自适应 Dock 位置" sub:@"向右移动滑块可将 Dock 上移，0 为最贴近底部安全区；重新打开切换界面后生效。" in:s];
